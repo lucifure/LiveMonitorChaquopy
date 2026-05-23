@@ -28,23 +28,18 @@ def _finished(success, reason=""):
 
 def _progress_hook(d):
     status = d.get("status", "")
-
     if status == "downloading":
         filename = os.path.basename(d.get("filename", ""))
         downloaded = d.get("downloaded_bytes", 0)
         speed = d.get("speed") or 0
         eta = d.get("eta")
-
         mb = downloaded / (1024 * 1024)
         kbs = speed / 1024 if speed else 0
-
         eta_str = f" ETA {eta}s" if eta else ""
         _log(f"↓ {mb:.1f} MB  {kbs:.0f} KB/s{eta_str}  [{filename[:40]}]", "download")
-
     elif status == "finished":
         filename = os.path.basename(d.get("filename", ""))
         _log(f"Segment done: {filename}", "success")
-
     elif status == "error":
         _log(f"yt-dlp error: {d.get('error', 'unknown')}", "error")
 
@@ -69,7 +64,7 @@ def _do_record(watch_url, out_path):
 
         ydl_opts = {
             "outtmpl": out_path,
-            "format": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+            "format": "best[ext=mp4]/best",
             "merge_output_format": "mp4",
             "live_from_start": False,
             "wait_for_video": (5, 300),
@@ -77,7 +72,7 @@ def _do_record(watch_url, out_path):
             "fragment_retries": 100,
             "skip_unavailable_fragments": True,
             "keepvideo": False,
-            "concurrent_fragment_downloads": 4,
+            "concurrent_fragment_downloads": 1,
             "no_warnings": False,
             "quiet": False,
             "verbose": False,
@@ -95,6 +90,7 @@ def _do_record(watch_url, out_path):
             "writedescription": False,
             "socket_timeout": 60,
             "prefer_ffmpeg": False,
+            "hls_prefer_native": True,
             "ffmpeg_location": None,
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
