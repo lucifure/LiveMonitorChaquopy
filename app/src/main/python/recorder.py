@@ -1,7 +1,6 @@
 import threading
 import sys
 import os
-import stat
 import traceback
 
 _download_thread = None
@@ -24,48 +23,6 @@ def _finished(success, reason=""):
             _callback.onFinished(bool(success), str(reason))
         except Exception:
             pass
-
-
-def _get_ffmpeg_path():
-    try:
-        files_dir = "/data/data/com.livemonitor.app/files"
-        ffmpeg_dest = os.path.join(files_dir, "ffmpeg")
-        os.makedirs(files_dir, exist_ok=True)
-
-        if os.path.exists(ffmpeg_dest) and os.path.getsize(ffmpeg_dest) > 100000:
-            os.chmod(ffmpeg_dest, stat.S_IRWXU)
-            _log("ffmpeg already exists: " + ffmpeg_dest, "success")
-            return ffmpeg_dest
-
-        _log("Looking for ffmpeg in assets...", "info")
-        possible_assets = [
-            "/data/app/com.livemonitor.app-1/base.apk",
-            "/data/app/com.livemonitor.app-2/base.apk",
-        ]
-
-        import zipfile
-        for apk_path in possible_assets:
-            if os.path.exists(apk_path):
-                _log(f"Found APK: {apk_path}", "info")
-                try:
-                    with zipfile.ZipFile(apk_path, 'r') as apk:
-                        if 'assets/ffmpeg' in apk.namelist():
-                            _log("Extracting ffmpeg from APK...", "info")
-                            with apk.open('assets/ffmpeg') as src:
-                                with open(ffmpeg_dest, 'wb') as dst:
-                                    dst.write(src.read())
-                            os.chmod(ffmpeg_dest, stat.S_IRWXU)
-                            size = os.path.getsize(ffmpeg_dest)
-                            _log(f"ffmpeg extracted! Size: {size} bytes", "success")
-                            return ffmpeg_dest
-                except Exception as e:
-                    _log(f"APK extract error: {e}", "error")
-
-        _log("ffmpeg not found in APK assets", "error")
-        return None
-    except Exception as e:
-        _log(f"ffmpeg setup error: {e}", "error")
-        return None
 
 
 def _progress_hook(d):
@@ -92,25 +49,46 @@ def _postprocessor_hook(d):
         _log("Post-processing complete.", "success")
 
 
+def _patch_yt_dlp_for_no_ffmpeg():
+    """
+    Monkey-patch yt-dlp to never call ffmpeg.
+    Forces native HLS downloader always.
+    """
+    try:
+        from yt_dlp.downloader import external
+        original = external.ExternalFD._call_downloader
+
+        def patched_call(self, tmpfilename, info_dict):
+            raise Exception("ffmpeg disabled - using native downloader")
+
+        external.ExternalFD._call_downloader = patched_call
+        _log("yt-dlp patched to use native downloader", "success")
+    except Exception as e:
+        _log(f"Patch warning: {e}", "warning")
+
+
 def _do_record(watch_url, out_path):
     try:
         import yt_dlp
+        from yt_dlp.utils import DownloadError
 
         _log("yt-dlp version: " + yt_dlp.version.__version__, "info")
         _log("Starting: " + watch_url, "info")
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-        ffmpeg_path = _get_ffmpeg_path()
-        if ffmpeg_path:
-            _log("ffmpeg ready - full recording enabled", "success")
-        else:
-            _log("No ffmpeg - will try native downloader", "warning")
-
         ydl_opts = {
             "outtmpl": out_path,
-            "format": "best[ext=mp4]/best",
-            "merge_output_format": "mp4",
+
+            # Force formats that don't need ffmpeg
+            # mp4 with combined video+audio in a single file
+            "format": (
+                "best[ext=mp4][protocol!=m3u8][protocol!=m3u8_native]"
+                "/best[ext=mp4]"
+                "/best[protocol!=m3u8][protocol!=m3u8_native]"
+                "/best"
+            ),
+
             "live_from_start": False,
             "wait_for_video": (5, 300),
             "retries": 100,
@@ -120,7 +98,7 @@ def _do_record(watch_url, out_path):
             "concurrent_fragment_downloads": 1,
             "no_warnings": False,
             "quiet": False,
-            "verbose": False,
+            "verbose": True,
             "progress_hooks": [_progress_hook],
             "postprocessor_hooks": [_postprocessor_hook],
             "http_headers": {
@@ -132,13 +110,34 @@ def _do_record(watch_url, out_path):
             "writesubtitles": False,
             "writedescription": False,
             "socket_timeout": 60,
-            "prefer_ffmpeg": bool(ffmpeg_path),
-            "hls_prefer_native": not bool(ffmpeg_path),
-            "ffmpeg_location": ffmpeg_path,
+
+            # Disable ffmpeg completely
+            "prefer_ffmpeg": False,
+            "hls_prefer_native": True,
+            "hls_use_mpegts": True,
+            "ffmpeg_location": "/nonexistent",
+
+            # No post processing that needs ffmpeg
+            "postprocessors": [],
+
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First extract info to see what formats are available
+            _log("Checking available formats...", "info")
+            try:
+                info = ydl.extract_info(watch_url, download=False)
+                formats = info.get("formats", [])
+                _log(f"Found {len(formats)} formats", "info")
+                for f in formats[:5]:
+                    ext = f.get("ext", "?")
+                    proto = f.get("protocol", "?")
+                    height = f.get("height", "?")
+                    _log(f"  Format: {ext} proto={proto} height={height}", "info")
+            except Exception as e:
+                _log(f"Format check error: {e}", "warning")
+
             ret = ydl.download([watch_url])
 
         if _stop_event.is_set():
