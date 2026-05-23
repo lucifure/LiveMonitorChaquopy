@@ -1,6 +1,7 @@
 import threading
 import sys
 import os
+import stat
 import traceback
 
 _download_thread = None
@@ -23,6 +24,34 @@ def _finished(success, reason=""):
             _callback.onFinished(bool(success), str(reason))
         except Exception:
             pass
+
+
+def _get_ffmpeg_path():
+    """Get ffmpeg from nativeLibraryDir — this is where libffmpeg.so lives."""
+    try:
+        # Chaquopy gives us access to the Android context
+        from com.chaquo.python import Python
+        context = Python.getInstance().getApplication()
+        native_dir = context.getApplicationInfo().nativeLibraryDir
+        ffmpeg_path = os.path.join(native_dir, "libffmpeg.so")
+
+        _log(f"Looking for ffmpeg at: {ffmpeg_path}", "info")
+
+        if os.path.exists(ffmpeg_path):
+            os.chmod(ffmpeg_path, stat.S_IRWXU)
+            size = os.path.getsize(ffmpeg_path)
+            _log(f"ffmpeg found! Size: {size} bytes", "success")
+            return ffmpeg_path
+        else:
+            _log("ffmpeg not found in nativeLibraryDir", "error")
+            # List what IS in the native dir for debugging
+            if os.path.exists(native_dir):
+                files = os.listdir(native_dir)
+                _log(f"Files in nativeDir: {files}", "info")
+            return None
+    except Exception as e:
+        _log(f"ffmpeg lookup error: {e}", "error")
+        return None
 
 
 def _progress_hook(d):
@@ -49,46 +78,27 @@ def _postprocessor_hook(d):
         _log("Post-processing complete.", "success")
 
 
-def _patch_yt_dlp_for_no_ffmpeg():
-    """
-    Monkey-patch yt-dlp to never call ffmpeg.
-    Forces native HLS downloader always.
-    """
-    try:
-        from yt_dlp.downloader import external
-        original = external.ExternalFD._call_downloader
-
-        def patched_call(self, tmpfilename, info_dict):
-            raise Exception("ffmpeg disabled - using native downloader")
-
-        external.ExternalFD._call_downloader = patched_call
-        _log("yt-dlp patched to use native downloader", "success")
-    except Exception as e:
-        _log(f"Patch warning: {e}", "warning")
-
-
 def _do_record(watch_url, out_path):
     try:
         import yt_dlp
-        from yt_dlp.utils import DownloadError
 
         _log("yt-dlp version: " + yt_dlp.version.__version__, "info")
         _log("Starting: " + watch_url, "info")
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+        ffmpeg_path = _get_ffmpeg_path()
+        if ffmpeg_path:
+            _log("ffmpeg ready - recording will work!", "success")
+        else:
+            _log("ffmpeg missing - recording will fail", "error")
+            _finished(False, "ffmpeg not found")
+            return
+
         ydl_opts = {
             "outtmpl": out_path,
-
-            # Force formats that don't need ffmpeg
-            # mp4 with combined video+audio in a single file
-            "format": (
-                "best[ext=mp4][protocol!=m3u8][protocol!=m3u8_native]"
-                "/best[ext=mp4]"
-                "/best[protocol!=m3u8][protocol!=m3u8_native]"
-                "/best"
-            ),
-
+            "format": "best[height<=720]/best",
+            "merge_output_format": "mp4",
             "live_from_start": False,
             "wait_for_video": (5, 300),
             "retries": 100,
@@ -98,7 +108,7 @@ def _do_record(watch_url, out_path):
             "concurrent_fragment_downloads": 1,
             "no_warnings": False,
             "quiet": False,
-            "verbose": True,
+            "verbose": False,
             "progress_hooks": [_progress_hook],
             "postprocessor_hooks": [_postprocessor_hook],
             "http_headers": {
@@ -110,34 +120,12 @@ def _do_record(watch_url, out_path):
             "writesubtitles": False,
             "writedescription": False,
             "socket_timeout": 60,
-
-            # Disable ffmpeg completely
-            "prefer_ffmpeg": False,
-            "hls_prefer_native": True,
-            "hls_use_mpegts": True,
-            "ffmpeg_location": "/nonexistent",
-
-            # No post processing that needs ffmpeg
-            "postprocessors": [],
-
+            "prefer_ffmpeg": True,
+            "ffmpeg_location": ffmpeg_path,
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # First extract info to see what formats are available
-            _log("Checking available formats...", "info")
-            try:
-                info = ydl.extract_info(watch_url, download=False)
-                formats = info.get("formats", [])
-                _log(f"Found {len(formats)} formats", "info")
-                for f in formats[:5]:
-                    ext = f.get("ext", "?")
-                    proto = f.get("protocol", "?")
-                    height = f.get("height", "?")
-                    _log(f"  Format: {ext} proto={proto} height={height}", "info")
-            except Exception as e:
-                _log(f"Format check error: {e}", "warning")
-
             ret = ydl.download([watch_url])
 
         if _stop_event.is_set():
