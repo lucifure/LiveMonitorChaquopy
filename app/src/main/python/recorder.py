@@ -7,6 +7,7 @@ import traceback
 _download_thread = None
 _stop_event = threading.Event()
 _callback = None
+_ffmpeg_path = None
 
 
 def _log(msg, msg_type="info"):
@@ -24,80 +25,6 @@ def _finished(success, reason=""):
             _callback.onFinished(bool(success), str(reason))
         except Exception:
             pass
-
-
-def _get_ffmpeg_path():
-    """Find libffmpeg.so in the app native library directory."""
-    try:
-        # Get package name from app data path
-        # App files are at /data/data/com.livemonitor.app/
-        # Native libs are at /data/app/com.livemonitor.app-X/lib/arm64/
-        
-        package = "com.livemonitor.app"
-        
-        # Search common native lib locations
-        search_dirs = [
-            f"/data/app/{package}-1/lib/arm64",
-            f"/data/app/{package}-2/lib/arm64",
-            f"/data/app/{package}-1/lib/arm64-v8a",
-            f"/data/app/{package}-2/lib/arm64-v8a",
-        ]
-        
-        # Also search by glob pattern
-        import glob
-        glob_patterns = [
-            f"/data/app/{package}-*/lib/arm64/libffmpeg.so",
-            f"/data/app/{package}-*/lib/arm64-v8a/libffmpeg.so",
-            f"/data/app/~~*//{package}-*/lib/arm64/libffmpeg.so",
-            f"/data/app/~~*//{package}-*/lib/arm64-v8a/libffmpeg.so",
-        ]
-        
-        for pattern in glob_patterns:
-            matches = glob.glob(pattern)
-            if matches:
-                ffmpeg_path = matches[0]
-                _log(f"Found ffmpeg at: {ffmpeg_path}", "success")
-                os.chmod(ffmpeg_path, stat.S_IRWXU)
-                return ffmpeg_path
-        
-        for d in search_dirs:
-            ffmpeg_path = os.path.join(d, "libffmpeg.so")
-            if os.path.exists(ffmpeg_path):
-                _log(f"Found ffmpeg at: {ffmpeg_path}", "success")
-                os.chmod(ffmpeg_path, stat.S_IRWXU)
-                return ffmpeg_path
-
-        # Try reading from /proc/self/maps to find loaded libs
-        _log("Searching /proc/self/maps for ffmpeg...", "info")
-        try:
-            with open("/proc/self/maps", "r") as f:
-                for line in f:
-                    if "libffmpeg" in line:
-                        parts = line.strip().split()
-                        if len(parts) >= 6:
-                            path = parts[-1]
-                            if os.path.exists(path):
-                                _log(f"Found via maps: {path}", "success")
-                                return path
-        except Exception:
-            pass
-
-        # Last resort - search entire /data/app
-        _log("Deep searching /data/app...", "info")
-        for root, dirs, files in os.walk("/data/app"):
-            for f in files:
-                if f == "libffmpeg.so":
-                    full_path = os.path.join(root, f)
-                    _log(f"Found: {full_path}", "success")
-                    os.chmod(full_path, stat.S_IRWXU)
-                    return full_path
-
-        _log("ffmpeg not found anywhere!", "error")
-        return None
-
-    except Exception as e:
-        _log(f"ffmpeg lookup error: {e}", "error")
-        return None
 
 
 def _progress_hook(d):
@@ -133,11 +60,19 @@ def _do_record(watch_url, out_path):
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-        ffmpeg_path = _get_ffmpeg_path()
-        if ffmpeg_path:
-            _log("ffmpeg ready - recording enabled!", "success")
+        # Use ffmpeg path passed from Java
+        ffmpeg = _ffmpeg_path
+        _log(f"ffmpeg path from Java: {ffmpeg}", "info")
+
+        if ffmpeg and os.path.exists(ffmpeg):
+            size = os.path.getsize(ffmpeg)
+            _log(f"ffmpeg found! Size: {size} bytes", "success")
+            try:
+                os.chmod(ffmpeg, stat.S_IRWXU)
+            except Exception as e:
+                _log(f"chmod warning: {e}", "warning")
         else:
-            _log("ffmpeg not found - cannot record m3u8", "error")
+            _log(f"ffmpeg not found at: {ffmpeg}", "error")
             _finished(False, "ffmpeg not found")
             return
 
@@ -167,7 +102,7 @@ def _do_record(watch_url, out_path):
             "writedescription": False,
             "socket_timeout": 60,
             "prefer_ffmpeg": True,
-            "ffmpeg_location": ffmpeg_path,
+            "ffmpeg_location": ffmpeg,
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
 
@@ -190,10 +125,12 @@ def _do_record(watch_url, out_path):
         _finished(False, str(e))
 
 
-def start(watch_url, out_path, java_callback):
-    global _download_thread, _callback
+def start(watch_url, out_path, java_callback, ffmpeg_path):
+    global _download_thread, _callback, _ffmpeg_path
     _stop_event.clear()
     _callback = java_callback
+    _ffmpeg_path = str(ffmpeg_path)
+    _log(f"ffmpeg path received: {_ffmpeg_path}", "info")
     _download_thread = threading.Thread(
         target=_do_record,
         args=(watch_url, out_path),
