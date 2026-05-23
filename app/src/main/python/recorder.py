@@ -1,6 +1,7 @@
 import threading
 import sys
 import os
+import stat
 import traceback
 from datetime import datetime
 
@@ -24,6 +25,32 @@ def _finished(success, reason=""):
             _callback.onFinished(bool(success), str(reason))
         except Exception:
             pass
+
+
+def _get_ffmpeg_path():
+    """Copy ffmpeg from assets to files dir and make it executable."""
+    try:
+        import android.content
+        from java import jclass
+        context = jclass("com.chaquo.python.Python").getInstance().getApplication()
+        files_dir = context.getFilesDir().getAbsolutePath()
+        ffmpeg_dest = os.path.join(files_dir, "ffmpeg")
+
+        if not os.path.exists(ffmpeg_dest):
+            _log("Copying ffmpeg from assets...", "info")
+            asset_manager = context.getAssets()
+            input_stream = asset_manager.open("ffmpeg")
+            with open(ffmpeg_dest, 'wb') as f:
+                buf = input_stream.read()
+                f.write(buf)
+            input_stream.close()
+
+        os.chmod(ffmpeg_dest, stat.S_IRWXU)
+        _log("ffmpeg ready at: " + ffmpeg_dest, "success")
+        return ffmpeg_dest
+    except Exception as e:
+        _log(f"ffmpeg setup error: {e}", "error")
+        return None
 
 
 def _progress_hook(d):
@@ -62,6 +89,12 @@ def _do_record(watch_url, out_path):
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+        ffmpeg_path = _get_ffmpeg_path()
+        if ffmpeg_path:
+            _log("ffmpeg found - full quality recording enabled", "success")
+        else:
+            _log("ffmpeg not found - trying without it", "warning")
+
         ydl_opts = {
             "outtmpl": out_path,
             "format": "best[ext=mp4]/best",
@@ -89,9 +122,9 @@ def _do_record(watch_url, out_path):
             "writesubtitles": False,
             "writedescription": False,
             "socket_timeout": 60,
-            "prefer_ffmpeg": False,
-            "hls_prefer_native": True,
-            "ffmpeg_location": None,
+            "prefer_ffmpeg": True if ffmpeg_path else False,
+            "hls_prefer_native": False if ffmpeg_path else True,
+            "ffmpeg_location": ffmpeg_path,
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
 
