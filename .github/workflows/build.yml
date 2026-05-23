@@ -43,12 +43,11 @@ jobs:
 
       - name: Download ffmpeg for Android arm64
         run: |
-          mkdir -p app/src/main/assets
-          curl -L "https://github.com/nicholasess/android-ffmpeg-binary/raw/master/binary/arm64-v8a/ffmpeg" -o app/src/main/assets/ffmpeg || \
-          curl -L "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-arm64" -o app/src/main/assets/ffmpeg || \
-          wget -O app/src/main/assets/ffmpeg "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
-          ls -la app/src/main/assets/ffmpeg
-          echo "ffmpeg size: $(wc -c < app/src/main/assets/ffmpeg) bytes"
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          curl -L "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-android-arm64-gpl.tar.xz" -o ffmpeg.tar.xz
+          tar -xf ffmpeg.tar.xz
+          cp ffmpeg-master-latest-android-arm64-gpl/bin/ffmpeg app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          echo "ffmpeg size: $(wc -c < app/src/main/jniLibs/arm64-v8a/libffmpeg.so) bytes"
 
       - name: Build Debug APK
         run: gradle assembleDebug
