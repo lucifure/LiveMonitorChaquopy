@@ -33,7 +33,8 @@ public class MonitorService extends Service {
     private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
-    private static final String YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+    private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
     private volatile boolean running   = false;
@@ -149,10 +150,15 @@ public class MonitorService extends Service {
             String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
                     + safe + "_" + date + ".mp4";
 
+            // Get ffmpeg path from native library directory
+            String nativeDir = getApplicationInfo().nativeLibraryDir;
+            String ffmpegPath = nativeDir + "/libffmpeg.so";
+            sendLog("ffmpeg path: " + ffmpegPath, "info");
+
             sendLog("Handing off to Python/yt-dlp...", "info");
 
             RecorderCallback cb = new RecorderCallback();
-            recorderModule.callAttr("start", watchUrl, outPath, cb);
+            recorderModule.callAttr("start", watchUrl, outPath, cb, ffmpegPath);
 
         } catch (Exception e) {
             sendLog("startPythonRecording error: " + e.getMessage(), "error");
