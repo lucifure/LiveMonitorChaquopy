@@ -3,7 +3,6 @@ import sys
 import os
 import stat
 import traceback
-from datetime import datetime
 
 _download_thread = None
 _stop_event = threading.Event()
@@ -28,26 +27,42 @@ def _finished(success, reason=""):
 
 
 def _get_ffmpeg_path():
-    """Copy ffmpeg from assets to files dir and make it executable."""
     try:
-        import android.content
-        from java import jclass
-        context = jclass("com.chaquo.python.Python").getInstance().getApplication()
-        files_dir = context.getFilesDir().getAbsolutePath()
+        files_dir = "/data/data/com.livemonitor.app/files"
         ffmpeg_dest = os.path.join(files_dir, "ffmpeg")
+        os.makedirs(files_dir, exist_ok=True)
 
-        if not os.path.exists(ffmpeg_dest):
-            _log("Copying ffmpeg from assets...", "info")
-            asset_manager = context.getAssets()
-            input_stream = asset_manager.open("ffmpeg")
-            with open(ffmpeg_dest, 'wb') as f:
-                buf = input_stream.read()
-                f.write(buf)
-            input_stream.close()
+        if os.path.exists(ffmpeg_dest) and os.path.getsize(ffmpeg_dest) > 100000:
+            os.chmod(ffmpeg_dest, stat.S_IRWXU)
+            _log("ffmpeg already exists: " + ffmpeg_dest, "success")
+            return ffmpeg_dest
 
-        os.chmod(ffmpeg_dest, stat.S_IRWXU)
-        _log("ffmpeg ready at: " + ffmpeg_dest, "success")
-        return ffmpeg_dest
+        _log("Looking for ffmpeg in assets...", "info")
+        possible_assets = [
+            "/data/app/com.livemonitor.app-1/base.apk",
+            "/data/app/com.livemonitor.app-2/base.apk",
+        ]
+
+        import zipfile
+        for apk_path in possible_assets:
+            if os.path.exists(apk_path):
+                _log(f"Found APK: {apk_path}", "info")
+                try:
+                    with zipfile.ZipFile(apk_path, 'r') as apk:
+                        if 'assets/ffmpeg' in apk.namelist():
+                            _log("Extracting ffmpeg from APK...", "info")
+                            with apk.open('assets/ffmpeg') as src:
+                                with open(ffmpeg_dest, 'wb') as dst:
+                                    dst.write(src.read())
+                            os.chmod(ffmpeg_dest, stat.S_IRWXU)
+                            size = os.path.getsize(ffmpeg_dest)
+                            _log(f"ffmpeg extracted! Size: {size} bytes", "success")
+                            return ffmpeg_dest
+                except Exception as e:
+                    _log(f"APK extract error: {e}", "error")
+
+        _log("ffmpeg not found in APK assets", "error")
+        return None
     except Exception as e:
         _log(f"ffmpeg setup error: {e}", "error")
         return None
@@ -65,16 +80,14 @@ def _progress_hook(d):
         eta_str = f" ETA {eta}s" if eta else ""
         _log(f"↓ {mb:.1f} MB  {kbs:.0f} KB/s{eta_str}  [{filename[:40]}]", "download")
     elif status == "finished":
-        filename = os.path.basename(d.get("filename", ""))
-        _log(f"Segment done: {filename}", "success")
+        _log(f"Segment done: {os.path.basename(d.get('filename', ''))}", "success")
     elif status == "error":
         _log(f"yt-dlp error: {d.get('error', 'unknown')}", "error")
 
 
 def _postprocessor_hook(d):
     if d.get("status") == "started":
-        pp = d.get("postprocessor", "")
-        _log(f"Post-processing: {pp}", "info")
+        _log(f"Post-processing: {d.get('postprocessor', '')}", "info")
     elif d.get("status") == "finished":
         _log("Post-processing complete.", "success")
 
@@ -84,16 +97,15 @@ def _do_record(watch_url, out_path):
         import yt_dlp
 
         _log("yt-dlp version: " + yt_dlp.version.__version__, "info")
-        _log("Starting download: " + watch_url, "info")
-        _log("Output: " + out_path, "info")
+        _log("Starting: " + watch_url, "info")
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
         ffmpeg_path = _get_ffmpeg_path()
         if ffmpeg_path:
-            _log("ffmpeg found - full quality recording enabled", "success")
+            _log("ffmpeg ready - full recording enabled", "success")
         else:
-            _log("ffmpeg not found - trying without it", "warning")
+            _log("No ffmpeg - will try native downloader", "warning")
 
         ydl_opts = {
             "outtmpl": out_path,
@@ -114,16 +126,14 @@ def _do_record(watch_url, out_path):
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
             },
-            "paths": {
-                "temp": os.path.dirname(out_path),
-            },
+            "paths": {"temp": os.path.dirname(out_path)},
             "writeinfojson": False,
             "writethumbnail": False,
             "writesubtitles": False,
             "writedescription": False,
             "socket_timeout": 60,
-            "prefer_ffmpeg": True if ffmpeg_path else False,
-            "hls_prefer_native": False if ffmpeg_path else True,
+            "prefer_ffmpeg": bool(ffmpeg_path),
+            "hls_prefer_native": not bool(ffmpeg_path),
             "ffmpeg_location": ffmpeg_path,
             "abort_download_if": lambda _: _stop_event.is_set(),
         }
@@ -132,28 +142,25 @@ def _do_record(watch_url, out_path):
             ret = ydl.download([watch_url])
 
         if _stop_event.is_set():
-            _log("Recording stopped by user.", "warning")
+            _log("Stopped by user.", "warning")
             _finished(False, "stopped")
         elif ret == 0:
-            _log("Recording finished successfully!", "success")
+            _log("Recording finished!", "success")
             _finished(True, "complete")
         else:
-            _log(f"yt-dlp returned exit code {ret}", "error")
+            _log(f"yt-dlp exit code: {ret}", "error")
             _finished(False, f"exit_code_{ret}")
 
     except Exception as e:
-        tb = traceback.format_exc()
-        _log(f"Recording exception: {e}", "error")
-        _log(tb, "error")
+        _log(f"Exception: {e}", "error")
+        _log(traceback.format_exc(), "error")
         _finished(False, str(e))
 
 
 def start(watch_url, out_path, java_callback):
     global _download_thread, _callback
-
     _stop_event.clear()
     _callback = java_callback
-
     _download_thread = threading.Thread(
         target=_do_record,
         args=(watch_url, out_path),
@@ -161,7 +168,7 @@ def start(watch_url, out_path, java_callback):
         daemon=True
     )
     _download_thread.start()
-    _log("Recorder thread started.", "success")
+    _log("Recorder started.", "success")
     return True
 
 
