@@ -17,6 +17,9 @@ import com.chaquo.python.android.AndroidPlatform;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -141,6 +144,37 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
+    private String copyFfmpegToFilesDir() {
+        try {
+            File destFile = new File(getFilesDir(), "ffmpeg");
+            if (destFile.exists() && destFile.length() > 100000) {
+                destFile.setExecutable(true);
+                sendLog("ffmpeg ready: " + destFile.getAbsolutePath(), "success");
+                return destFile.getAbsolutePath();
+            }
+            String nativeDir = getApplicationInfo().nativeLibraryDir;
+            File srcFile = new File(nativeDir, "libffmpeg.so");
+            sendLog("Copying ffmpeg from: " + srcFile.getAbsolutePath(), "info");
+            if (!srcFile.exists()) {
+                sendLog("libffmpeg.so not found in nativeDir: " + nativeDir, "error");
+                return null;
+            }
+            FileInputStream in = new FileInputStream(srcFile);
+            FileOutputStream out = new FileOutputStream(destFile);
+            byte[] buf = new byte[4096];
+            int len;
+            while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+            in.close();
+            out.close();
+            destFile.setExecutable(true);
+            sendLog("ffmpeg copied! Size: " + destFile.length() + " bytes", "success");
+            return destFile.getAbsolutePath();
+        } catch (Exception e) {
+            sendLog("copyFfmpegToFilesDir error: " + e.getMessage(), "error");
+            return null;
+        }
+    }
+
     private void startPythonRecording(String watchUrl, String title) {
         try {
             String date = new SimpleDateFormat("yyyyMMdd_HHmm",
@@ -150,9 +184,7 @@ public class MonitorService extends Service {
             String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
                     + safe + "_" + date + ".mp4";
 
-            // Get ffmpeg path from native library directory
-            String nativeDir = getApplicationInfo().nativeLibraryDir;
-            String ffmpegPath = nativeDir + "/libffmpeg.so";
+            String ffmpegPath = copyFfmpegToFilesDir();
             sendLog("ffmpeg path: " + ffmpegPath, "info");
 
             sendLog("Handing off to Python/yt-dlp...", "info");
