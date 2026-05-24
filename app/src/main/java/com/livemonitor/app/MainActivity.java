@@ -32,15 +32,16 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        binding = ActivityMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
+        // Init Chaquopy Python
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(this));
         }
 
-        binding = ActivityMainBinding.inflate(getLayoutInflater());
-        setContentView(binding.getRoot());
-
         binding.logText.setMovementMethod(new ScrollingMovementMethod());
+        binding.btnStop.setEnabled(false);
 
         requestPermissions();
 
@@ -55,30 +56,19 @@ public class MainActivity extends AppCompatActivity {
 
         binding.btnStop.setOnClickListener(v -> stopMonitoring());
 
+        // Listen for logs from service
         logReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                String msg  = intent.getStringExtra("message");
+                String msg = intent.getStringExtra("message");
                 String type = intent.getStringExtra("type");
                 if (msg != null) appendLog(msg, type);
             }
         };
-        LocalBroadcastManager.getInstance(this).registerReceiver(
-                logReceiver, new IntentFilter("MONITOR_LOG"));
+        LocalBroadcastManager.getInstance(this)
+            .registerReceiver(logReceiver, new IntentFilter("MONITOR_LOG"));
 
-        appendLog("Initialising Python / yt-dlp...", "info");
-        new Thread(() -> {
-            try {
-                Python py = Python.getInstance();
-                String ver = py.getModule("recorder")
-                               .callAttr("get_yt_dlp_version")
-                               .toString();
-                appendLog("yt-dlp " + ver + " ready via Chaquopy ✓", "success");
-                appendLog("Paste a YouTube channel URL and tap Start.", "info");
-            } catch (Exception e) {
-                appendLog("Python init error: " + e.getMessage(), "error");
-            }
-        }).start();
+        appendLog("Ready. Paste a YouTube channel URL and tap Start.", "info");
     }
 
     private void startMonitoring(String url) {
@@ -113,54 +103,32 @@ public class MainActivity extends AppCompatActivity {
     private void appendLog(String message, String type) {
         runOnUiThread(() -> {
             String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-            String icon = iconFor(type);
             String current = binding.logText.getText().toString();
-            String newText = current + "\n[" + time + "] " + icon + " " + message;
-
-            String[] lines = newText.split("\n");
-            if (lines.length > 150) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = lines.length - 150; i < lines.length; i++) {
-                    sb.append(lines[i]).append("\n");
-                }
-                newText = sb.toString();
-            }
-            binding.logText.setText(newText.trim());
-
+            String newText = current.isEmpty() ? "[" + time + "] " + message
+                : current + "\n[" + time + "] " + message;
+            binding.logText.setText(newText);
+            // Scroll to bottom
             if (binding.logText.getLayout() != null) {
-                int scrollAmount = binding.logText.getLayout()
-                        .getLineTop(binding.logText.getLineCount())
-                        - binding.logText.getHeight();
-                if (scrollAmount > 0) binding.logText.scrollTo(0, scrollAmount);
+                int scroll = binding.logText.getLayout()
+                    .getLineTop(binding.logText.getLineCount()) - binding.logText.getHeight();
+                if (scroll > 0) binding.logText.scrollTo(0, scroll);
             }
         });
     }
 
-    private String iconFor(String type) {
-        if (type == null) return "-";
-        switch (type) {
-            case "success":  return "✓";
-            case "error":    return "✗";
-            case "warning":  return "!";
-            case "live":     return "●";
-            case "download": return "↓";
-            default:         return "-";
-        }
-    }
-
     private void requestPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this,
-                    Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 try {
-                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            Uri.parse("package:" + getPackageName()));
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
                     startActivity(intent);
                 } catch (Exception e) {
                     startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
@@ -174,4 +142,4 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         LocalBroadcastManager.getInstance(this).unregisterReceiver(logReceiver);
     }
-                                    }
+}
