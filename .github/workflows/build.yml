@@ -1,4 +1,4 @@
-name: Build Android APK (Chaquopy)
+name: Build Android APK
 
 on:
   push:
@@ -30,25 +30,23 @@ jobs:
       - name: Install imagemagick
         run: sudo apt-get install -y imagemagick
 
-      - name: Create placeholder icon
+      - name: Convert icon
         run: |
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
           mkdir -p app/src/main/res/mipmap-xxhdpi
           mkdir -p app/src/main/res/mipmap-xxxhdpi
-          convert -size 72x72 xc:#00A884 app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert -size 96x96 xc:#00A884 app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert -size 144x144 xc:#00A884 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          convert preview.webp -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert preview.webp -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert preview.webp -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert preview.webp -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-      - name: Build Debug APK
+      - name: Build APK
         run: gradle assembleDebug
-        env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LiveMonitor-Chaquopy-APK
+          name: LiveMonitor-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
