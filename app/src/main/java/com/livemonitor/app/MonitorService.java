@@ -31,7 +31,7 @@ import java.util.concurrent.Executors;
 
 public class MonitorService extends Service {
 
-    private static final String TAG = "MonitorService";
+    private static final String TAG             = "MonitorService";
     private static final String CHANNEL_ID      = "LiveMonitorChannel";
     private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
@@ -42,8 +42,9 @@ public class MonitorService extends Service {
     private ExecutorService executor;
     private volatile boolean running   = false;
     private volatile boolean recording = false;
-    private String channelUrl = "";
+    private String channelUrl          = "";
     private PyObject recorderModule;
+    private String cachedFfmpegPath    = null;
 
     public class RecorderCallback {
         public void onLog(String message, String type) {
@@ -68,7 +69,9 @@ public class MonitorService extends Service {
         }
         Python py = Python.getInstance();
         recorderModule = py.getModule("recorder");
-        Log.d(TAG, "Chaquopy recorder module loaded.");
+
+        // Copy ffmpeg in background when service starts
+        executor.execute(this::prepareFfmpeg);
     }
 
     @Override
@@ -88,6 +91,66 @@ public class MonitorService extends Service {
         }
         return START_NOT_STICKY;
     }
+
+    // ── Prepare ffmpeg in background ─────────────────────────────────────────
+
+    private void prepareFfmpeg() {
+        cachedFfmpegPath = copyFfmpegToFilesDir();
+        if (cachedFfmpegPath != null) {
+            sendLog("ffmpeg ready in background.", "success");
+        } else {
+            sendLog("ffmpeg preparation failed.", "error");
+        }
+    }
+
+    private String copyFfmpegToFilesDir() {
+        try {
+            File destFile = new File(getFilesDir(), "ffmpeg");
+
+            // Already copied and valid
+            if (destFile.exists() && destFile.length() > 100000) {
+                destFile.setExecutable(true);
+                Log.d(TAG, "ffmpeg already exists: " + destFile.getAbsolutePath());
+                return destFile.getAbsolutePath();
+            }
+
+            String nativeDir = getApplicationInfo().nativeLibraryDir;
+            File srcFile = new File(nativeDir, "libffmpeg.so");
+
+            sendLog("Copying ffmpeg from nativeDir...", "info");
+            sendLog("Source: " + srcFile.getAbsolutePath(), "info");
+            sendLog("Source exists: " + srcFile.exists(), "info");
+            sendLog("Source size: " + srcFile.length() + " bytes", "info");
+
+            if (!srcFile.exists()) {
+                sendLog("libffmpeg.so NOT found!", "error");
+                return null;
+            }
+
+            FileInputStream in  = new FileInputStream(srcFile);
+            FileOutputStream out = new FileOutputStream(destFile);
+            byte[] buf = new byte[65536];
+            int len;
+            long total = 0;
+            while ((len = in.read(buf)) > 0) {
+                out.write(buf, 0, len);
+                total += len;
+            }
+            in.close();
+            out.close();
+
+            destFile.setExecutable(true);
+            sendLog("ffmpeg copied! Size: " + total + " bytes", "success");
+            sendLog("ffmpeg path: " + destFile.getAbsolutePath(), "success");
+            return destFile.getAbsolutePath();
+
+        } catch (Exception e) {
+            sendLog("copyFfmpegToFilesDir error: " + e.getMessage(), "error");
+            return null;
+        }
+    }
+
+    // ── Monitor loop ──────────────────────────────────────────────────────────
 
     private void monitorLoop() {
         sendLog("Monitor started. Wake lock active.", "success");
@@ -144,36 +207,7 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    private String copyFfmpegToFilesDir() {
-        try {
-            File destFile = new File(getFilesDir(), "ffmpeg");
-            if (destFile.exists() && destFile.length() > 100000) {
-                destFile.setExecutable(true);
-                sendLog("ffmpeg ready: " + destFile.getAbsolutePath(), "success");
-                return destFile.getAbsolutePath();
-            }
-            String nativeDir = getApplicationInfo().nativeLibraryDir;
-            File srcFile = new File(nativeDir, "libffmpeg.so");
-            sendLog("Copying ffmpeg from: " + srcFile.getAbsolutePath(), "info");
-            if (!srcFile.exists()) {
-                sendLog("libffmpeg.so not found in nativeDir: " + nativeDir, "error");
-                return null;
-            }
-            FileInputStream in = new FileInputStream(srcFile);
-            FileOutputStream out = new FileOutputStream(destFile);
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
-            in.close();
-            out.close();
-            destFile.setExecutable(true);
-            sendLog("ffmpeg copied! Size: " + destFile.length() + " bytes", "success");
-            return destFile.getAbsolutePath();
-        } catch (Exception e) {
-            sendLog("copyFfmpegToFilesDir error: " + e.getMessage(), "error");
-            return null;
-        }
-    }
+    // ── Python recording ──────────────────────────────────────────────────────
 
     private void startPythonRecording(String watchUrl, String title) {
         try {
@@ -184,13 +218,17 @@ public class MonitorService extends Service {
             String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
                     + safe + "_" + date + ".mp4";
 
-            String ffmpegPath = copyFfmpegToFilesDir();
-            sendLog("ffmpeg path: " + ffmpegPath, "info");
+            // Use cached path or try to copy now
+            if (cachedFfmpegPath == null) {
+                cachedFfmpegPath = copyFfmpegToFilesDir();
+            }
 
+            sendLog("ffmpeg path: " + cachedFfmpegPath, "info");
             sendLog("Handing off to Python/yt-dlp...", "info");
 
             RecorderCallback cb = new RecorderCallback();
-            recorderModule.callAttr("start", watchUrl, outPath, cb, ffmpegPath);
+            recorderModule.callAttr("start", watchUrl, outPath, cb,
+                    cachedFfmpegPath != null ? cachedFfmpegPath : "");
 
         } catch (Exception e) {
             sendLog("startPythonRecording error: " + e.getMessage(), "error");
@@ -205,6 +243,8 @@ public class MonitorService extends Service {
             sendLog("stopPythonRecording error: " + e.getMessage(), "error");
         }
     }
+
+    // ── YouTube API ───────────────────────────────────────────────────────────
 
     private String resolveChannelId(String url) {
         try {
@@ -265,7 +305,6 @@ public class MonitorService extends Service {
             conn.setReadTimeout(15000);
             conn.setRequestMethod("GET");
             if (conn.getResponseCode() != 200) return null;
-
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
@@ -277,6 +316,8 @@ public class MonitorService extends Service {
             return null;
         }
     }
+
+    // ── Wake lock ─────────────────────────────────────────────────────────────
 
     private void acquireWakeLock() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
@@ -292,14 +333,14 @@ public class MonitorService extends Service {
         }
     }
 
+    // ── Notifications ─────────────────────────────────────────────────────────
+
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-
         NotificationChannel monitor = new NotificationChannel(
                 CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW);
         monitor.setDescription("Monitoring status");
         nm.createNotificationChannel(monitor);
-
         NotificationChannel live = new NotificationChannel(
                 CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH);
         live.setDescription("Alerts when stream goes live");
@@ -327,7 +368,6 @@ public class MonitorService extends Service {
                 android.net.Uri.parse("https://youtube.com/watch?v=" + videoId));
         PendingIntent pi = PendingIntent.getActivity(this, 2, openIntent,
                 PendingIntent.FLAG_IMMUTABLE);
-
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_LIVE_ID)
                 .setContentTitle("Stream is LIVE!")
                 .setContentText(title)
@@ -337,9 +377,10 @@ public class MonitorService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setVibrate(new long[]{0, 400, 200, 400, 200, 400})
                 .build();
-
         getSystemService(NotificationManager.class).notify(2, notif);
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void sendLog(String message, String type) {
         Log.d(TAG, "[" + type + "] " + message);
