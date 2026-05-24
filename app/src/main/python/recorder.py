@@ -1,159 +1,137 @@
-import threading
-import sys
+"""
+Live Monitor - Python recorder using yt-dlp
+Runs natively on Android via Chaquopy
+"""
+import yt_dlp
 import os
-import stat
-import traceback
-
-_download_thread = None
-_stop_event = threading.Event()
-_callback = None
-_ffmpeg_path = None
+import threading
+from datetime import datetime
 
 
-def _log(msg, msg_type="info"):
-    if _callback is not None:
-        try:
-            _callback.onLog(str(msg), str(msg_type))
-        except Exception:
-            pass
-    print("[recorder/" + msg_type + "] " + str(msg), file=sys.stderr)
+# Callback to send logs back to Java
+_log_callback = None
+_stop_flag = threading.Event()
 
 
-def _finished(success, reason=""):
-    if _callback is not None:
-        try:
-            _callback.onFinished(bool(success), str(reason))
-        except Exception:
-            pass
+def set_log_callback(callback):
+    global _log_callback
+    _log_callback = callback
 
 
-def _progress_hook(d):
-    status = d.get("status", "")
-    if status == "downloading":
-        filename = os.path.basename(d.get("filename", ""))
-        downloaded = d.get("downloaded_bytes", 0)
-        speed = d.get("speed") or 0
-        eta = d.get("eta")
-        mb = downloaded / (1024 * 1024)
-        kbs = speed / 1024 if speed else 0
-        eta_str = " ETA " + str(eta) + "s" if eta else ""
-        _log("down " + str(round(mb, 1)) + "MB " + str(round(kbs, 0)) + "KB/s" + eta_str, "download")
-    elif status == "finished":
-        _log("Segment done: " + os.path.basename(d.get("filename", "")), "success")
-    elif status == "error":
-        _log("yt-dlp error: " + str(d.get("error", "unknown")), "error")
-
-
-def _postprocessor_hook(d):
-    if d.get("status") == "started":
-        _log("Post-processing: " + str(d.get("postprocessor", "")), "info")
-    elif d.get("status") == "finished":
-        _log("Post-processing complete.", "success")
-
-
-def _do_record(watch_url, out_path):
-    try:
-        import yt_dlp
-
-        _log("yt-dlp version: " + yt_dlp.version.__version__, "info")
-        _log("Starting: " + watch_url, "info")
-
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
-        ffmpeg = _ffmpeg_path
-        _log("ffmpeg path: " + str(ffmpeg), "info")
-
-        if ffmpeg and os.path.exists(ffmpeg):
-            size = os.path.getsize(ffmpeg)
-            _log("ffmpeg found! Size: " + str(size) + " bytes", "success")
-            try:
-                os.chmod(ffmpeg, stat.S_IRWXU)
-            except Exception as e:
-                _log("chmod warning: " + str(e), "warning")
-        else:
-            _log("ffmpeg not found at: " + str(ffmpeg), "error")
-            _finished(False, "ffmpeg not found")
-            return
-
-        ydl_opts = {
-            "outtmpl": out_path,
-            "format": "best[height<=720]/best",
-            "merge_output_format": "mp4",
-            "live_from_start": False,
-            "wait_for_video": (5, 300),
-            "retries": 100,
-            "fragment_retries": 100,
-            "skip_unavailable_fragments": True,
-            "keepvideo": False,
-            "concurrent_fragment_downloads": 1,
-            "no_warnings": False,
-            "quiet": False,
-            "verbose": False,
-            "progress_hooks": [_progress_hook],
-            "postprocessor_hooks": [_postprocessor_hook],
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
-            },
-            "paths": {"temp": os.path.dirname(out_path)},
-            "writeinfojson": False,
-            "writethumbnail": False,
-            "writesubtitles": False,
-            "writedescription": False,
-            "socket_timeout": 60,
-            "prefer_ffmpeg": True,
-            "ffmpeg_location": ffmpeg,
-            "abort_download_if": lambda _: _stop_event.is_set(),
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ret = ydl.download([watch_url])
-
-        if _stop_event.is_set():
-            _log("Stopped by user.", "warning")
-            _finished(False, "stopped")
-        elif ret == 0:
-            _log("Recording finished!", "success")
-            _finished(True, "complete")
-        else:
-            _log("yt-dlp exit code: " + str(ret), "error")
-            _finished(False, "exit_code_" + str(ret))
-
-    except Exception as e:
-        _log("Exception: " + str(e), "error")
-        _log(traceback.format_exc(), "error")
-        _finished(False, str(e))
-
-
-def start(watch_url, out_path, java_callback, ffmpeg_path):
-    global _download_thread, _callback, _ffmpeg_path
-    _stop_event.clear()
-    _callback = java_callback
-    _ffmpeg_path = str(ffmpeg_path) if ffmpeg_path else ""
-    _log("ffmpeg path received: " + _ffmpeg_path, "info")
-    _download_thread = threading.Thread(
-        target=_do_record,
-        args=(watch_url, out_path),
-        name="yt-dlp-recorder",
-        daemon=True
-    )
-    _download_thread.start()
-    _log("Recorder started.", "success")
-    return True
+def log(msg):
+    if _log_callback:
+        _log_callback(msg)
 
 
 def stop():
-    _log("Stop signal received.", "warning")
-    _stop_event.set()
-    return True
+    _stop_flag.set()
 
 
-def is_running():
-    return _download_thread is not None and _download_thread.is_alive()
+def reset():
+    _stop_flag.clear()
 
 
-def get_yt_dlp_version():
+def is_stopped():
+    return _stop_flag.is_set()
+
+
+def check_live(url):
+    """Check if a YouTube channel/video is currently live."""
     try:
-        import yt_dlp
-        return yt_dlp.version.__version__
+        live_url = _get_live_url(url)
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'socket_timeout': 20,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(live_url, download=False)
+            if info is None:
+                return False, None, None
+            is_live = bool(
+                info.get('is_live') or
+                info.get('live_status') == 'is_live'
+            )
+            title = info.get('title', '')
+            video_id = info.get('id', '')
+            return is_live, title, video_id
     except Exception as e:
-        return "error: " + str(e)
+        log("Check error: " + str(e))
+        return False, None, None
+
+
+def record(url, output_dir):
+    """Record a live stream using yt-dlp."""
+    try:
+        live_url = _get_live_url(url)
+        os.makedirs(output_dir, exist_ok=True)
+
+        ts = datetime.now().strftime('%d%m%Y_%H%M')
+        out_template = os.path.join(
+            output_dir,
+            '%(title)s_' + ts + '.%(ext)s'
+        )
+
+        ydl_opts = {
+            'outtmpl': out_template,
+            'quiet': False,
+            'no_warnings': True,
+            'noplaylist': True,
+            'merge_output_format': 'mp4',
+            'restrictfilenames': True,
+            'nopart': True,
+            'socket_timeout': 90,
+            'retries': 50,
+            'fragment_retries': 50,
+            'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+            'live_from_start': False,
+            'logger': _YtdlpLogger(),
+            'progress_hooks': [_progress_hook],
+        }
+
+        log("Starting yt-dlp recording...")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([live_url])
+
+        log("Recording finished!")
+        return True
+
+    except Exception as e:
+        if not is_stopped():
+            log("Recording error: " + str(e))
+        return False
+
+
+def _get_live_url(url):
+    url = url.strip().rstrip('/')
+    import re
+    if re.search(r'youtube\.com/(@|channel/|c/|user/)', url):
+        if not url.endswith('/live'):
+            return url + '/live'
+    return url
+
+
+def _progress_hook(d):
+    status = d.get('status', '')
+    if status == 'downloading':
+        speed = d.get('_speed_str', '').strip()
+        eta = d.get('_eta_str', '').strip()
+        if speed:
+            log("Downloading... " + speed + " ETA: " + eta)
+    elif status == 'finished':
+        fname = os.path.basename(d.get('filename', ''))
+        log("Saved: " + fname)
+
+
+class _YtdlpLogger:
+    def debug(self, msg):
+        if not msg.startswith('[debug]'):
+            log(msg)
+    def info(self, msg):
+        log(msg)
+    def warning(self, msg):
+        log("[WARN] " + msg)
+    def error(self, msg):
+        log("[ERR] " + msg)
