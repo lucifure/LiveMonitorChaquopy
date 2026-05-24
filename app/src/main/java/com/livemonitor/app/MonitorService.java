@@ -11,6 +11,8 @@ import android.os.PowerManager;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
@@ -18,8 +20,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -44,7 +44,7 @@ public class MonitorService extends Service {
     private volatile boolean recording = false;
     private String channelUrl          = "";
     private PyObject recorderModule;
-    private String cachedFfmpegPath    = null;
+    private String ffmpegBinaryPath    = null;
 
     public class RecorderCallback {
         public void onLog(String message, String type) {
@@ -70,8 +70,48 @@ public class MonitorService extends Service {
         Python py = Python.getInstance();
         recorderModule = py.getModule("recorder");
 
-        // Copy ffmpeg in background when service starts
+        // Get ffmpeg binary path from ffmpeg-kit
         executor.execute(this::prepareFfmpeg);
+    }
+
+    private void prepareFfmpeg() {
+        try {
+            // ffmpeg-kit provides ffmpeg binary — get its path
+            ffmpegBinaryPath = FFmpegKitConfig.getFFmpegVersion() != null
+                    ? findFfmpegBinary() : null;
+            if (ffmpegBinaryPath != null) {
+                sendLog("ffmpeg ready: " + ffmpegBinaryPath, "success");
+            } else {
+                sendLog("ffmpeg-kit loaded but binary path unknown", "warning");
+            }
+        } catch (Exception e) {
+            sendLog("prepareFfmpeg error: " + e.getMessage(), "error");
+        }
+    }
+
+    private String findFfmpegBinary() {
+        // ffmpeg-kit runs ffmpeg internally — we extract its path
+        String nativeDir = getApplicationInfo().nativeLibraryDir;
+        sendLog("Native dir: " + nativeDir, "info");
+
+        // List all files in native dir
+        File dir = new File(nativeDir);
+        if (dir.exists()) {
+            for (File f : dir.listFiles()) {
+                sendLog("Native file: " + f.getName() + " size=" + f.length(), "info");
+            }
+        }
+
+        // ffmpeg-kit names its binary libffmpegkit.so or ffmpeg
+        String[] names = {"libffmpegkit.so", "libffmpeg.so", "ffmpeg"};
+        for (String name : names) {
+            File f = new File(nativeDir, name);
+            if (f.exists() && f.length() > 100000) {
+                f.setExecutable(true);
+                return f.getAbsolutePath();
+            }
+        }
+        return null;
     }
 
     @Override
@@ -91,66 +131,6 @@ public class MonitorService extends Service {
         }
         return START_NOT_STICKY;
     }
-
-    // ── Prepare ffmpeg in background ─────────────────────────────────────────
-
-    private void prepareFfmpeg() {
-        cachedFfmpegPath = copyFfmpegToFilesDir();
-        if (cachedFfmpegPath != null) {
-            sendLog("ffmpeg ready in background.", "success");
-        } else {
-            sendLog("ffmpeg preparation failed.", "error");
-        }
-    }
-
-    private String copyFfmpegToFilesDir() {
-        try {
-            File destFile = new File(getFilesDir(), "ffmpeg");
-
-            // Already copied and valid
-            if (destFile.exists() && destFile.length() > 100000) {
-                destFile.setExecutable(true);
-                Log.d(TAG, "ffmpeg already exists: " + destFile.getAbsolutePath());
-                return destFile.getAbsolutePath();
-            }
-
-            String nativeDir = getApplicationInfo().nativeLibraryDir;
-            File srcFile = new File(nativeDir, "libffmpeg.so");
-
-            sendLog("Copying ffmpeg from nativeDir...", "info");
-            sendLog("Source: " + srcFile.getAbsolutePath(), "info");
-            sendLog("Source exists: " + srcFile.exists(), "info");
-            sendLog("Source size: " + srcFile.length() + " bytes", "info");
-
-            if (!srcFile.exists()) {
-                sendLog("libffmpeg.so NOT found!", "error");
-                return null;
-            }
-
-            FileInputStream in  = new FileInputStream(srcFile);
-            FileOutputStream out = new FileOutputStream(destFile);
-            byte[] buf = new byte[65536];
-            int len;
-            long total = 0;
-            while ((len = in.read(buf)) > 0) {
-                out.write(buf, 0, len);
-                total += len;
-            }
-            in.close();
-            out.close();
-
-            destFile.setExecutable(true);
-            sendLog("ffmpeg copied! Size: " + total + " bytes", "success");
-            sendLog("ffmpeg path: " + destFile.getAbsolutePath(), "success");
-            return destFile.getAbsolutePath();
-
-        } catch (Exception e) {
-            sendLog("copyFfmpegToFilesDir error: " + e.getMessage(), "error");
-            return null;
-        }
-    }
-
-    // ── Monitor loop ──────────────────────────────────────────────────────────
 
     private void monitorLoop() {
         sendLog("Monitor started. Wake lock active.", "success");
@@ -207,8 +187,6 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    // ── Python recording ──────────────────────────────────────────────────────
-
     private void startPythonRecording(String watchUrl, String title) {
         try {
             String date = new SimpleDateFormat("yyyyMMdd_HHmm",
@@ -218,17 +196,12 @@ public class MonitorService extends Service {
             String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
                     + safe + "_" + date + ".mp4";
 
-            // Use cached path or try to copy now
-            if (cachedFfmpegPath == null) {
-                cachedFfmpegPath = copyFfmpegToFilesDir();
-            }
-
-            sendLog("ffmpeg path: " + cachedFfmpegPath, "info");
+            sendLog("ffmpeg path: " + ffmpegBinaryPath, "info");
             sendLog("Handing off to Python/yt-dlp...", "info");
 
             RecorderCallback cb = new RecorderCallback();
             recorderModule.callAttr("start", watchUrl, outPath, cb,
-                    cachedFfmpegPath != null ? cachedFfmpegPath : "");
+                    ffmpegBinaryPath != null ? ffmpegBinaryPath : "");
 
         } catch (Exception e) {
             sendLog("startPythonRecording error: " + e.getMessage(), "error");
@@ -243,8 +216,6 @@ public class MonitorService extends Service {
             sendLog("stopPythonRecording error: " + e.getMessage(), "error");
         }
     }
-
-    // ── YouTube API ───────────────────────────────────────────────────────────
 
     private String resolveChannelId(String url) {
         try {
@@ -317,8 +288,6 @@ public class MonitorService extends Service {
         }
     }
 
-    // ── Wake lock ─────────────────────────────────────────────────────────────
-
     private void acquireWakeLock() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
@@ -332,8 +301,6 @@ public class MonitorService extends Service {
             wakeLock = null;
         }
     }
-
-    // ── Notifications ─────────────────────────────────────────────────────────
 
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
@@ -379,8 +346,6 @@ public class MonitorService extends Service {
                 .build();
         getSystemService(NotificationManager.class).notify(2, notif);
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void sendLog(String message, String type) {
         Log.d(TAG, "[" + type + "] " + message);
