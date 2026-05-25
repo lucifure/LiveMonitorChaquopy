@@ -6,59 +6,120 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MonitorService extends Service {
 
-    private static final String CHANNEL_ID      = "MonitorChannel";
-    private static final String CHANNEL_LIVE_ID = "LiveChannel";
+    private static final String TAG             = "MonitorService";
+    private static final String CHANNEL_ID      = "LiveMonitorChannel";
+    private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
     private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
-    private static final String OUTPUT_DIR      = "/storage/emulated/0/Download/YouTubeMonitor";
 
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
     private volatile boolean running   = false;
     private volatile boolean recording = false;
-    private String channelUrl = "";
-    private PyObject recorder;
+    private String channelUrl          = "";
+    private PyObject recorderModule;
+    private String ffmpegBinaryPath    = null;
+
+    public class RecorderCallback {
+        public void onLog(String message, String type) {
+            sendLog(message, type);
+        }
+        public void onFinished(boolean success, String reason) {
+            recording = false;
+            sendLog("Recording ended. success=" + success + " reason=" + reason,
+                    success ? "success" : "error");
+            updateNotification("Monitoring: " + shortUrl(channelUrl));
+        }
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
+
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(this));
         }
-        recorder = Python.getInstance().getModule("recorder");
+        Python py = Python.getInstance();
+        recorderModule = py.getModule("recorder");
+
+        executor.execute(this::prepareFfmpeg);
+    }
+
+    private void prepareFfmpeg() {
+        try {
+            String nativeDir = getApplicationInfo().nativeLibraryDir;
+            sendLog("Scanning native dir: " + nativeDir, "info");
+
+            File dir = new File(nativeDir);
+            if (dir.exists() && dir.listFiles() != null) {
+                for (File f : dir.listFiles()) {
+                    sendLog("  " + f.getName() + " (" + f.length() + " bytes)", "info");
+                }
+            }
+
+            String[] names = {
+                "libffmpegkit.so",
+                "libffmpeg.so",
+                "libavcodec.so",
+                "libavformat.so"
+            };
+
+            for (String name : names) {
+                File f = new File(nativeDir, name);
+                if (f.exists() && f.length() > 100000) {
+                    f.setExecutable(true);
+                    ffmpegBinaryPath = f.getAbsolutePath();
+                    sendLog("ffmpeg found: " + ffmpegBinaryPath, "success");
+                    return;
+                }
+            }
+
+            sendLog("No ffmpeg binary found in nativeDir", "error");
+
+        } catch (Exception e) {
+            sendLog("prepareFfmpeg error: " + e.getMessage(), "error");
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
+
         if ("START".equals(action)) {
             channelUrl = intent.getStringExtra("url");
             startForeground(NOTIF_ID, buildNotification("Monitoring: " + shortUrl(channelUrl)));
             acquireWakeLock();
             running = true;
-            recorder.callAttr("set_log_callback", (PyObject.Callable) args -> {
-                sendLog(args[0].toString(), "info");
-                return null;
-            });
-            recorder.callAttr("reset");
             executor.execute(this::monitorLoop);
+
         } else if ("STOP".equals(action)) {
             stopAll();
         }
@@ -66,125 +127,197 @@ public class MonitorService extends Service {
     }
 
     private void monitorLoop() {
-        sendLog("Monitor started. Wake lock ON.", "success");
-        sendLog("Checking: " + channelUrl, "info");
+        sendLog("Monitor started. Wake lock active.", "success");
+
         while (running) {
             sendLog("Checking live status...", "dim");
             try {
-                String channelId = getChannelId(channelUrl);
+                String channelId = resolveChannelId(channelUrl);
                 if (channelId == null) {
-                    sendLog("Could not resolve channel. Retrying in 60s...", "error");
+                    sendLog("Could not resolve channel ID. Retry in 60s...", "error");
                     sleep(POLL_SECONDS);
                     continue;
                 }
+
                 String[] liveInfo = checkLive(channelId);
+
                 if (liveInfo != null) {
                     String videoId = liveInfo[0];
                     String title   = liveInfo[1];
+
                     sendLog("LIVE DETECTED: " + title, "live");
                     updateNotification("LIVE: " + title);
                     sendLiveNotification(title, videoId);
+
                     if (!recording) {
                         recording = true;
-                        String watchUrl = "https://youtube.com/watch?v=" + videoId;
-                        executor.execute(() -> startRecording(watchUrl));
+                        String watchUrl = "https://www.youtube.com/watch?v=" + videoId;
+                        executor.execute(() -> startPythonRecording(watchUrl, title));
                     }
+
                     while (running && recording) {
                         sleep(POLL_SECONDS);
                         if (!running) break;
                         sendLog("Re-checking stream...", "dim");
-                        if (checkLive(channelId) == null) {
-                            sendLog("Stream ended. Stopping recording...", "warning");
-                            recorder.callAttr("stop");
-                            recording = false;
+                        String[] stillLive = checkLive(channelId);
+                        if (stillLive == null) {
+                            sendLog("Stream ended. Stopping recorder...", "warning");
+                            stopPythonRecording();
                             updateNotification("Monitoring: " + shortUrl(channelUrl));
-                            sendLog("Resuming monitor...", "info");
-                            recorder.callAttr("reset");
                             break;
                         }
                     }
+
                 } else {
                     sendLog("Not live. Next check in " + POLL_SECONDS + "s...", "dim");
                     sleep(POLL_SECONDS);
                 }
+
             } catch (Exception e) {
-                sendLog("Error: " + e.getMessage(), "error");
+                sendLog("Monitor error: " + e.getMessage(), "error");
                 sleep(POLL_SECONDS);
             }
         }
         sendLog("Monitor stopped.", "info");
     }
 
-    private void startRecording(String watchUrl) {
+    private void startPythonRecording(String watchUrl, String title) {
         try {
-            sendLog("Starting yt-dlp recording...", "info");
-            recorder.callAttr("record", watchUrl, OUTPUT_DIR);
+            String date = new SimpleDateFormat("yyyyMMdd_HHmm",
+                    Locale.getDefault()).format(new Date());
+            String safe = title.replaceAll("[^a-zA-Z0-9._-]", "_");
+            safe = safe.substring(0, Math.min(safe.length(), 40));
+            String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
+                    + safe + "_" + date + ".mp4";
+
+            sendLog("ffmpeg path: " + ffmpegBinaryPath, "info");
+            sendLog("Handing off to Python/yt-dlp...", "info");
+
+            RecorderCallback cb = new RecorderCallback();
+            recorderModule.callAttr("start", watchUrl, outPath, cb,
+                    ffmpegBinaryPath != null ? ffmpegBinaryPath : "");
+
         } catch (Exception e) {
-            if (running) sendLog("Recording error: " + e.getMessage(), "error");
+            sendLog("startPythonRecording error: " + e.getMessage(), "error");
+            recording = false;
         }
-        recording = false;
     }
 
-    private String getChannelId(String url) {
+    private void stopPythonRecording() {
         try {
+            recorderModule.callAttr("stop");
+        } catch (Exception e) {
+            sendLog("stopPythonRecording error: " + e.getMessage(), "error");
+        }
+    }
+
+    private String resolveChannelId(String url) {
+        try {
+            if (url.contains("/channel/")) {
+                return url.substring(url.indexOf("/channel/") + 9).replaceAll("[/?#].*", "");
+            }
             String handle = null;
             if (url.contains("/@")) {
                 handle = url.substring(url.indexOf("/@") + 2).replaceAll("[/?#].*", "");
-            } else if (url.contains("/channel/")) {
-                return url.substring(url.indexOf("/channel/") + 9).replaceAll("[/?#].*", "");
+            } else if (url.contains("/c/") || url.contains("/user/")) {
+                handle = url.substring(url.lastIndexOf("/") + 1).replaceAll("[/?#].*", "");
             }
             if (handle == null) return null;
-            String response = httpGet("https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=" + handle + "&key=" + YT_API_KEY);
-            if (response == null) return null;
-            org.json.JSONArray items = new org.json.JSONObject(response).optJSONArray("items");
-            if (items != null && items.length() > 0) return items.getJSONObject(0).getString("id");
-        } catch (Exception e) { sendLog("getChannelId error: " + e.getMessage(), "error"); }
+
+            String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
+                    + "?part=id&forHandle=" + handle + "&key=" + YT_API_KEY;
+            String resp = httpGet(apiUrl);
+            if (resp == null) return null;
+
+            JSONObject json = new JSONObject(resp);
+            JSONArray items = json.optJSONArray("items");
+            if (items != null && items.length() > 0) {
+                return items.getJSONObject(0).getString("id");
+            }
+        } catch (Exception e) {
+            sendLog("resolveChannelId error: " + e.getMessage(), "error");
+        }
         return null;
     }
 
     private String[] checkLive(String channelId) {
         try {
-            String response = httpGet("https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=" + channelId + "&eventType=live&type=video&maxResults=1&key=" + YT_API_KEY);
-            if (response == null) return null;
-            org.json.JSONArray items = new org.json.JSONObject(response).optJSONArray("items");
+            String apiUrl = "https://www.googleapis.com/youtube/v3/search"
+                    + "?part=snippet&channelId=" + channelId
+                    + "&eventType=live&type=video&maxResults=1&key=" + YT_API_KEY;
+            String resp = httpGet(apiUrl);
+            if (resp == null) return null;
+
+            JSONObject json = new JSONObject(resp);
+            JSONArray items = json.optJSONArray("items");
             if (items != null && items.length() > 0) {
-                org.json.JSONObject item = items.getJSONObject(0);
-                return new String[]{item.getJSONObject("id").getString("videoId"), item.getJSONObject("snippet").getString("title")};
+                JSONObject item = items.getJSONObject(0);
+                String videoId = item.getJSONObject("id").getString("videoId");
+                String title   = item.getJSONObject("snippet").getString("title");
+                return new String[]{videoId, title};
             }
-        } catch (Exception e) { sendLog("checkLive error: " + e.getMessage(), "error"); }
+        } catch (Exception e) {
+            sendLog("checkLive error: " + e.getMessage(), "error");
+        }
         return null;
     }
 
     private String httpGet(String urlString) {
         try {
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(urlString).openConnection();
-            conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+            URL url = new URL(urlString);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setRequestMethod("GET");
             if (conn.getResponseCode() != 200) return null;
-            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()));
-            StringBuilder sb = new StringBuilder(); String line;
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
             while ((line = reader.readLine()) != null) sb.append(line);
-            reader.close(); return sb.toString();
-        } catch (Exception e) { return null; }
+            reader.close();
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void acquireWakeLock() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
-        wakeLock.acquire();
-        sendLog("CPU Wake lock acquired.", "success");
+        wakeLock.acquire(12 * 60 * 60 * 1000L);
+        sendLog("CPU wake lock acquired.", "success");
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            wakeLock = null;
+        }
     }
 
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW));
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH));
+        NotificationChannel monitor = new NotificationChannel(
+                CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW);
+        monitor.setDescription("Monitoring status");
+        nm.createNotificationChannel(monitor);
+        NotificationChannel live = new NotificationChannel(
+                CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH);
+        live.setDescription("Alerts when stream goes live");
+        nm.createNotificationChannel(live);
     }
 
     private Notification buildNotification(String text) {
-        PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = PendingIntent.getActivity(this, 0,
+                new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Live Monitor").setContentText(text)
-            .setSmallIcon(R.drawable.ic_notification).setContentIntent(pi).setOngoing(true).build();
+                .setContentTitle("Live Monitor")
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .build();
     }
 
     private void updateNotification(String text) {
@@ -192,35 +325,55 @@ public class MonitorService extends Service {
     }
 
     private void sendLiveNotification(String title, String videoId) {
-        PendingIntent pi = PendingIntent.getActivity(this, 0,
-            new Intent(Intent.ACTION_VIEW, Uri.parse("https://youtube.com/watch?v=" + videoId)), PendingIntent.FLAG_IMMUTABLE);
-        getSystemService(NotificationManager.class).notify(2,
-            new NotificationCompat.Builder(this, CHANNEL_LIVE_ID)
-                .setContentTitle("Stream is LIVE!").setContentText(title)
-                .setSmallIcon(R.drawable.ic_notification).setContentIntent(pi)
-                .setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setVibrate(new long[]{0,500,200,500,200,500}).build());
+        Intent openIntent = new Intent(Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://youtube.com/watch?v=" + videoId));
+        PendingIntent pi = PendingIntent.getActivity(this, 2, openIntent,
+                PendingIntent.FLAG_IMMUTABLE);
+        Notification notif = new NotificationCompat.Builder(this, CHANNEL_LIVE_ID)
+                .setContentTitle("Stream is LIVE!")
+                .setContentText(title)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVibrate(new long[]{0, 400, 200, 400, 200, 400})
+                .build();
+        getSystemService(NotificationManager.class).notify(2, notif);
     }
 
-    private void sendLog(String msg, String type) {
-        Intent i = new Intent("MONITOR_LOG");
-        i.putExtra("message", msg); i.putExtra("type", type);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(i);
+    private void sendLog(String message, String type) {
+        Log.d(TAG, "[" + type + "] " + message);
+        Intent intent = new Intent("MONITOR_LOG");
+        intent.putExtra("message", message);
+        intent.putExtra("type", type);
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
 
     private String shortUrl(String url) {
-        return url.replace("https://www.youtube.com/","").replace("https://youtube.com/","");
+        return url.replace("https://www.youtube.com/", "")
+                  .replace("https://youtube.com/", "");
     }
 
-    private void sleep(int s) { try { Thread.sleep(s*1000L); } catch (InterruptedException ignored) {} }
+    private void sleep(int seconds) {
+        try { Thread.sleep(seconds * 1000L); } catch (InterruptedException ignored) {}
+    }
 
     private void stopAll() {
-        running = false; recording = false;
-        if (recorder != null) try { recorder.callAttr("stop"); } catch (Exception ignored) {}
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        stopForeground(true); stopSelf();
+        running = false;
+        recording = false;
+        stopPythonRecording();
+        releaseWakeLock();
+        stopForeground(true);
+        stopSelf();
     }
 
-    @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { stopAll(); if (executor != null) executor.shutdownNow(); super.onDestroy(); }
-            }
+    @Override
+    public IBinder onBind(Intent intent) { return null; }
+
+    @Override
+    public void onDestroy() {
+        stopAll();
+        if (executor != null) executor.shutdownNow();
+        super.onDestroy();
+    }
+}
