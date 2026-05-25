@@ -11,7 +11,6 @@ import android.os.PowerManager;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import com.arthenica.ffmpegkit.FFmpegKitConfig;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
@@ -87,8 +86,7 @@ public class MonitorService extends Service {
             String[] names = {
                 "libffmpegkit.so",
                 "libffmpeg.so",
-                "libavcodec.so",
-                "libavformat.so"
+                "libavcodec.so"
             };
 
             for (String name : names) {
