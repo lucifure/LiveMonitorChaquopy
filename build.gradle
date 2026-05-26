@@ -9,19 +9,6 @@ buildscript {
     }
 }
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven {
-            url 'https://jitpack.io'
-        }
-        maven {
-            url 'https://oss.sonatype.org/content/repositories/releases'
-        }
-    }
-}
-
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
