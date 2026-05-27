@@ -11,11 +11,16 @@ import android.os.PowerManager;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import com.chaquo.python.PyObject;
-import com.chaquo.python.Python;
-import com.chaquo.python.android.AndroidPlatform;
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegSession;
+import com.arthenica.ffmpegkit.ReturnCode;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.schabi.newpipe.extractor.NewPipe;
+import org.schabi.newpipe.extractor.ServiceList;
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor;
+import org.schabi.newpipe.extractor.stream.StreamInfo;
+import org.schabi.newpipe.extractor.stream.VideoStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
@@ -23,6 +28,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,20 +47,7 @@ public class MonitorService extends Service {
     private volatile boolean running   = false;
     private volatile boolean recording = false;
     private String channelUrl          = "";
-    private PyObject recorderModule;
-    private String ffmpegBinaryPath    = null;
-
-    public class RecorderCallback {
-        public void onLog(String message, String type) {
-            sendLog(message, type);
-        }
-        public void onFinished(boolean success, String reason) {
-            recording = false;
-            sendLog("Recording ended. success=" + success + " reason=" + reason,
-                    success ? "success" : "error");
-            updateNotification("Monitoring: " + shortUrl(channelUrl));
-        }
-    }
+    private FFmpegSession ffmpegSession = null;
 
     @Override
     public void onCreate() {
@@ -62,48 +55,8 @@ public class MonitorService extends Service {
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
 
-        if (!Python.isStarted()) {
-            Python.start(new AndroidPlatform(this));
-        }
-        Python py = Python.getInstance();
-        recorderModule = py.getModule("recorder");
-
-        executor.execute(this::prepareFfmpeg);
-    }
-
-    private void prepareFfmpeg() {
-        try {
-            String nativeDir = getApplicationInfo().nativeLibraryDir;
-            sendLog("Scanning native dir: " + nativeDir, "info");
-
-            File dir = new File(nativeDir);
-            if (dir.exists() && dir.listFiles() != null) {
-                for (File f : dir.listFiles()) {
-                    sendLog("  " + f.getName() + " (" + f.length() + " bytes)", "info");
-                }
-            }
-
-            String[] names = {
-                "libffmpegkit.so",
-                "libffmpeg.so",
-                "libavcodec.so"
-            };
-
-            for (String name : names) {
-                File f = new File(nativeDir, name);
-                if (f.exists() && f.length() > 100000) {
-                    f.setExecutable(true);
-                    ffmpegBinaryPath = f.getAbsolutePath();
-                    sendLog("ffmpeg found: " + ffmpegBinaryPath, "success");
-                    return;
-                }
-            }
-
-            sendLog("No ffmpeg binary found in nativeDir", "error");
-
-        } catch (Exception e) {
-            sendLog("prepareFfmpeg error: " + e.getMessage(), "error");
-        }
+        // Initialize NewPipeExtractor
+        NewPipe.init(org.schabi.newpipe.extractor.downloader.RecorderDownloader.getInstance());
     }
 
     @Override
@@ -125,7 +78,7 @@ public class MonitorService extends Service {
     }
 
     private void monitorLoop() {
-        sendLog("Monitor started. Wake lock active.", "success");
+        sendLog("Monitor started.", "success");
 
         while (running) {
             sendLog("Checking live status...", "dim");
@@ -150,7 +103,7 @@ public class MonitorService extends Service {
                     if (!recording) {
                         recording = true;
                         String watchUrl = "https://www.youtube.com/watch?v=" + videoId;
-                        executor.execute(() -> startPythonRecording(watchUrl, title));
+                        executor.execute(() -> startRecording(watchUrl, title));
                     }
 
                     while (running && recording) {
@@ -160,7 +113,7 @@ public class MonitorService extends Service {
                         String[] stillLive = checkLive(channelId);
                         if (stillLive == null) {
                             sendLog("Stream ended. Stopping recorder...", "warning");
-                            stopPythonRecording();
+                            stopRecording();
                             updateNotification("Monitoring: " + shortUrl(channelUrl));
                             break;
                         }
@@ -179,8 +132,36 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    private void startPythonRecording(String watchUrl, String title) {
+    // ── Recording with NewPipeExtractor + FFmpegKit ───────────────────────────
+
+    private void startRecording(String watchUrl, String title) {
         try {
+            sendLog("Extracting stream URL via NewPipe...", "info");
+
+            // Get stream info using NewPipeExtractor
+            StreamInfo streamInfo = StreamInfo.getInfo(
+                    ServiceList.YouTube, watchUrl);
+
+            // Get HLS manifest URL
+            String manifestUrl = streamInfo.getHlsUrl();
+
+            if (manifestUrl == null || manifestUrl.isEmpty()) {
+                // Try video streams
+                List<VideoStream> videoStreams = streamInfo.getVideoStreams();
+                if (!videoStreams.isEmpty()) {
+                    manifestUrl = videoStreams.get(0).getUrl();
+                }
+            }
+
+            if (manifestUrl == null || manifestUrl.isEmpty()) {
+                sendLog("Could not extract stream URL!", "error");
+                recording = false;
+                return;
+            }
+
+            sendLog("Stream URL extracted!", "success");
+            sendLog("Starting FFmpegKit recording...", "info");
+
             String date = new SimpleDateFormat("yyyyMMdd_HHmm",
                     Locale.getDefault()).format(new Date());
             String safe = title.replaceAll("[^a-zA-Z0-9._-]", "_");
@@ -188,26 +169,54 @@ public class MonitorService extends Service {
             String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
                     + safe + "_" + date + ".mp4";
 
-            sendLog("ffmpeg path: " + ffmpegBinaryPath, "info");
-            sendLog("Handing off to Python/yt-dlp...", "info");
+            new File("/storage/emulated/0/Download/YouTubeMonitor/").mkdirs();
 
-            RecorderCallback cb = new RecorderCallback();
-            recorderModule.callAttr("start", watchUrl, outPath, cb,
-                    ffmpegBinaryPath != null ? ffmpegBinaryPath : "");
+            String cmd = "-i " + manifestUrl
+                    + " -c copy"
+                    + " -bsf:a aac_adtstoasc"
+                    + " " + outPath;
+
+            sendLog("Recording to: " + outPath, "info");
+
+            ffmpegSession = FFmpegKit.executeAsync(cmd,
+                session -> {
+                    if (ReturnCode.isSuccess(session.getReturnCode())) {
+                        sendLog("Recording finished successfully!", "success");
+                    } else if (ReturnCode.isCancel(session.getReturnCode())) {
+                        sendLog("Recording cancelled.", "warning");
+                    } else {
+                        sendLog("Recording failed: " + session.getFailStackTrace(), "error");
+                    }
+                    recording = false;
+                    updateNotification("Monitoring: " + shortUrl(channelUrl));
+                },
+                log -> sendLog(log.getMessage(), "info"),
+                stats -> {
+                    long size = stats.getSize();
+                    double mb = size / (1024.0 * 1024.0);
+                    sendLog("Recording: " + String.format("%.1f", mb) + " MB", "download");
+                }
+            );
 
         } catch (Exception e) {
-            sendLog("startPythonRecording error: " + e.getMessage(), "error");
+            sendLog("startRecording error: " + e.getMessage(), "error");
             recording = false;
         }
     }
 
-    private void stopPythonRecording() {
+    private void stopRecording() {
         try {
-            recorderModule.callAttr("stop");
+            if (ffmpegSession != null) {
+                FFmpegKit.cancel(ffmpegSession.getSessionId());
+                ffmpegSession = null;
+            }
+            recording = false;
         } catch (Exception e) {
-            sendLog("stopPythonRecording error: " + e.getMessage(), "error");
+            sendLog("stopRecording error: " + e.getMessage(), "error");
         }
     }
+
+    // ── YouTube API ───────────────────────────────────────────────────────────
 
     private String resolveChannelId(String url) {
         try {
@@ -280,6 +289,8 @@ public class MonitorService extends Service {
         }
     }
 
+    // ── Wake lock ─────────────────────────────────────────────────────────────
+
     private void acquireWakeLock() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
@@ -293,6 +304,8 @@ public class MonitorService extends Service {
             wakeLock = null;
         }
     }
+
+    // ── Notifications ─────────────────────────────────────────────────────────
 
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
@@ -339,6 +352,8 @@ public class MonitorService extends Service {
         getSystemService(NotificationManager.class).notify(2, notif);
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private void sendLog(String message, String type) {
         Log.d(TAG, "[" + type + "] " + message);
         Intent intent = new Intent("MONITOR_LOG");
@@ -359,7 +374,7 @@ public class MonitorService extends Service {
     private void stopAll() {
         running = false;
         recording = false;
-        stopPythonRecording();
+        stopRecording();
         releaseWakeLock();
         stopForeground(true);
         stopSelf();
