@@ -41,16 +41,6 @@ jobs:
           convert -size 144x144 xc:#00A884 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-      - name: Download ffmpeg for Android arm64
-        run: |
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          curl -L "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-android-arm64-gpl.tar.xz" -o ffmpeg.tar.xz
-          file ffmpeg.tar.xz
-          tar -xJf ffmpeg.tar.xz
-          find . -name "ffmpeg" -type f
-          cp $(find . -name "ffmpeg" -type f | head -1) app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-          echo "ffmpeg size: $(wc -c < app/src/main/jniLibs/arm64-v8a/libffmpeg.so) bytes"
-
       - name: Build Debug APK
         run: gradle assembleDebug
         env:
