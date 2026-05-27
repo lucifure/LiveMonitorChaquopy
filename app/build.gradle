@@ -66,6 +66,7 @@ dependencies {
     implementation 'org.json:json:20231013'
     implementation 'androidx.work:work-runtime:2.9.0'
     implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
-    implementation 'com.arthenica:ffmpeg-kit-full:6.0-2'
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.24.2'
+    implementation 'com.arthenica:smart-exception-java:0.2.1'
+    implementation 'com.arthenica:ffmpeg-kit-full-gpl:6.0-2.LTS'
 }
