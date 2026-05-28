@@ -16,6 +16,10 @@ dependencyResolutionManagement {
         maven {
             url 'https://oss.sonatype.org/content/repositories/releases'
         }
+        // Required for ffmpeg-kit
+        maven {
+            url 'https://packages.arthenica.com/maven/public'
+        }
     }
 }
 
