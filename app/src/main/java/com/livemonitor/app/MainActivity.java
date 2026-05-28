@@ -36,7 +36,11 @@ public class MainActivity extends AppCompatActivity {
         requestPermissions();
 
         binding.btnStart.setOnClickListener(v -> {
-            String url = binding.urlInput.getText().toString().trim();
+            // Clean the URL — remove spaces, newlines, and trailing slashes
+            String url = binding.urlInput.getText().toString()
+                .trim()
+                .replaceAll("\\s+", "")
+                .replaceAll("/+$", "");
             if (url.isEmpty()) {
                 Toast.makeText(this, "Please enter a YouTube URL", Toast.LENGTH_SHORT).show();
                 return;
