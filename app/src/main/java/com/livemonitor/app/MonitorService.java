@@ -140,7 +140,25 @@ public class MonitorService extends Service {
         try {
             sendLog("Extracting stream URL via NewPipeExtractor...", "info");
 
-            StreamInfo streamInfo = StreamInfo.getInfo(ServiceList.YouTube, watchUrl);
+            // Retry up to 3 times — YouTube sometimes needs a retry
+            StreamInfo streamInfo = null;
+            Exception lastError = null;
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    streamInfo = StreamInfo.getInfo(ServiceList.YouTube, watchUrl);
+                    break;
+                } catch (Exception e) {
+                    lastError = e;
+                    sendLog("Attempt " + attempt + " failed: " + e.getMessage() + " — retrying...", "warning");
+                    try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+                }
+            }
+
+            if (streamInfo == null) {
+                sendLog("All attempts failed: " + (lastError != null ? lastError.getMessage() : "unknown"), "error");
+                recording = false;
+                return;
+            }
 
             String manifestUrl = streamInfo.getHlsUrl();
 
