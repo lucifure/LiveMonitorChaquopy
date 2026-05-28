@@ -41,6 +41,9 @@ jobs:
           convert -size 144x144 xc:#00A884 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug
         env:
