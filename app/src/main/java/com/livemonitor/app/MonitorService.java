@@ -14,9 +14,6 @@ import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
-import com.arthenica.mobileffmpeg.Config;
-import com.arthenica.mobileffmpeg.FFmpeg;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.schabi.newpipe.extractor.NewPipe;
@@ -57,6 +54,12 @@ public class MonitorService extends Service {
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
         NewPipe.init(NewPipeDownloader.getInstance());
+
+        // Set up FFmpeg binary
+        boolean ffmpegReady = FFmpegRunner.setup(this);
+        if (!ffmpegReady) {
+            sendLog("WARNING: FFmpeg setup failed!", "error");
+        }
     }
 
     @Override
@@ -132,7 +135,7 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    // ── Recording: NewPipeExtractor + mobile-ffmpeg ───────────────────────────
+    // ── Recording ─────────────────────────────────────────────────────────────
 
     private void startRecording(String watchUrl, String title) {
         try {
@@ -170,37 +173,26 @@ public class MonitorService extends Service {
             new File(outDir).mkdirs();
             sendLog("Saving to: " + outPath, "info");
 
-            final String finalManifestUrl = manifestUrl;
-
-            Config.enableLogCallback(logMessage -> {
-                String msg = logMessage.getText();
-                if (msg != null && !msg.startsWith("frame=") && !msg.startsWith("size=")) {
-                    sendLog(msg.trim(), "dim");
+            FFmpegRunner.executeAsync(
+                manifestUrl,
+                outPath,
+                returnCode -> {
+                    if (returnCode == 0) {
+                        sendLog("Recording finished: " + outPath, "success");
+                    } else if (returnCode == 255 || returnCode == -1) {
+                        sendLog("Recording stopped.", "warning");
+                    } else {
+                        sendLog("FFmpeg exited with code: " + returnCode, "error");
+                    }
+                    recording = false;
+                    updateNotification("Monitoring: " + shortUrl(channelUrl));
+                },
+                msg -> {
+                    if (!msg.startsWith("frame=") && !msg.startsWith("size=")) {
+                        sendLog(msg, "dim");
+                    }
                 }
-            });
-
-            Config.enableStatisticsCallback(statistics -> {
-                double mb = statistics.getSize() / 1024.0;
-                sendLog(String.format("Recording: %.1f MB", mb), "download");
-            });
-
-            String cmd = "-i \"" + finalManifestUrl + "\""
-                       + " -c copy"
-                       + " -bsf:a aac_adtstoasc"
-                       + " -movflags +faststart"
-                       + " \"" + outPath + "\"";
-
-            FFmpeg.executeAsync(cmd, (executionId, returnCode) -> {
-                if (returnCode == 0) {
-                    sendLog("Recording finished: " + outPath, "success");
-                } else if (returnCode == 255) {
-                    sendLog("Recording cancelled (stream ended).", "warning");
-                } else {
-                    sendLog("FFmpeg error code: " + returnCode, "error");
-                }
-                recording = false;
-                updateNotification("Monitoring: " + shortUrl(channelUrl));
-            });
+            );
 
         } catch (Exception e) {
             sendLog("startRecording error: " + e.getMessage(), "error");
@@ -211,7 +203,7 @@ public class MonitorService extends Service {
 
     private void stopRecording() {
         try {
-            FFmpeg.cancel();
+            FFmpegRunner.cancel();
         } catch (Exception e) {
             sendLog("stopRecording error: " + e.getMessage(), "error");
         } finally {
