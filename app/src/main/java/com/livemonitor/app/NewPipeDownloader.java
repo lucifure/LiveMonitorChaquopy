@@ -1,7 +1,6 @@
 package com.livemonitor.app;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 
 import org.schabi.newpipe.extractor.downloader.Downloader;
 import org.schabi.newpipe.extractor.downloader.Request;
@@ -21,9 +20,14 @@ import okhttp3.ResponseBody;
 public class NewPipeDownloader extends Downloader {
 
     private static final String USER_AGENT =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/120.0.0.0 Safari/537.36";
+        "Chrome/120.0.0.0 Mobile Safari/537.36";
+
+    // Cookies help bypass YouTube's bot detection
+    private static final String COOKIES =
+        "CONSENT=YES+; " +
+        "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AwGgJlbiAD";
 
     private static NewPipeDownloader instance;
     private final OkHttpClient client;
@@ -33,6 +37,8 @@ public class NewPipeDownloader extends Downloader {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
             .build();
     }
 
@@ -43,15 +49,24 @@ public class NewPipeDownloader extends Downloader {
 
     @Override
     public Response execute(@NonNull Request request) throws IOException, ReCaptchaException {
-        String httpMethod = request.httpMethod();
-        String url       = request.url();
+        String httpMethod  = request.httpMethod();
+        String url         = request.url();
         Map<String, List<String>> headers = request.headers();
-        byte[] dataToSend = request.dataToSend();
+        byte[] dataToSend  = request.dataToSend();
 
         okhttp3.Request.Builder builder = new okhttp3.Request.Builder().url(url);
-        builder.addHeader("User-Agent", USER_AGENT);
 
-        // Add all request headers
+        // Set headers that make YouTube treat us as a real browser
+        builder.addHeader("User-Agent", USER_AGENT);
+        builder.addHeader("Cookie", COOKIES);
+        builder.addHeader("Accept-Language", "en-US,en;q=0.9");
+        builder.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        builder.addHeader("Origin", "https://www.youtube.com");
+        builder.addHeader("Referer", "https://www.youtube.com/");
+        builder.addHeader("X-YouTube-Client-Name", "1");
+        builder.addHeader("X-YouTube-Client-Version", "2.20231120.00.00");
+
+        // Add all request headers (may override defaults above if needed)
         if (headers != null) {
             for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
                 for (String val : entry.getValue()) {
