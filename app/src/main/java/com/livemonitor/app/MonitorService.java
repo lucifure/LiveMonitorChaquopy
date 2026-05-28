@@ -16,19 +16,17 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.schabi.newpipe.extractor.NewPipe;
-import org.schabi.newpipe.extractor.ServiceList;
-import org.schabi.newpipe.extractor.stream.StreamInfo;
-import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,7 +51,6 @@ public class MonitorService extends Service {
         super.onCreate();
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
-        NewPipe.init(NewPipeDownloader.getInstance());
 
         boolean ffmpegReady = FFmpegRunner.setup(this);
         if (!ffmpegReady) {
@@ -105,8 +102,7 @@ public class MonitorService extends Service {
 
                     if (!recording) {
                         recording = true;
-                        String watchUrl = "https://www.youtube.com/watch?v=" + videoId;
-                        executor.execute(() -> startRecording(watchUrl, title));
+                        executor.execute(() -> startRecording(videoId, title));
                     }
 
                     while (running && recording) {
@@ -134,47 +130,97 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
+    // ── Get HLS manifest URL directly from YouTube ────────────────────────────
+
+    private String getHlsManifestUrl(String videoId) {
+        try {
+            sendLog("Fetching HLS manifest via YouTube API...", "info");
+
+            // Use YouTube's player API to get the HLS manifest
+            URL url = new URL("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setRequestProperty("X-YouTube-Client-Name", "1");
+            conn.setRequestProperty("X-YouTube-Client-Version", "2.20231120.00.00");
+
+            // Request body — tells YouTube we are the Android client
+            String body = "{"
+                + "\"videoId\": \"" + videoId + "\","
+                + "\"context\": {"
+                + "  \"client\": {"
+                + "    \"clientName\": \"ANDROID\","
+                + "    \"clientVersion\": \"18.11.34\","
+                + "    \"androidSdkVersion\": 30,"
+                + "    \"hl\": \"en\","
+                + "    \"gl\": \"US\""
+                + "  }"
+                + "}"
+                + "}";
+
+            OutputStream os = conn.getOutputStream();
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(os, "UTF-8"));
+            writer.write(body);
+            writer.flush();
+            writer.close();
+
+            if (conn.getResponseCode() != 200) {
+                sendLog("Player API error: " + conn.getResponseCode(), "error");
+                return null;
+            }
+
+            BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            reader.close();
+
+            JSONObject json = new JSONObject(sb.toString());
+
+            // Extract HLS manifest URL from response
+            JSONObject streamingData = json.optJSONObject("streamingData");
+            if (streamingData == null) {
+                sendLog("No streamingData in player response", "error");
+                return null;
+            }
+
+            String hlsUrl = streamingData.optString("hlsManifestUrl", null);
+            if (hlsUrl != null && !hlsUrl.isEmpty()) {
+                sendLog("HLS manifest URL obtained!", "success");
+                return hlsUrl;
+            }
+
+            sendLog("No HLS manifest URL found in response", "error");
+            return null;
+
+        } catch (Exception e) {
+            sendLog("getHlsManifestUrl error: " + e.getMessage(), "error");
+            return null;
+        }
+    }
+
     // ── Recording ─────────────────────────────────────────────────────────────
 
-    private void startRecording(String watchUrl, String title) {
+    private void startRecording(String videoId, String title) {
         try {
-            sendLog("Extracting stream URL via NewPipeExtractor...", "info");
+            sendLog("Getting stream URL for video: " + videoId, "info");
 
-            // Retry up to 3 times — YouTube sometimes needs a retry
-            StreamInfo streamInfo = null;
-            Exception lastError = null;
+            // Retry up to 3 times
+            String manifestUrl = null;
             for (int attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    streamInfo = StreamInfo.getInfo(ServiceList.YouTube, watchUrl);
-                    break;
-                } catch (Exception e) {
-                    lastError = e;
-                    sendLog("Attempt " + attempt + " failed: " + e.getMessage() + " — retrying...", "warning");
-                    try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
-                }
+                manifestUrl = getHlsManifestUrl(videoId);
+                if (manifestUrl != null) break;
+                sendLog("Attempt " + attempt + " failed, retrying...", "warning");
+                try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             }
 
-            if (streamInfo == null) {
-                sendLog("All attempts failed: " + (lastError != null ? lastError.getMessage() : "unknown"), "error");
-                recording = false;
-                return;
-            }
-
-            String manifestUrl = streamInfo.getHlsUrl();
-
-            if (isBlank(manifestUrl)) {
-                manifestUrl = streamInfo.getDashMpdUrl();
-            }
-
-            if (isBlank(manifestUrl)) {
-                List<VideoStream> streams = streamInfo.getVideoStreams();
-                if (!streams.isEmpty()) {
-                    manifestUrl = streams.get(0).getContent();
-                }
-            }
-
-            if (isBlank(manifestUrl)) {
-                sendLog("Could not extract any stream URL!", "error");
+            if (manifestUrl == null) {
+                sendLog("Could not get stream URL after 3 attempts!", "error");
                 recording = false;
                 return;
             }
@@ -226,10 +272,6 @@ public class MonitorService extends Service {
         } finally {
             recording = false;
         }
-    }
-
-    private static boolean isBlank(String s) {
-        return s == null || s.trim().isEmpty();
     }
 
     // ── YouTube Data API v3 ───────────────────────────────────────────────────
