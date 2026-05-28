@@ -1,4 +1,4 @@
-name: Build Android APK (Chaquopy)
+name: Build Android APK
 
 on:
   push:
@@ -42,13 +42,13 @@ jobs:
           convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LiveMonitor-Chaquopy-APK
+          name: LiveMonitor-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
