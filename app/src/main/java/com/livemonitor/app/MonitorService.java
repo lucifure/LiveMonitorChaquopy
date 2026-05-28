@@ -40,7 +40,7 @@ public class MonitorService extends Service {
     private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
-    private static final String YT_API_KEY      = "YOUR_YOUTUBE_API_KEY_HERE";
+    private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
 
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
