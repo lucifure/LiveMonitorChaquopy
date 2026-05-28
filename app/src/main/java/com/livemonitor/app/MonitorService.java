@@ -6,21 +6,25 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
+
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+
 import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.FFmpegSession;
 import com.arthenica.ffmpegkit.ReturnCode;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.ServiceList;
-import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
@@ -40,7 +44,8 @@ public class MonitorService extends Service {
     private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
-    private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+    // Replace with your own key or use the YouTube API console
+    private static final String YT_API_KEY      = "YOUR_YOUTUBE_API_KEY_HERE";
 
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
@@ -55,8 +60,8 @@ public class MonitorService extends Service {
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
 
-        // Initialize NewPipeExtractor
-        NewPipe.init(org.schabi.newpipe.extractor.downloader.RecorderDownloader.getInstance());
+        // ✅ FIXED: Use our OkHttp-based downloader, not the non-existent RecorderDownloader
+        NewPipe.init(NewPipeDownloader.getInstance());
     }
 
     @Override
@@ -70,12 +75,13 @@ public class MonitorService extends Service {
             acquireWakeLock();
             running = true;
             executor.execute(this::monitorLoop);
-
         } else if ("STOP".equals(action)) {
             stopAll();
         }
         return START_NOT_STICKY;
     }
+
+    // ── Monitor loop ──────────────────────────────────────────────────────────
 
     private void monitorLoop() {
         sendLog("Monitor started.", "success");
@@ -106,10 +112,11 @@ public class MonitorService extends Service {
                         executor.execute(() -> startRecording(watchUrl, title));
                     }
 
+                    // Keep polling while recording to detect stream end
                     while (running && recording) {
                         sleep(POLL_SECONDS);
                         if (!running) break;
-                        sendLog("Re-checking stream...", "dim");
+                        sendLog("Re-checking stream status...", "dim");
                         String[] stillLive = checkLive(channelId);
                         if (stillLive == null) {
                             sendLog("Stream ended. Stopping recorder...", "warning");
@@ -118,7 +125,6 @@ public class MonitorService extends Service {
                             break;
                         }
                     }
-
                 } else {
                     sendLog("Not live. Next check in " + POLL_SECONDS + "s...", "dim");
                     sleep(POLL_SECONDS);
@@ -132,74 +138,86 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    // ── Recording with NewPipeExtractor + FFmpegKit ───────────────────────────
+    // ── Recording: NewPipeExtractor → FFmpegKit ───────────────────────────────
 
     private void startRecording(String watchUrl, String title) {
         try {
-            sendLog("Extracting stream URL via NewPipe...", "info");
+            sendLog("Extracting stream URL via NewPipeExtractor...", "info");
 
-            // Get stream info using NewPipeExtractor
-            StreamInfo streamInfo = StreamInfo.getInfo(
-                    ServiceList.YouTube, watchUrl);
+            // ✅ StreamInfo.getInfo() runs on a background thread here (executor), so this is safe
+            StreamInfo streamInfo = StreamInfo.getInfo(ServiceList.YouTube, watchUrl);
 
-            // Get HLS manifest URL
+            // 1. Prefer the HLS manifest (.m3u8) for live streams
             String manifestUrl = streamInfo.getHlsUrl();
 
-            if (manifestUrl == null || manifestUrl.isEmpty()) {
-                // Try video streams
-                List<VideoStream> videoStreams = streamInfo.getVideoStreams();
-                if (!videoStreams.isEmpty()) {
-                    manifestUrl = videoStreams.get(0).getUrl();
+            // 2. Fall back to DASH manifest
+            if (isBlank(manifestUrl)) {
+                manifestUrl = streamInfo.getDashMpdUrl();
+            }
+
+            // 3. Fall back to best video stream URL
+            if (isBlank(manifestUrl)) {
+                List<VideoStream> streams = streamInfo.getVideoStreams();
+                if (!streams.isEmpty()) {
+                    manifestUrl = streams.get(0).getContent();
                 }
             }
 
-            if (manifestUrl == null || manifestUrl.isEmpty()) {
-                sendLog("Could not extract stream URL!", "error");
+            if (isBlank(manifestUrl)) {
+                sendLog("Could not extract any stream URL!", "error");
                 recording = false;
                 return;
             }
 
-            sendLog("Stream URL extracted!", "success");
-            sendLog("Starting FFmpegKit recording...", "info");
+            sendLog("Stream URL obtained. Starting FFmpeg...", "success");
 
-            String date = new SimpleDateFormat("yyyyMMdd_HHmm",
-                    Locale.getDefault()).format(new Date());
+            // Build output path
+            String date = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(new Date());
             String safe = title.replaceAll("[^a-zA-Z0-9._-]", "_");
             safe = safe.substring(0, Math.min(safe.length(), 40));
-            String outPath = "/storage/emulated/0/Download/YouTubeMonitor/"
-                    + safe + "_" + date + ".mp4";
+            String outDir  = getExternalFilesDir(null) + "/YouTubeMonitor/";
+            String outPath = outDir + safe + "_" + date + ".mp4";
 
-            new File("/storage/emulated/0/Download/YouTubeMonitor/").mkdirs();
+            new File(outDir).mkdirs();
+            sendLog("Saving to: " + outPath, "info");
 
-            String cmd = "-i " + manifestUrl
-                    + " -c copy"
-                    + " -bsf:a aac_adtstoasc"
-                    + " " + outPath;
+            // ✅ FFmpegKit.executeAsync is non-blocking — correct for a live stream
+            String cmd = "-i \"" + manifestUrl + "\""
+                       + " -c copy"
+                       + " -bsf:a aac_adtstoasc"
+                       + " -movflags +faststart"
+                       + " \"" + outPath + "\"";
 
-            sendLog("Recording to: " + outPath, "info");
-
-            ffmpegSession = FFmpegKit.executeAsync(cmd,
+            ffmpegSession = FFmpegKit.executeAsync(
+                cmd,
                 session -> {
                     if (ReturnCode.isSuccess(session.getReturnCode())) {
-                        sendLog("Recording finished successfully!", "success");
+                        sendLog("Recording finished: " + outPath, "success");
                     } else if (ReturnCode.isCancel(session.getReturnCode())) {
-                        sendLog("Recording cancelled.", "warning");
+                        sendLog("Recording cancelled (stream ended).", "warning");
                     } else {
-                        sendLog("Recording failed: " + session.getFailStackTrace(), "error");
+                        sendLog("FFmpeg error: " + session.getFailStackTrace(), "error");
                     }
                     recording = false;
                     updateNotification("Monitoring: " + shortUrl(channelUrl));
                 },
-                log -> sendLog(log.getMessage(), "info"),
+                log -> {
+                    // Filter out very verbose FFmpeg lines
+                    String msg = log.getMessage();
+                    if (msg != null && !msg.startsWith("frame=") && !msg.startsWith("size=")) {
+                        sendLog(msg.trim(), "dim");
+                    }
+                },
                 stats -> {
-                    long size = stats.getSize();
-                    double mb = size / (1024.0 * 1024.0);
-                    sendLog("Recording: " + String.format("%.1f", mb) + " MB", "download");
+                    long   sizeKb = stats.getSize();
+                    double mb     = sizeKb / 1024.0;
+                    sendLog(String.format("Recording: %.1f MB", mb), "download");
                 }
             );
 
         } catch (Exception e) {
             sendLog("startRecording error: " + e.getMessage(), "error");
+            Log.e(TAG, "startRecording", e);
             recording = false;
         }
     }
@@ -210,19 +228,27 @@ public class MonitorService extends Service {
                 FFmpegKit.cancel(ffmpegSession.getSessionId());
                 ffmpegSession = null;
             }
-            recording = false;
         } catch (Exception e) {
             sendLog("stopRecording error: " + e.getMessage(), "error");
+        } finally {
+            recording = false;
         }
     }
 
-    // ── YouTube API ───────────────────────────────────────────────────────────
+    private static boolean isBlank(String s) {
+        return s == null || s.trim().isEmpty();
+    }
+
+    // ── YouTube Data API v3 ───────────────────────────────────────────────────
 
     private String resolveChannelId(String url) {
         try {
+            // Direct channel ID in URL
             if (url.contains("/channel/")) {
-                return url.substring(url.indexOf("/channel/") + 9).replaceAll("[/?#].*", "");
+                return url.substring(url.indexOf("/channel/") + 9)
+                          .replaceAll("[/?#].*", "");
             }
+
             String handle = null;
             if (url.contains("/@")) {
                 handle = url.substring(url.indexOf("/@") + 2).replaceAll("[/?#].*", "");
@@ -232,12 +258,12 @@ public class MonitorService extends Service {
             if (handle == null) return null;
 
             String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
-                    + "?part=id&forHandle=" + handle + "&key=" + YT_API_KEY;
+                          + "?part=id&forHandle=" + handle + "&key=" + YT_API_KEY;
             String resp = httpGet(apiUrl);
             if (resp == null) return null;
 
-            JSONObject json = new JSONObject(resp);
-            JSONArray items = json.optJSONArray("items");
+            JSONObject json  = new JSONObject(resp);
+            JSONArray  items = json.optJSONArray("items");
             if (items != null && items.length() > 0) {
                 return items.getJSONObject(0).getString("id");
             }
@@ -250,17 +276,17 @@ public class MonitorService extends Service {
     private String[] checkLive(String channelId) {
         try {
             String apiUrl = "https://www.googleapis.com/youtube/v3/search"
-                    + "?part=snippet&channelId=" + channelId
-                    + "&eventType=live&type=video&maxResults=1&key=" + YT_API_KEY;
+                          + "?part=snippet&channelId=" + channelId
+                          + "&eventType=live&type=video&maxResults=1&key=" + YT_API_KEY;
             String resp = httpGet(apiUrl);
             if (resp == null) return null;
 
-            JSONObject json = new JSONObject(resp);
-            JSONArray items = json.optJSONArray("items");
+            JSONObject json  = new JSONObject(resp);
+            JSONArray  items = json.optJSONArray("items");
             if (items != null && items.length() > 0) {
-                JSONObject item = items.getJSONObject(0);
-                String videoId = item.getJSONObject("id").getString("videoId");
-                String title   = item.getJSONObject("snippet").getString("title");
+                JSONObject item    = items.getJSONObject(0);
+                String     videoId = item.getJSONObject("id").getString("videoId");
+                String     title   = item.getJSONObject("snippet").getString("title");
                 return new String[]{videoId, title};
             }
         } catch (Exception e) {
@@ -271,14 +297,15 @@ public class MonitorService extends Service {
 
     private String httpGet(String urlString) {
         try {
-            URL url = new URL(urlString);
+            URL              url  = new URL(urlString);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(15000);
+            conn.setConnectTimeout(15_000);
+            conn.setReadTimeout(15_000);
             conn.setRequestMethod("GET");
             if (conn.getResponseCode() != 200) return null;
+
             BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream()));
+                new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) sb.append(line);
@@ -295,7 +322,7 @@ public class MonitorService extends Service {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
         wakeLock.acquire(12 * 60 * 60 * 1000L);
-        sendLog("CPU wake lock acquired.", "success");
+        sendLog("Wake lock acquired.", "success");
     }
 
     private void releaseWakeLock() {
@@ -309,46 +336,53 @@ public class MonitorService extends Service {
 
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
+
         NotificationChannel monitor = new NotificationChannel(
-                CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW);
-        monitor.setDescription("Monitoring status");
+            CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW);
+        monitor.setDescription("Ongoing monitoring status");
         nm.createNotificationChannel(monitor);
+
         NotificationChannel live = new NotificationChannel(
-                CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH);
-        live.setDescription("Alerts when stream goes live");
+            CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH);
+        live.setDescription("Alerts when a stream goes live");
         nm.createNotificationChannel(live);
     }
 
     private Notification buildNotification(String text) {
         PendingIntent pi = PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+            new Intent(this, MainActivity.class),
+            PendingIntent.FLAG_IMMUTABLE);
+
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Live Monitor")
-                .setContentText(text)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentIntent(pi)
-                .setOngoing(true)
-                .build();
+            .setContentTitle("Live Monitor")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build();
     }
 
     private void updateNotification(String text) {
-        getSystemService(NotificationManager.class).notify(NOTIF_ID, buildNotification(text));
+        getSystemService(NotificationManager.class)
+            .notify(NOTIF_ID, buildNotification(text));
     }
 
     private void sendLiveNotification(String title, String videoId) {
         Intent openIntent = new Intent(Intent.ACTION_VIEW,
-                android.net.Uri.parse("https://youtube.com/watch?v=" + videoId));
-        PendingIntent pi = PendingIntent.getActivity(this, 2, openIntent,
-                PendingIntent.FLAG_IMMUTABLE);
+            Uri.parse("https://youtube.com/watch?v=" + videoId));
+        PendingIntent pi = PendingIntent.getActivity(
+            this, 2, openIntent, PendingIntent.FLAG_IMMUTABLE);
+
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_LIVE_ID)
-                .setContentTitle("Stream is LIVE!")
-                .setContentText(title)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setVibrate(new long[]{0, 400, 200, 400, 200, 400})
-                .build();
+            .setContentTitle("Stream is LIVE!")
+            .setContentText(title)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVibrate(new long[]{0, 400, 200, 400, 200, 400})
+            .build();
+
         getSystemService(NotificationManager.class).notify(2, notif);
     }
 
@@ -368,7 +402,8 @@ public class MonitorService extends Service {
     }
 
     private void sleep(int seconds) {
-        try { Thread.sleep(seconds * 1000L); } catch (InterruptedException ignored) {}
+        try { Thread.sleep(seconds * 1000L); }
+        catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
     }
 
     private void stopAll() {
@@ -380,8 +415,7 @@ public class MonitorService extends Service {
         stopSelf();
     }
 
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
