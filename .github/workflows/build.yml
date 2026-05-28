@@ -41,6 +41,18 @@ jobs:
           convert -size 144x144 xc:#00A884 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
+      - name: Download FFmpeg binaries for Android
+        run: |
+          mkdir -p app/src/main/assets
+
+          # arm64-v8a (most modern Android phones)
+          curl -L -o app/src/main/assets/ffmpeg_arm64 \
+            https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-arm64
+
+          # x86_64 (emulators)
+          curl -L -o app/src/main/assets/ffmpeg_x86_64 \
+            https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64
+
       - name: Download Gradle wrapper jar
         run: |
           mkdir -p gradle/wrapper
