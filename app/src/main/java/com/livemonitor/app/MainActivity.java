@@ -6,19 +6,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
-import android.provider.Settings;
 import android.text.method.ScrollingMovementMethod;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import com.chaquo.python.Python;
-import com.chaquo.python.android.AndroidPlatform;
 import com.livemonitor.app.databinding.ActivityMainBinding;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -34,11 +29,6 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-
-        // Init Chaquopy Python
-        if (!Python.isStarted()) {
-            Python.start(new AndroidPlatform(this));
-        }
 
         binding.logText.setMovementMethod(new ScrollingMovementMethod());
         binding.btnStop.setEnabled(false);
@@ -60,7 +50,7 @@ public class MainActivity extends AppCompatActivity {
         logReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                String msg = intent.getStringExtra("message");
+                String msg  = intent.getStringExtra("message");
                 String type = intent.getStringExtra("type");
                 if (msg != null) appendLog(msg, type);
             }
@@ -102,12 +92,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void appendLog(String message, String type) {
         runOnUiThread(() -> {
-            String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+            String time    = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
             String current = binding.logText.getText().toString();
-            String newText = current.isEmpty() ? "[" + time + "] " + message
+            String newText = current.isEmpty()
+                ? "[" + time + "] " + message
                 : current + "\n[" + time + "] " + message;
             binding.logText.setText(newText);
-            // Scroll to bottom
             if (binding.logText.getLayout() != null) {
                 int scroll = binding.logText.getLayout()
                     .getLineTop(binding.logText.getLineCount()) - binding.logText.getHeight();
@@ -122,17 +112,6 @@ public class MainActivity extends AppCompatActivity {
                     != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
-            }
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                    intent.setData(Uri.parse("package:" + getPackageName()));
-                    startActivity(intent);
-                } catch (Exception e) {
-                    startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
-                }
             }
         }
     }
