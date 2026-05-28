@@ -52,7 +52,4 @@ dependencies {
     // NewPipe stream extractor
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.24.2'
     implementation 'com.arthenica:smart-exception-java:0.2.1'
-
-    // FFmpeg — mobile-ffmpeg is on Maven Central, no extra repo needed
-    implementation 'com.arthenica:mobile-ffmpeg-full-gpl:4.4.LTS'
 }
