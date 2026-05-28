@@ -55,7 +55,6 @@ public class MonitorService extends Service {
         createNotificationChannels();
         NewPipe.init(NewPipeDownloader.getInstance());
 
-        // Set up FFmpeg binary
         boolean ffmpegReady = FFmpegRunner.setup(this);
         if (!ffmpegReady) {
             sendLog("WARNING: FFmpeg setup failed!", "error");
@@ -218,6 +217,7 @@ public class MonitorService extends Service {
     // ── YouTube Data API v3 ───────────────────────────────────────────────────
 
     private String resolveChannelId(String url) {
+        sendLog("Resolving URL: " + url, "info");
         try {
             if (url.contains("/channel/")) {
                 return url.substring(url.indexOf("/channel/") + 9)
@@ -230,17 +230,31 @@ public class MonitorService extends Service {
             } else if (url.contains("/c/") || url.contains("/user/")) {
                 handle = url.substring(url.lastIndexOf("/") + 1).replaceAll("[/?#].*", "");
             }
-            if (handle == null) return null;
+
+            if (handle == null) {
+                sendLog("Could not extract handle from URL", "error");
+                return null;
+            }
+
+            sendLog("Extracted handle: " + handle, "info");
 
             String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
                           + "?part=id&forHandle=" + handle + "&key=" + YT_API_KEY;
             String resp = httpGet(apiUrl);
-            if (resp == null) return null;
+            if (resp == null) {
+                sendLog("YouTube API returned null response", "error");
+                return null;
+            }
 
             JSONObject json  = new JSONObject(resp);
             JSONArray  items = json.optJSONArray("items");
             if (items != null && items.length() > 0) {
-                return items.getJSONObject(0).getString("id");
+                String channelId = items.getJSONObject(0).getString("id");
+                sendLog("Channel ID resolved: " + channelId, "info");
+                return channelId;
+            } else {
+                sendLog("No channel found for handle: " + handle, "error");
+                sendLog("API response: " + resp, "error");
             }
         } catch (Exception e) {
             sendLog("resolveChannelId error: " + e.getMessage(), "error");
@@ -277,7 +291,10 @@ public class MonitorService extends Service {
             conn.setConnectTimeout(15_000);
             conn.setReadTimeout(15_000);
             conn.setRequestMethod("GET");
-            if (conn.getResponseCode() != 200) return null;
+            if (conn.getResponseCode() != 200) {
+                sendLog("HTTP error: " + conn.getResponseCode() + " for " + urlString, "error");
+                return null;
+            }
 
             BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream()));
