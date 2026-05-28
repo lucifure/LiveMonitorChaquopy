@@ -53,6 +53,6 @@ dependencies {
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.24.2'
     implementation 'com.arthenica:smart-exception-java:0.2.1'
 
-    // FFmpeg — using 5.1 LTS which is still available
-    implementation 'com.arthenica:ffmpeg-kit-full-gpl:5.1.LTS'
+    // FFmpeg — mobile-ffmpeg is on Maven Central, no extra repo needed
+    implementation 'com.arthenica:mobile-ffmpeg-full-gpl:4.4.LTS'
 }
