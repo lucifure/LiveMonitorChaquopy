@@ -14,9 +14,8 @@ import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
-import com.arthenica.ffmpegkit.FFmpegKit;
-import com.arthenica.ffmpegkit.FFmpegSession;
-import com.arthenica.ffmpegkit.ReturnCode;
+import com.arthenica.mobileffmpeg.Config;
+import com.arthenica.mobileffmpeg.FFmpeg;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,7 +43,6 @@ public class MonitorService extends Service {
     private static final String CHANNEL_LIVE_ID = "LiveDetectedChannel";
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
-    // Replace with your own key or use the YouTube API console
     private static final String YT_API_KEY      = "YOUR_YOUTUBE_API_KEY_HERE";
 
     private PowerManager.WakeLock wakeLock;
@@ -52,15 +50,12 @@ public class MonitorService extends Service {
     private volatile boolean running   = false;
     private volatile boolean recording = false;
     private String channelUrl          = "";
-    private FFmpegSession ffmpegSession = null;
 
     @Override
     public void onCreate() {
         super.onCreate();
         executor = Executors.newCachedThreadPool();
         createNotificationChannels();
-
-        // ✅ FIXED: Use our OkHttp-based downloader, not the non-existent RecorderDownloader
         NewPipe.init(NewPipeDownloader.getInstance());
     }
 
@@ -112,7 +107,6 @@ public class MonitorService extends Service {
                         executor.execute(() -> startRecording(watchUrl, title));
                     }
 
-                    // Keep polling while recording to detect stream end
                     while (running && recording) {
                         sleep(POLL_SECONDS);
                         if (!running) break;
@@ -138,24 +132,20 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    // ── Recording: NewPipeExtractor → FFmpegKit ───────────────────────────────
+    // ── Recording: NewPipeExtractor + mobile-ffmpeg ───────────────────────────
 
     private void startRecording(String watchUrl, String title) {
         try {
             sendLog("Extracting stream URL via NewPipeExtractor...", "info");
 
-            // ✅ StreamInfo.getInfo() runs on a background thread here (executor), so this is safe
             StreamInfo streamInfo = StreamInfo.getInfo(ServiceList.YouTube, watchUrl);
 
-            // 1. Prefer the HLS manifest (.m3u8) for live streams
             String manifestUrl = streamInfo.getHlsUrl();
 
-            // 2. Fall back to DASH manifest
             if (isBlank(manifestUrl)) {
                 manifestUrl = streamInfo.getDashMpdUrl();
             }
 
-            // 3. Fall back to best video stream URL
             if (isBlank(manifestUrl)) {
                 List<VideoStream> streams = streamInfo.getVideoStreams();
                 if (!streams.isEmpty()) {
@@ -171,49 +161,46 @@ public class MonitorService extends Service {
 
             sendLog("Stream URL obtained. Starting FFmpeg...", "success");
 
-            // Build output path
-            String date = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(new Date());
-            String safe = title.replaceAll("[^a-zA-Z0-9._-]", "_");
-            safe = safe.substring(0, Math.min(safe.length(), 40));
+            String date    = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(new Date());
+            String safe    = title.replaceAll("[^a-zA-Z0-9._-]", "_");
+            safe           = safe.substring(0, Math.min(safe.length(), 40));
             String outDir  = getExternalFilesDir(null) + "/YouTubeMonitor/";
             String outPath = outDir + safe + "_" + date + ".mp4";
 
             new File(outDir).mkdirs();
             sendLog("Saving to: " + outPath, "info");
 
-            // ✅ FFmpegKit.executeAsync is non-blocking — correct for a live stream
-            String cmd = "-i \"" + manifestUrl + "\""
+            final String finalManifestUrl = manifestUrl;
+
+            Config.enableLogCallback(logMessage -> {
+                String msg = logMessage.getText();
+                if (msg != null && !msg.startsWith("frame=") && !msg.startsWith("size=")) {
+                    sendLog(msg.trim(), "dim");
+                }
+            });
+
+            Config.enableStatisticsCallback(statistics -> {
+                double mb = statistics.getSize() / 1024.0;
+                sendLog(String.format("Recording: %.1f MB", mb), "download");
+            });
+
+            String cmd = "-i \"" + finalManifestUrl + "\""
                        + " -c copy"
                        + " -bsf:a aac_adtstoasc"
                        + " -movflags +faststart"
                        + " \"" + outPath + "\"";
 
-            ffmpegSession = FFmpegKit.executeAsync(
-                cmd,
-                session -> {
-                    if (ReturnCode.isSuccess(session.getReturnCode())) {
-                        sendLog("Recording finished: " + outPath, "success");
-                    } else if (ReturnCode.isCancel(session.getReturnCode())) {
-                        sendLog("Recording cancelled (stream ended).", "warning");
-                    } else {
-                        sendLog("FFmpeg error: " + session.getFailStackTrace(), "error");
-                    }
-                    recording = false;
-                    updateNotification("Monitoring: " + shortUrl(channelUrl));
-                },
-                log -> {
-                    // Filter out very verbose FFmpeg lines
-                    String msg = log.getMessage();
-                    if (msg != null && !msg.startsWith("frame=") && !msg.startsWith("size=")) {
-                        sendLog(msg.trim(), "dim");
-                    }
-                },
-                stats -> {
-                    long   sizeKb = stats.getSize();
-                    double mb     = sizeKb / 1024.0;
-                    sendLog(String.format("Recording: %.1f MB", mb), "download");
+            FFmpeg.executeAsync(cmd, (executionId, returnCode) -> {
+                if (returnCode == 0) {
+                    sendLog("Recording finished: " + outPath, "success");
+                } else if (returnCode == 255) {
+                    sendLog("Recording cancelled (stream ended).", "warning");
+                } else {
+                    sendLog("FFmpeg error code: " + returnCode, "error");
                 }
-            );
+                recording = false;
+                updateNotification("Monitoring: " + shortUrl(channelUrl));
+            });
 
         } catch (Exception e) {
             sendLog("startRecording error: " + e.getMessage(), "error");
@@ -224,10 +211,7 @@ public class MonitorService extends Service {
 
     private void stopRecording() {
         try {
-            if (ffmpegSession != null) {
-                FFmpegKit.cancel(ffmpegSession.getSessionId());
-                ffmpegSession = null;
-            }
+            FFmpeg.cancel();
         } catch (Exception e) {
             sendLog("stopRecording error: " + e.getMessage(), "error");
         } finally {
@@ -243,7 +227,6 @@ public class MonitorService extends Service {
 
     private String resolveChannelId(String url) {
         try {
-            // Direct channel ID in URL
             if (url.contains("/channel/")) {
                 return url.substring(url.indexOf("/channel/") + 9)
                           .replaceAll("[/?#].*", "");
@@ -297,7 +280,7 @@ public class MonitorService extends Service {
 
     private String httpGet(String urlString) {
         try {
-            URL              url  = new URL(urlString);
+            URL               url  = new URL(urlString);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(15_000);
             conn.setReadTimeout(15_000);
