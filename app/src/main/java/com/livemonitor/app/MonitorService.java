@@ -38,40 +38,8 @@ public class MonitorService extends Service {
     private static final int    POLL_SECONDS    = 60;
     private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
 
-    // Each entry: { clientName, clientVersion, userAgent, androidSdkVersion }
-    // NO api key in the player URL — YouTube internal player works without it
-    private static final String[][] YT_CLIENTS = {
-        {
-            "ANDROID_TESTSUITE",
-            "1.9",
-            "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip",
-            "30"
-        },
-        {
-            "ANDROID",
-            "18.11.34",
-            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip",
-            "30"
-        },
-        {
-            "ANDROID_VR",
-            "1.56.21",
-            "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12) gzip",
-            "32"
-        },
-        {
-            "IOS",
-            "19.09.3",
-            "com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 16_0 like Mac OS X)",
-            ""
-        },
-        {
-            "WEB_EMBEDDED_PLAYER",
-            "2.20231121.08.00",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            ""
-        }
-    };
+    // Cached visitorData token — fetched once and reused
+    private String visitorData = null;
 
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
@@ -108,10 +76,89 @@ public class MonitorService extends Service {
         return START_NOT_STICKY;
     }
 
+    // ── Fetch visitorData token from YouTube ──────────────────────────────────
+
+    private String fetchVisitorData() {
+        try {
+            sendLog("Fetching visitorData token...", "info");
+
+            // POST to youtubei/v1/visitor_id to get a fresh visitor token
+            URL url = new URL("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+            conn.setRequestProperty("Origin", "https://www.youtube.com");
+
+            String body = "{"
+                + "\"context\":{"
+                +   "\"client\":{"
+                +     "\"clientName\":\"WEB\","
+                +     "\"clientVersion\":\"2.20231121.08.00\","
+                +     "\"hl\":\"en\","
+                +     "\"gl\":\"US\""
+                +   "}"
+                + "}"
+                + "}";
+
+            byte[] bodyBytes = body.getBytes("UTF-8");
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+            OutputStream os = conn.getOutputStream();
+            os.write(bodyBytes);
+            os.flush();
+            os.close();
+
+            if (conn.getResponseCode() != 200) {
+                sendLog("visitorData fetch failed: HTTP " + conn.getResponseCode(), "warning");
+                return null;
+            }
+
+            BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            reader.close();
+
+            JSONObject json = new JSONObject(sb.toString());
+            String vd = json.optString("visitorData", null);
+            if (vd != null && !vd.isEmpty()) {
+                sendLog("visitorData obtained: " + vd.substring(0, Math.min(20, vd.length())) + "...", "success");
+                return vd;
+            }
+
+            // Fallback — try responseContext
+            JSONObject rc = json.optJSONObject("responseContext");
+            if (rc != null) {
+                vd = rc.optString("visitorData", null);
+                if (vd != null && !vd.isEmpty()) {
+                    sendLog("visitorData obtained from responseContext.", "success");
+                    return vd;
+                }
+            }
+
+            sendLog("visitorData not found in response — will try without it.", "warning");
+            return null;
+
+        } catch (Exception e) {
+            sendLog("fetchVisitorData error: " + e.getMessage(), "warning");
+            return null;
+        }
+    }
+
     // ── Monitor loop ──────────────────────────────────────────────────────────
 
     private void monitorLoop() {
         sendLog("Monitor started.", "success");
+
+        // Fetch visitorData once at start
+        visitorData = fetchVisitorData();
 
         while (running) {
             sendLog("Checking live status...", "dim");
@@ -166,7 +213,38 @@ public class MonitorService extends Service {
     // ── Get HLS manifest — try multiple YouTube clients ───────────────────────
 
     private String getHlsManifestUrl(String videoId) {
-        for (String[] client : YT_CLIENTS) {
+
+        // Client list — each entry: { clientName, clientVersion, userAgent, androidSdkVersion }
+        String[][] clients = {
+            {
+                "ANDROID_TESTSUITE", "1.9",
+                "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip",
+                "30"
+            },
+            {
+                "ANDROID", "18.11.34",
+                "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip",
+                "30"
+            },
+            {
+                "ANDROID_VR", "1.56.21",
+                "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12) gzip",
+                "32"
+            },
+            {
+                "IOS", "19.09.3",
+                "com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 16_0 like Mac OS X)",
+                ""
+            },
+            {
+                "WEB", "2.20231121.08.00",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                ""
+            }
+        };
+
+        for (String[] client : clients) {
             String clientName    = client[0];
             String clientVersion = client[1];
             String userAgent     = client[2];
@@ -175,7 +253,7 @@ public class MonitorService extends Service {
             sendLog("Trying client: " + clientName + " v" + clientVersion, "info");
             try {
                 String result = tryGetHls(videoId, clientName, clientVersion,
-                                          userAgent, sdkVersion);
+                                          userAgent, sdkVersion, visitorData);
                 if (result != null) {
                     sendLog("SUCCESS with client: " + clientName, "success");
                     return result;
@@ -184,14 +262,32 @@ public class MonitorService extends Service {
                 sendLog("Client " + clientName + " exception: " + e.getMessage(), "error");
             }
         }
+
+        // All failed — refresh visitorData and try ANDROID_TESTSUITE one more time
+        sendLog("All clients failed. Refreshing visitorData and retrying...", "warning");
+        visitorData = fetchVisitorData();
+        if (visitorData != null) {
+            try {
+                String result = tryGetHls(videoId,
+                    "ANDROID_TESTSUITE", "1.9",
+                    "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip",
+                    "30", visitorData);
+                if (result != null) {
+                    sendLog("SUCCESS after visitorData refresh!", "success");
+                    return result;
+                }
+            } catch (Exception e) {
+                sendLog("Retry after refresh failed: " + e.getMessage(), "error");
+            }
+        }
+
         sendLog("All clients failed to get HLS URL.", "error");
         return null;
     }
 
     private String tryGetHls(String videoId, String clientName, String clientVersion,
-                              String userAgent, String androidSdkVersion) {
+                              String userAgent, String androidSdkVersion, String vd) {
         try {
-            // NO api key in URL — YouTube's internal player doesn't need it
             URL url = new URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
@@ -206,31 +302,26 @@ public class MonitorService extends Service {
             conn.setRequestProperty("X-YouTube-Client-Version", clientVersion);
             conn.setRequestProperty("X-Origin", "https://www.youtube.com");
 
-            // Build context — only include androidSdkVersion for Android clients
-            String clientBlock;
+            // Build client block
+            StringBuilder clientBlock = new StringBuilder("{");
+            clientBlock.append("\"clientName\":\"").append(clientName).append("\",");
+            clientBlock.append("\"clientVersion\":\"").append(clientVersion).append("\",");
             if (!androidSdkVersion.isEmpty()) {
-                clientBlock = "{"
-                    + "\"clientName\":\"" + clientName + "\","
-                    + "\"clientVersion\":\"" + clientVersion + "\","
-                    + "\"androidSdkVersion\":" + androidSdkVersion + ","
-                    + "\"hl\":\"en\","
-                    + "\"gl\":\"US\","
-                    + "\"utcOffsetMinutes\":0"
-                    + "}";
-            } else {
-                clientBlock = "{"
-                    + "\"clientName\":\"" + clientName + "\","
-                    + "\"clientVersion\":\"" + clientVersion + "\","
-                    + "\"hl\":\"en\","
-                    + "\"gl\":\"US\","
-                    + "\"utcOffsetMinutes\":0"
-                    + "}";
+                clientBlock.append("\"androidSdkVersion\":").append(androidSdkVersion).append(",");
             }
+            clientBlock.append("\"hl\":\"en\",");
+            clientBlock.append("\"gl\":\"US\",");
+            clientBlock.append("\"utcOffsetMinutes\":0");
+            // Include visitorData if we have it
+            if (vd != null && !vd.isEmpty()) {
+                clientBlock.append(",\"visitorData\":\"").append(vd).append("\"");
+            }
+            clientBlock.append("}");
 
             String body = "{"
                 + "\"videoId\":\"" + videoId + "\","
                 + "\"context\":{"
-                +   "\"client\":" + clientBlock
+                +   "\"client\":" + clientBlock.toString()
                 + "},"
                 + "\"playbackContext\":{"
                 +   "\"contentPlaybackContext\":{"
@@ -248,7 +339,6 @@ public class MonitorService extends Service {
 
             int responseCode = conn.getResponseCode();
 
-            // Read body regardless of status
             BufferedReader reader;
             try {
                 reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
@@ -295,9 +385,8 @@ public class MonitorService extends Service {
                 return hlsUrl;
             }
 
-            // Log what keys ARE present so we can debug further
             sendLog("No hlsManifestUrl from " + clientName
-                + " — streamingData keys: " + streamingData.keys().toString(), "warning");
+                + " — keys: " + streamingData.keys().toString(), "warning");
             return null;
 
         } catch (Exception e) {
@@ -417,7 +506,7 @@ public class MonitorService extends Service {
         }
         return null;
     }
-
+ 
     private String[] checkLive(String channelId) {
         try {
             String apiUrl = "https://www.googleapis.com/youtube/v3/search"
@@ -425,7 +514,7 @@ public class MonitorService extends Service {
                           + "&eventType=live&type=video&maxResults=1&key=" + YT_API_KEY;
             String resp = httpGet(apiUrl);
             if (resp == null) return null;
-
+ 
             JSONObject json  = new JSONObject(resp);
             JSONArray  items = json.optJSONArray("items");
             if (items != null && items.length() > 0) {
@@ -439,7 +528,7 @@ public class MonitorService extends Service {
         }
         return null;
     }
-
+ 
     private String httpGet(String urlString) {
         try {
             URL               url  = new URL(urlString);
@@ -451,7 +540,7 @@ public class MonitorService extends Service {
                 sendLog("HTTP error: " + conn.getResponseCode() + " for " + urlString, "error");
                 return null;
             }
-
+ 
             BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
@@ -463,44 +552,44 @@ public class MonitorService extends Service {
             return null;
         }
     }
-
+ 
     // ── Wake lock ─────────────────────────────────────────────────────────────
-
+ 
     private void acquireWakeLock() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
         wakeLock.acquire(12 * 60 * 60 * 1000L);
         sendLog("Wake lock acquired.", "success");
     }
-
+ 
     private void releaseWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             wakeLock = null;
         }
     }
-
+ 
     // ── Notifications ─────────────────────────────────────────────────────────
-
+ 
     private void createNotificationChannels() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-
+ 
         NotificationChannel monitor = new NotificationChannel(
             CHANNEL_ID, "Monitor Status", NotificationManager.IMPORTANCE_LOW);
         monitor.setDescription("Ongoing monitoring status");
         nm.createNotificationChannel(monitor);
-
+ 
         NotificationChannel live = new NotificationChannel(
             CHANNEL_LIVE_ID, "Live Detected", NotificationManager.IMPORTANCE_HIGH);
         live.setDescription("Alerts when a stream goes live");
         nm.createNotificationChannel(live);
     }
-
+ 
     private Notification buildNotification(String text) {
         PendingIntent pi = PendingIntent.getActivity(this, 0,
             new Intent(this, MainActivity.class),
             PendingIntent.FLAG_IMMUTABLE);
-
+ 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Live Monitor")
             .setContentText(text)
