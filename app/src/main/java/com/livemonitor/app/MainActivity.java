@@ -2,6 +2,8 @@ package com.livemonitor.app;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -11,8 +13,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
-import android.text.style.ForegroundColorSpan;
 import android.text.method.ScrollingMovementMethod;
+import android.text.style.ForegroundColorSpan;
 import android.widget.ScrollView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
@@ -29,6 +31,7 @@ public class MainActivity extends AppCompatActivity {
     private ActivityMainBinding binding;
     private BroadcastReceiver logReceiver;
     private SpannableStringBuilder logBuilder = new SpannableStringBuilder();
+    private StringBuilder plainLogBuilder = new StringBuilder();
     private int logLineCount = 0;
     private static final int MAX_LOG_LINES = 200;
 
@@ -60,9 +63,22 @@ public class MainActivity extends AppCompatActivity {
 
         binding.btnClearLog.setOnClickListener(v -> {
             logBuilder = new SpannableStringBuilder();
+            plainLogBuilder = new StringBuilder();
             logLineCount = 0;
             binding.logText.setText("");
             appendLog("Log cleared.", "dim");
+        });
+
+        binding.btnCopyLog.setOnClickListener(v -> {
+            if (plainLogBuilder.length() == 0) {
+                Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText("LiveMonitor Log", plainLogBuilder.toString());
+            clipboard.setPrimaryClip(clip);
+            Toast.makeText(this, "Log copied to clipboard!", Toast.LENGTH_SHORT).show();
         });
 
         logReceiver = new BroadcastReceiver() {
@@ -120,9 +136,9 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
-            // Trim log if too long
             if (logLineCount > MAX_LOG_LINES) {
                 logBuilder = new SpannableStringBuilder();
+                plainLogBuilder = new StringBuilder();
                 logLineCount = 0;
                 appendLog("[ Log trimmed — too many lines ]", "dim");
                 return;
@@ -181,10 +197,12 @@ public class MainActivity extends AppCompatActivity {
                     break;
             }
 
-            // Add newline if not first line
-            if (logBuilder.length() > 0) {
-                logBuilder.append("\n");
-            }
+            // Add to plain text log for copying
+            if (plainLogBuilder.length() > 0) plainLogBuilder.append("\n");
+            plainLogBuilder.append(prefix).append(message);
+
+            // Add newline to spannable if not first line
+            if (logBuilder.length() > 0) logBuilder.append("\n");
 
             // Append colored prefix
             int start = logBuilder.length();
