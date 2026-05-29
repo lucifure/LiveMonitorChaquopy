@@ -18,11 +18,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
@@ -39,6 +37,41 @@ public class MonitorService extends Service {
     private static final int    NOTIF_ID        = 1;
     private static final int    POLL_SECONDS    = 60;
     private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+
+    // Multiple client configs to try — YouTube blocks some, accepts others
+    private static final String[][] YT_CLIENTS = {
+        // { clientName, clientVersion, apiKey, userAgent }
+        {
+            "ANDROID_TESTSUITE",
+            "1.9",
+            "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+            "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip"
+        },
+        {
+            "ANDROID",
+            "18.11.34",
+            "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip"
+        },
+        {
+            "ANDROID_EMBEDDED_PLAYER",
+            "18.11.34",
+            "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip"
+        },
+        {
+            "IOS",
+            "18.11.34",
+            "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+            "com.google.ios.youtube/18.11.34 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)"
+        },
+        {
+            "WEB",
+            "2.20231121.08.00",
+            "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+    };
 
     private PowerManager.WakeLock wakeLock;
     private ExecutorService executor;
@@ -130,76 +163,134 @@ public class MonitorService extends Service {
         sendLog("Monitor stopped.", "info");
     }
 
-    // ── Get HLS manifest URL directly from YouTube ────────────────────────────
+    // ── Get HLS manifest — try multiple YouTube clients ───────────────────────
 
     private String getHlsManifestUrl(String videoId) {
-        try {
-            sendLog("Fetching HLS manifest via YouTube API...", "info");
+        for (String[] client : YT_CLIENTS) {
+            String clientName    = client[0];
+            String clientVersion = client[1];
+            String apiKey        = client[2];
+            String userAgent     = client[3];
 
-            // Use YouTube's player API to get the HLS manifest
-            URL url = new URL("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8");
+            sendLog("Trying client: " + clientName, "info");
+            try {
+                String result = tryGetHls(videoId, clientName, clientVersion, apiKey, userAgent);
+                if (result != null) {
+                    sendLog("Success with client: " + clientName, "success");
+                    return result;
+                }
+            } catch (Exception e) {
+                sendLog("Client " + clientName + " exception: " + e.getMessage(), "error");
+            }
+        }
+        sendLog("All clients failed to get HLS URL.", "error");
+        return null;
+    }
+
+    private String tryGetHls(String videoId, String clientName, String clientVersion,
+                              String apiKey, String userAgent) {
+        try {
+            URL url = new URL(
+                "https://www.youtube.com/youtubei/v1/player?key=" + apiKey
+                + "&prettyPrint=false"
+            );
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(15000);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setRequestProperty("X-YouTube-Client-Name", "1");
-            conn.setRequestProperty("X-YouTube-Client-Version", "2.20231120.00.00");
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("User-Agent", userAgent);
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+            conn.setRequestProperty("Origin", "https://www.youtube.com");
+            conn.setRequestProperty("X-YouTube-Client-Name", "3");
+            conn.setRequestProperty("X-YouTube-Client-Version", clientVersion);
 
-            // Request body — tells YouTube we are the Android client
             String body = "{"
-                + "\"videoId\": \"" + videoId + "\","
-                + "\"context\": {"
-                + "  \"client\": {"
-                + "    \"clientName\": \"ANDROID\","
-                + "    \"clientVersion\": \"18.11.34\","
-                + "    \"androidSdkVersion\": 30,"
-                + "    \"hl\": \"en\","
-                + "    \"gl\": \"US\""
-                + "  }"
+                + "\"videoId\":\"" + videoId + "\","
+                + "\"context\":{"
+                +   "\"client\":{"
+                +     "\"clientName\":\"" + clientName + "\","
+                +     "\"clientVersion\":\"" + clientVersion + "\","
+                +     "\"androidSdkVersion\":30,"
+                +     "\"hl\":\"en\","
+                +     "\"gl\":\"US\","
+                +     "\"utcOffsetMinutes\":0"
+                +   "},"
+                +   "\"thirdParty\":{"
+                +     "\"embedUrl\":\"https://www.youtube.com\""
+                +   "}"
+                + "},"
+                + "\"playbackContext\":{"
+                +   "\"contentPlaybackContext\":{"
+                +     "\"html5Preference\":\"HTML5_PREF_WANTS\","
+                +     "\"signatureTimestamp\":19369"
+                +   "}"
                 + "}"
                 + "}";
 
+            byte[] bodyBytes = body.getBytes("UTF-8");
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
             OutputStream os = conn.getOutputStream();
-            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(os, "UTF-8"));
-            writer.write(body);
-            writer.flush();
-            writer.close();
+            os.write(bodyBytes);
+            os.flush();
+            os.close();
 
-            if (conn.getResponseCode() != 200) {
-                sendLog("Player API error: " + conn.getResponseCode(), "error");
-                return null;
+            int responseCode = conn.getResponseCode();
+
+            // Read response body regardless of status code
+            BufferedReader reader;
+            if (responseCode == 200) {
+                reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            } else {
+                reader = new BufferedReader(new InputStreamReader(conn.getErrorStream()));
             }
-
-            BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) sb.append(line);
             reader.close();
 
+            if (responseCode != 200) {
+                // Log first 300 chars of error so we can see what YouTube says
+                String errSnippet = sb.toString();
+                errSnippet = errSnippet.substring(0, Math.min(300, errSnippet.length()));
+                sendLog("Client " + clientName + " HTTP " + responseCode + ": " + errSnippet, "error");
+                return null;
+            }
+
             JSONObject json = new JSONObject(sb.toString());
 
-            // Extract HLS manifest URL from response
+            // Log playability status
+            JSONObject playability = json.optJSONObject("playabilityStatus");
+            if (playability != null) {
+                String status = playability.optString("status", "unknown");
+                String reason = playability.optString("reason", "");
+                sendLog("Playability [" + clientName + "]: " + status
+                    + (reason.isEmpty() ? "" : " — " + reason), "info");
+
+                if ("ERROR".equals(status) || "LOGIN_REQUIRED".equals(status)
+                        || "UNPLAYABLE".equals(status)) {
+                    return null;
+                }
+            }
+
             JSONObject streamingData = json.optJSONObject("streamingData");
             if (streamingData == null) {
-                sendLog("No streamingData in player response", "error");
+                sendLog("No streamingData from " + clientName, "warning");
                 return null;
             }
 
             String hlsUrl = streamingData.optString("hlsManifestUrl", null);
             if (hlsUrl != null && !hlsUrl.isEmpty()) {
-                sendLog("HLS manifest URL obtained!", "success");
                 return hlsUrl;
             }
 
-            sendLog("No HLS manifest URL found in response", "error");
+            sendLog("No hlsManifestUrl from " + clientName
+                + " — keys: " + streamingData.keys().toString(), "warning");
             return null;
 
         } catch (Exception e) {
-            sendLog("getHlsManifestUrl error: " + e.getMessage(), "error");
+            sendLog("tryGetHls [" + clientName + "] error: " + e.getMessage(), "error");
             return null;
         }
     }
@@ -210,22 +301,16 @@ public class MonitorService extends Service {
         try {
             sendLog("Getting stream URL for video: " + videoId, "info");
 
-            // Retry up to 3 times
-            String manifestUrl = null;
-            for (int attempt = 1; attempt <= 3; attempt++) {
-                manifestUrl = getHlsManifestUrl(videoId);
-                if (manifestUrl != null) break;
-                sendLog("Attempt " + attempt + " failed, retrying...", "warning");
-                try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
-            }
+            String manifestUrl = getHlsManifestUrl(videoId);
 
             if (manifestUrl == null) {
-                sendLog("Could not get stream URL after 3 attempts!", "error");
+                sendLog("Could not get stream URL — all clients failed!", "error");
                 recording = false;
                 return;
             }
 
             sendLog("Stream URL obtained. Starting FFmpeg...", "success");
+            sendLog("URL: " + manifestUrl.substring(0, Math.min(80, manifestUrl.length())) + "...", "dim");
 
             String date    = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(new Date());
             String safe    = title.replaceAll("[^a-zA-Z0-9._-]", "_");
