@@ -38,38 +38,38 @@ public class MonitorService extends Service {
     private static final int    POLL_SECONDS    = 60;
     private static final String YT_API_KEY      = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
 
-    // Multiple client configs to try — YouTube blocks some, accepts others
+    // Each entry: { clientName, clientVersion, userAgent, androidSdkVersion }
+    // NO api key in the player URL — YouTube internal player works without it
     private static final String[][] YT_CLIENTS = {
-        // { clientName, clientVersion, apiKey, userAgent }
         {
             "ANDROID_TESTSUITE",
             "1.9",
-            "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-            "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip"
+            "com.google.android.youtube/1.9 (Linux; U; Android 11) gzip",
+            "30"
         },
         {
             "ANDROID",
             "18.11.34",
-            "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip"
+            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip",
+            "30"
         },
         {
-            "ANDROID_EMBEDDED_PLAYER",
-            "18.11.34",
-            "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-            "com.google.android.youtube/18.11.34 (Linux; U; Android 11) gzip"
+            "ANDROID_VR",
+            "1.56.21",
+            "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12) gzip",
+            "32"
         },
         {
             "IOS",
-            "18.11.34",
-            "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
-            "com.google.ios.youtube/18.11.34 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)"
+            "19.09.3",
+            "com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 16_0 like Mac OS X)",
+            ""
         },
         {
-            "WEB",
+            "WEB_EMBEDDED_PLAYER",
             "2.20231121.08.00",
-            "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ""
         }
     };
 
@@ -169,14 +169,15 @@ public class MonitorService extends Service {
         for (String[] client : YT_CLIENTS) {
             String clientName    = client[0];
             String clientVersion = client[1];
-            String apiKey        = client[2];
-            String userAgent     = client[3];
+            String userAgent     = client[2];
+            String sdkVersion    = client[3];
 
-            sendLog("Trying client: " + clientName, "info");
+            sendLog("Trying client: " + clientName + " v" + clientVersion, "info");
             try {
-                String result = tryGetHls(videoId, clientName, clientVersion, apiKey, userAgent);
+                String result = tryGetHls(videoId, clientName, clientVersion,
+                                          userAgent, sdkVersion);
                 if (result != null) {
-                    sendLog("Success with client: " + clientName, "success");
+                    sendLog("SUCCESS with client: " + clientName, "success");
                     return result;
                 }
             } catch (Exception e) {
@@ -188,12 +189,10 @@ public class MonitorService extends Service {
     }
 
     private String tryGetHls(String videoId, String clientName, String clientVersion,
-                              String apiKey, String userAgent) {
+                              String userAgent, String androidSdkVersion) {
         try {
-            URL url = new URL(
-                "https://www.youtube.com/youtubei/v1/player?key=" + apiKey
-                + "&prettyPrint=false"
-            );
+            // NO api key in URL — YouTube's internal player doesn't need it
+            URL url = new URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
@@ -205,26 +204,37 @@ public class MonitorService extends Service {
             conn.setRequestProperty("Origin", "https://www.youtube.com");
             conn.setRequestProperty("X-YouTube-Client-Name", "3");
             conn.setRequestProperty("X-YouTube-Client-Version", clientVersion);
+            conn.setRequestProperty("X-Origin", "https://www.youtube.com");
+
+            // Build context — only include androidSdkVersion for Android clients
+            String clientBlock;
+            if (!androidSdkVersion.isEmpty()) {
+                clientBlock = "{"
+                    + "\"clientName\":\"" + clientName + "\","
+                    + "\"clientVersion\":\"" + clientVersion + "\","
+                    + "\"androidSdkVersion\":" + androidSdkVersion + ","
+                    + "\"hl\":\"en\","
+                    + "\"gl\":\"US\","
+                    + "\"utcOffsetMinutes\":0"
+                    + "}";
+            } else {
+                clientBlock = "{"
+                    + "\"clientName\":\"" + clientName + "\","
+                    + "\"clientVersion\":\"" + clientVersion + "\","
+                    + "\"hl\":\"en\","
+                    + "\"gl\":\"US\","
+                    + "\"utcOffsetMinutes\":0"
+                    + "}";
+            }
 
             String body = "{"
                 + "\"videoId\":\"" + videoId + "\","
                 + "\"context\":{"
-                +   "\"client\":{"
-                +     "\"clientName\":\"" + clientName + "\","
-                +     "\"clientVersion\":\"" + clientVersion + "\","
-                +     "\"androidSdkVersion\":30,"
-                +     "\"hl\":\"en\","
-                +     "\"gl\":\"US\","
-                +     "\"utcOffsetMinutes\":0"
-                +   "},"
-                +   "\"thirdParty\":{"
-                +     "\"embedUrl\":\"https://www.youtube.com\""
-                +   "}"
+                +   "\"client\":" + clientBlock
                 + "},"
                 + "\"playbackContext\":{"
                 +   "\"contentPlaybackContext\":{"
-                +     "\"html5Preference\":\"HTML5_PREF_WANTS\","
-                +     "\"signatureTimestamp\":19369"
+                +     "\"html5Preference\":\"HTML5_PREF_WANTS\""
                 +   "}"
                 + "}"
                 + "}";
@@ -238,11 +248,11 @@ public class MonitorService extends Service {
 
             int responseCode = conn.getResponseCode();
 
-            // Read response body regardless of status code
+            // Read body regardless of status
             BufferedReader reader;
-            if (responseCode == 200) {
+            try {
                 reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            } else {
+            } catch (Exception e) {
                 reader = new BufferedReader(new InputStreamReader(conn.getErrorStream()));
             }
             StringBuilder sb = new StringBuilder();
@@ -251,7 +261,6 @@ public class MonitorService extends Service {
             reader.close();
 
             if (responseCode != 200) {
-                // Log first 300 chars of error so we can see what YouTube says
                 String errSnippet = sb.toString();
                 errSnippet = errSnippet.substring(0, Math.min(300, errSnippet.length()));
                 sendLog("Client " + clientName + " HTTP " + responseCode + ": " + errSnippet, "error");
@@ -268,7 +277,8 @@ public class MonitorService extends Service {
                 sendLog("Playability [" + clientName + "]: " + status
                     + (reason.isEmpty() ? "" : " — " + reason), "info");
 
-                if ("ERROR".equals(status) || "LOGIN_REQUIRED".equals(status)
+                if ("ERROR".equals(status)
+                        || "LOGIN_REQUIRED".equals(status)
                         || "UNPLAYABLE".equals(status)) {
                     return null;
                 }
@@ -285,8 +295,9 @@ public class MonitorService extends Service {
                 return hlsUrl;
             }
 
+            // Log what keys ARE present so we can debug further
             sendLog("No hlsManifestUrl from " + clientName
-                + " — keys: " + streamingData.keys().toString(), "warning");
+                + " — streamingData keys: " + streamingData.keys().toString(), "warning");
             return null;
 
         } catch (Exception e) {
@@ -310,7 +321,7 @@ public class MonitorService extends Service {
             }
 
             sendLog("Stream URL obtained. Starting FFmpeg...", "success");
-            sendLog("URL: " + manifestUrl.substring(0, Math.min(80, manifestUrl.length())) + "...", "dim");
+            sendLog("HLS: " + manifestUrl.substring(0, Math.min(80, manifestUrl.length())) + "...", "dim");
 
             String date    = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(new Date());
             String safe    = title.replaceAll("[^a-zA-Z0-9._-]", "_");
@@ -498,18 +509,18 @@ public class MonitorService extends Service {
             .setOngoing(true)
             .build();
     }
-
+ 
     private void updateNotification(String text) {
         getSystemService(NotificationManager.class)
             .notify(NOTIF_ID, buildNotification(text));
     }
-
+ 
     private void sendLiveNotification(String title, String videoId) {
         Intent openIntent = new Intent(Intent.ACTION_VIEW,
             Uri.parse("https://youtube.com/watch?v=" + videoId));
         PendingIntent pi = PendingIntent.getActivity(
             this, 2, openIntent, PendingIntent.FLAG_IMMUTABLE);
-
+ 
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_LIVE_ID)
             .setContentTitle("Stream is LIVE!")
             .setContentText(title)
@@ -519,12 +530,12 @@ public class MonitorService extends Service {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVibrate(new long[]{0, 400, 200, 400, 200, 400})
             .build();
-
+ 
         getSystemService(NotificationManager.class).notify(2, notif);
     }
-
+ 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
+ 
     private void sendLog(String message, String type) {
         Log.d(TAG, "[" + type + "] " + message);
         Intent intent = new Intent("MONITOR_LOG");
@@ -532,17 +543,17 @@ public class MonitorService extends Service {
         intent.putExtra("type", type);
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
-
+ 
     private String shortUrl(String url) {
         return url.replace("https://www.youtube.com/", "")
                   .replace("https://youtube.com/", "");
     }
-
+ 
     private void sleep(int seconds) {
         try { Thread.sleep(seconds * 1000L); }
         catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
     }
-
+ 
     private void stopAll() {
         running = false;
         recording = false;
@@ -551,9 +562,9 @@ public class MonitorService extends Service {
         stopForeground(true);
         stopSelf();
     }
-
+ 
     @Override public IBinder onBind(Intent intent) { return null; }
-
+ 
     @Override
     public void onDestroy() {
         stopAll();
