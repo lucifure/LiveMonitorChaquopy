@@ -7,12 +7,14 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,9 +22,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import okhttp3.Dns;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -35,20 +39,53 @@ public class HlsProxyServer {
     private static final int LIVE_SEGMENTS_TO_KEEP = 8;
 
     private static final Pattern URI_ATTR_PATTERN = Pattern.compile("URI=\"([^\"]+)\"");
+    private static final Pattern BANDWIDTH_PATTERN = Pattern.compile("BANDWIDTH=(\\d+)");
+    private static final Pattern RESOLUTION_PATTERN = Pattern.compile("RESOLUTION=(\\d+)x(\\d+)");
+    private static final Pattern MEDIA_SEQUENCE_PATTERN = Pattern.compile("#EXT-X-MEDIA-SEQUENCE:(\\d+)");
 
     private final OkHttpClient client;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicInteger proxyLogCount = new AtomicInteger(0);
+    private final FFmpegRunner.OnLogCallback logCallback;
 
     private ServerSocket serverSocket;
     private Thread serverThread;
     private int port;
 
     public HlsProxyServer() {
+        this(null);
+    }
+
+    public HlsProxyServer(FFmpegRunner.OnLogCallback logCallback) {
+        this.logCallback = logCallback;
+
         client = new OkHttpClient.Builder()
+            .dns(HlsProxyServer::lookupIpv4First)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
             .build();
+    }
+
+    private static List<InetAddress> lookupIpv4First(String hostname) throws UnknownHostException {
+        List<InetAddress> all = Dns.SYSTEM.lookup(hostname);
+        List<InetAddress> ipv4 = new ArrayList<>();
+        List<InetAddress> rest = new ArrayList<>();
+
+        for (InetAddress address : all) {
+            if (address instanceof Inet4Address) {
+                ipv4.add(address);
+            } else {
+                rest.add(address);
+            }
+        }
+
+        if (!ipv4.isEmpty()) {
+            ipv4.addAll(rest);
+            return ipv4;
+        }
+
+        return all;
     }
 
     public synchronized void start() throws IOException {
@@ -105,7 +142,7 @@ public class HlsProxyServer {
 
     private void handleSocket(Socket socket) {
         try (Socket s = socket) {
-            s.setSoTimeout(30000);
+            s.setSoTimeout(90000);
 
             BufferedReader reader = new BufferedReader(
                 new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8)
@@ -171,13 +208,27 @@ public class HlsProxyServer {
     }
 
     private void proxyRemoteUrl(Socket socket, String remoteUrl, String rangeHeader) throws IOException {
+        boolean isSegmentUrl =
+            remoteUrl.contains("/videoplayback/")
+            || remoteUrl.contains("/seg.ts")
+            || remoteUrl.contains("file/seg.ts");
+
+        boolean isPlaylistUrl =
+            remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
+            || remoteUrl.contains("/hls_playlist/")
+            || remoteUrl.contains("/hls_variant/");
+
         Request.Builder builder = new Request.Builder()
             .url(remoteUrl)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36")
-            .header("Referer", "https://www.youtube.com/")
-            .header("Origin", "https://www.youtube.com")
             .header("Accept", "*/*")
-            .header("Accept-Encoding", "identity");
+            .header("Accept-Encoding", "identity")
+            .header("Connection", "close");
+
+        if (isPlaylistUrl) {
+            builder.header("Referer", "https://www.youtube.com/");
+            builder.header("Origin", "https://www.youtube.com");
+        }
 
         if (rangeHeader != null && !rangeHeader.isEmpty()) {
             builder.header("Range", rangeHeader);
@@ -185,8 +236,36 @@ public class HlsProxyServer {
 
         try (Response response = client.newCall(builder.build()).execute()) {
             ResponseBody body = response.body();
+            String contentType = response.header("Content-Type", "");
+            long contentLength = body != null ? body.contentLength() : -1;
+
+            if (isSegmentUrl || !response.isSuccessful()) {
+                proxyLog(
+                    "upstream "
+                        + response.code()
+                        + " type="
+                        + contentType
+                        + " len="
+                        + contentLength
+                        + " url="
+                        + shortRemoteUrl(remoteUrl)
+                );
+            }
 
             if (!response.isSuccessful() || body == null) {
+                String errorText = "";
+
+                if (body != null) {
+                    try {
+                        errorText = body.string();
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                if (!errorText.isEmpty()) {
+                    proxyLog("upstream error body: " + shorten(errorText, 220));
+                }
+
                 writeTextResponse(
                     socket,
                     response.code(),
@@ -196,7 +275,6 @@ public class HlsProxyServer {
                 return;
             }
 
-            String contentType = response.header("Content-Type", "");
             boolean isPlaylist =
                 remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
                 || contentType.toLowerCase(Locale.US).contains("mpegurl")
@@ -206,21 +284,39 @@ public class HlsProxyServer {
                 String playlist = body.string();
                 String rewritten = rewritePlaylist(remoteUrl, playlist);
                 writeTextResponse(socket, 200, "OK", rewritten, "application/vnd.apple.mpegurl");
-            } else {
-                writeStreamResponse(socket, response, body);
+                return;
             }
+
+            if (isSegmentUrl && looksLikeTextResponse(contentType)) {
+                String text = body.string();
+                proxyLog("segment returned text instead of media: " + shorten(text, 220));
+
+                writeTextResponse(
+                    socket,
+                    502,
+                    "Bad Gateway",
+                    "Segment returned text instead of media"
+                );
+                return;
+            }
+
+            writeStreamResponse(socket, response, body);
         }
     }
 
     private String rewritePlaylist(String playlistUrl, String playlist) {
+        if (playlist.contains("#EXT-X-STREAM-INF")) {
+            return rewriteMasterPlaylistChooseOneVariant(playlistUrl, playlist);
+        }
+
         if (playlist.contains("#EXTINF")) {
             return rewriteMediaPlaylistAtLiveEdge(playlistUrl, playlist);
         }
 
-        return rewriteMasterPlaylist(playlistUrl, playlist);
+        return rewriteSimplePlaylist(playlistUrl, playlist);
     }
 
-    private String rewriteMasterPlaylist(String playlistUrl, String playlist) {
+    private String rewriteSimplePlaylist(String playlistUrl, String playlist) {
         StringBuilder out = new StringBuilder();
         String[] lines = playlist.split("\\r?\\n");
 
@@ -244,6 +340,161 @@ public class HlsProxyServer {
         return out.toString();
     }
 
+    private String rewriteMasterPlaylistChooseOneVariant(String playlistUrl, String playlist) {
+        String[] lines = playlist.split("\\r?\\n");
+        List<String> headerLines = new ArrayList<>();
+        List<Variant> variants = new ArrayList<>();
+
+        String pendingStreamInfo = null;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+
+            if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                pendingStreamInfo = rewriteTagUris(playlistUrl, line);
+                continue;
+            }
+
+            if (pendingStreamInfo != null) {
+                if (!trimmed.startsWith("#")) {
+                    String absolute = resolveUrl(playlistUrl, trimmed);
+                    variants.add(new Variant(pendingStreamInfo, createProxyUrl(absolute), absolute));
+                    pendingStreamInfo = null;
+                    continue;
+                }
+
+                headerLines.add(pendingStreamInfo);
+                pendingStreamInfo = null;
+            }
+
+            if (!trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                headerLines.add(rewriteTagUris(playlistUrl, line));
+            }
+        }
+
+        if (variants.isEmpty()) {
+            return rewriteSimplePlaylist(playlistUrl, playlist);
+        }
+
+        Variant chosen = chooseBestVariant(variants);
+
+        proxyLog(
+            "selected HLS variant "
+                + describeVariant(chosen.streamInfo)
+                + " url="
+                + shortRemoteUrl(chosen.remoteUrl)
+        );
+
+        StringBuilder out = new StringBuilder();
+
+        boolean hasPlaylistHeader = false;
+
+        for (String header : headerLines) {
+            if (header.startsWith("#EXTM3U")) {
+                hasPlaylistHeader = true;
+            }
+        }
+
+        if (!hasPlaylistHeader) {
+            out.append("#EXTM3U\n");
+        }
+
+        for (String header : headerLines) {
+            if (!header.startsWith("#EXT-X-STREAM-INF")) {
+                out.append(header).append('\n');
+            }
+        }
+
+        out.append(chosen.streamInfo).append('\n');
+        out.append(chosen.proxyUrl).append('\n');
+
+        return out.toString();
+    }
+
+    private Variant chooseBestVariant(List<Variant> variants) {
+        Variant bestUnder480 = null;
+        Variant bestAny = null;
+
+        for (Variant variant : variants) {
+            int height = parseHeight(variant.streamInfo);
+            int bandwidth = parseBandwidth(variant.streamInfo);
+
+            if (bestAny == null || bandwidth > parseBandwidth(bestAny.streamInfo)) {
+                bestAny = variant;
+            }
+
+            if (height > 0 && height <= 480) {
+                if (bestUnder480 == null || height > parseHeight(bestUnder480.streamInfo)) {
+                    bestUnder480 = variant;
+                }
+            }
+        }
+
+        if (bestUnder480 != null) {
+            return bestUnder480;
+        }
+
+        for (Variant variant : variants) {
+            if (variant.remoteUrl.contains("/itag/94/")
+                || variant.remoteUrl.contains("/itag/93/")
+                || variant.remoteUrl.contains("/itag/92/")
+                || variant.remoteUrl.contains("/itag/91/")) {
+                return variant;
+            }
+        }
+
+        return bestAny != null ? bestAny : variants.get(0);
+    }
+
+    private int parseHeight(String streamInfo) {
+        Matcher matcher = RESOLUTION_PATTERN.matcher(streamInfo);
+
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(2));
+            } catch (Exception ignored) {
+            }
+        }
+
+        return -1;
+    }
+
+    private int parseBandwidth(String streamInfo) {
+        Matcher matcher = BANDWIDTH_PATTERN.matcher(streamInfo);
+
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(1));
+            } catch (Exception ignored) {
+            }
+        }
+
+        return -1;
+    }
+
+    private String describeVariant(String streamInfo) {
+        int height = parseHeight(streamInfo);
+        int bandwidth = parseBandwidth(streamInfo);
+
+        if (height > 0 && bandwidth > 0) {
+            return height + "p bw=" + bandwidth;
+        }
+
+        if (height > 0) {
+            return height + "p";
+        }
+
+        if (bandwidth > 0) {
+            return "bw=" + bandwidth;
+        }
+
+        return "unknown";
+    }
+
     private String rewriteMediaPlaylistAtLiveEdge(String playlistUrl, String playlist) {
         String[] lines = playlist.split("\\r?\\n");
 
@@ -253,6 +504,7 @@ public class HlsProxyServer {
 
         boolean sawFirstSegment = false;
         boolean collectingSegment = false;
+        long originalMediaSequence = parseMediaSequence(playlist);
 
         for (String line : lines) {
             String trimmed = line.trim();
@@ -290,6 +542,10 @@ public class HlsProxyServer {
 
             if (!sawFirstSegment) {
                 if (trimmed.startsWith("#EXT-X-MEDIA-SEQUENCE")) {
+                    continue;
+                }
+
+                if (trimmed.startsWith("#EXT-X-DISCONTINUITY")) {
                     continue;
                 }
 
@@ -335,7 +591,9 @@ public class HlsProxyServer {
             out.append("#EXT-X-TARGETDURATION:6\n");
         }
 
-        out.append("#EXT-X-MEDIA-SEQUENCE:").append(from).append('\n');
+        out.append("#EXT-X-MEDIA-SEQUENCE:")
+            .append(originalMediaSequence + from)
+            .append('\n');
 
         for (int i = from; i < segmentGroups.size(); i++) {
             List<String> group = segmentGroups.get(i);
@@ -346,6 +604,19 @@ public class HlsProxyServer {
         }
 
         return out.toString();
+    }
+
+    private long parseMediaSequence(String playlist) {
+        Matcher matcher = MEDIA_SEQUENCE_PATTERN.matcher(playlist);
+
+        if (matcher.find()) {
+            try {
+                return Long.parseLong(matcher.group(1));
+            } catch (Exception ignored) {
+            }
+        }
+
+        return 0;
     }
 
     private String rewriteTagUris(String baseUrl, String line) {
@@ -363,7 +634,7 @@ public class HlsProxyServer {
         return buffer.toString();
     }
 
-    private String resolveUrl(String baseUrl, String value) {
+       private String resolveUrl(String baseUrl, String value) {
         try {
             URL base = new URL(baseUrl);
             URL resolved = new URL(base, value);
@@ -457,4 +728,77 @@ public class HlsProxyServer {
 
         return "Content-Range: " + contentRange + "\r\n";
     }
-                    }
+
+    private boolean looksLikeTextResponse(String contentType) {
+        String lower = contentType == null ? "" : contentType.toLowerCase(Locale.US);
+
+        return lower.contains("text/")
+            || lower.contains("html")
+            || lower.contains("json")
+            || lower.contains("xml");
+    }
+
+    private void proxyLog(String message) {
+        Log.d(TAG, message);
+
+        if (logCallback == null) {
+            return;
+        }
+
+        int count = proxyLogCount.incrementAndGet();
+
+        if (count <= 50
+            || message.contains("error")
+            || message.contains("403")
+            || message.contains("404")
+            || message.contains("502")) {
+            logCallback.onLog("Proxy: " + message);
+        }
+    }
+
+    private String shortRemoteUrl(String remoteUrl) {
+        if (remoteUrl == null) {
+            return "";
+        }
+
+        int sq = remoteUrl.indexOf("/sq/");
+
+        if (sq >= 0) {
+            return remoteUrl.substring(sq);
+        }
+
+        int itag = remoteUrl.indexOf("/itag/");
+
+        if (itag >= 0) {
+            return remoteUrl.substring(itag);
+        }
+
+        return shorten(remoteUrl, 160);
+    }
+
+    private String shorten(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+
+        String clean = value.replace('\n', ' ').replace('\r', ' ').trim();
+
+        if (clean.length() <= max) {
+            return clean;
+        }
+
+        return clean.substring(0, max) + "...";
+    }
+
+    private static class Variant {
+        final String streamInfo;
+        final String proxyUrl;
+        final String remoteUrl;
+
+        Variant(String streamInfo, String proxyUrl, String remoteUrl) {
+            this.streamInfo = streamInfo;
+            this.proxyUrl = proxyUrl;
+            this.remoteUrl = remoteUrl;
+        }
+    }
+}
