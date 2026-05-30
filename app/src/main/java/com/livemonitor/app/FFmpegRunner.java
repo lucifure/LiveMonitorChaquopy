@@ -21,8 +21,22 @@ public class FFmpegRunner {
                                     String outPath,
                                     OnCompleteCallback callback,
                                     OnLogCallback logCallback) {
+        String headers =
+            "Referer: https://www.youtube.com/\r\n"
+            + "Origin: https://www.youtube.com\r\n"
+            + "Accept: */*\r\n"
+            + "Connection: keep-alive\r\n";
+
         String command =
             "-y"
+            + " -hide_banner"
+            + " -loglevel info"
+            + " -user_agent " + quote("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36")
+            + " -headers " + quote(headers)
+            + " -tls_verify 0"
+            + " -reconnect 1"
+            + " -reconnect_streamed 1"
+            + " -reconnect_delay_max 5"
             + " -i " + quote(manifestUrl)
             + " -c copy"
             + " -bsf:a aac_adtstoasc"
