@@ -123,7 +123,21 @@ public class HlsProxyServer {
 
     public String createProxyUrl(String remoteUrl) {
         String encoded = URLEncoder.encode(remoteUrl, StandardCharsets.UTF_8);
-        return "http://" + HOST + ":" + port + "/proxy?url=" + encoded;
+        String lower = remoteUrl == null ? "" : remoteUrl.toLowerCase(Locale.US);
+
+        String localPath = "/proxy";
+
+        if (lower.contains(".m3u8")
+            || lower.contains("/hls_playlist/")
+            || lower.contains("/hls_variant/")) {
+            localPath = "/playlist.m3u8";
+        } else if (lower.contains("/videoplayback/")
+            || lower.contains("/seg.ts")
+            || lower.contains("file/seg.ts")) {
+            localPath = "/seg.ts";
+        }
+
+        return "http://" + HOST + ":" + port + localPath + "?url=" + encoded;
     }
 
     private void acceptLoop() {
@@ -300,7 +314,7 @@ public class HlsProxyServer {
                 return;
             }
 
-            writeStreamResponse(socket, response, body);
+            writeStreamResponse(socket, response, body, isSegmentUrl);
         }
     }
 
@@ -413,9 +427,7 @@ public class HlsProxyServer {
         out.append(chosen.proxyUrl).append('\n');
 
         return out.toString();
-    }
-
-    private Variant chooseBestVariant(List<Variant> variants) {
+    }    private Variant chooseBestVariant(List<Variant> variants) {
         Variant bestUnder480 = null;
         Variant bestAny = null;
 
@@ -634,7 +646,7 @@ public class HlsProxyServer {
         return buffer.toString();
     }
 
-       private String resolveUrl(String baseUrl, String value) {
+    private String resolveUrl(String baseUrl, String value) {
         try {
             URL base = new URL(baseUrl);
             URL resolved = new URL(base, value);
@@ -644,8 +656,19 @@ public class HlsProxyServer {
         }
     }
 
-    private void writeStreamResponse(Socket socket, Response response, ResponseBody body) throws IOException {
+    private void writeStreamResponse(Socket socket,
+                                     Response response,
+                                     ResponseBody body,
+                                     boolean isSegmentUrl) throws IOException {
         String contentType = response.header("Content-Type", "application/octet-stream");
+
+        if (isSegmentUrl
+            && (contentType == null
+                || contentType.isEmpty()
+                || contentType.toLowerCase(Locale.US).contains("application/octet-stream"))) {
+            contentType = "video/mp2t";
+        }
+
         String contentRange = response.header("Content-Range", null);
         long contentLength = body.contentLength();
         int code = response.code();
@@ -801,4 +824,4 @@ public class HlsProxyServer {
             this.remoteUrl = remoteUrl;
         }
     }
-}
+                         }
