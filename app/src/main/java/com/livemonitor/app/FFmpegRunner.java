@@ -42,7 +42,10 @@ public class FFmpegRunner {
                 + " -reconnect 1"
                 + " -reconnect_streamed 1"
                 + " -reconnect_delay_max 5"
+                + " -live_start_index -3"
                 + " -i " + quote(proxyManifestUrl)
+                + " -map 0:v:0?"
+                + " -map 0:a:0?"
                 + " -c copy"
                 + " -bsf:a aac_adtstoasc"
                 + " -movflags +faststart"
