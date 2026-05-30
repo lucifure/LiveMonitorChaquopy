@@ -14,7 +14,11 @@ import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,6 +32,8 @@ public class HlsProxyServer {
 
     private static final String TAG = "HlsProxyServer";
     private static final String HOST = "127.0.0.1";
+    private static final int LIVE_SEGMENTS_TO_KEEP = 8;
+
     private static final Pattern URI_ATTR_PATTERN = Pattern.compile("URI=\"([^\"]+)\"");
 
     private final OkHttpClient client;
@@ -111,9 +117,17 @@ public class HlsProxyServer {
                 return;
             }
 
+            Map<String, String> requestHeaders = new HashMap<>();
+
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                // Consume HTTP request headers.
+                int colon = line.indexOf(':');
+
+                if (colon > 0) {
+                    String name = line.substring(0, colon).trim().toLowerCase(Locale.US);
+                    String value = line.substring(colon + 1).trim();
+                    requestHeaders.put(name, value);
+                }
             }
 
             String[] parts = requestLine.split(" ");
@@ -131,7 +145,8 @@ public class HlsProxyServer {
                 return;
             }
 
-            proxyRemoteUrl(s, remoteUrl);
+            String rangeHeader = requestHeaders.get("range");
+            proxyRemoteUrl(s, remoteUrl, rangeHeader);
 
         } catch (Exception e) {
             Log.e(TAG, "Socket handling failed", e);
@@ -155,16 +170,20 @@ public class HlsProxyServer {
         return URLDecoder.decode(encoded, StandardCharsets.UTF_8);
     }
 
-    private void proxyRemoteUrl(Socket socket, String remoteUrl) throws IOException {
-        Request request = new Request.Builder()
+    private void proxyRemoteUrl(Socket socket, String remoteUrl, String rangeHeader) throws IOException {
+        Request.Builder builder = new Request.Builder()
             .url(remoteUrl)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36")
             .header("Referer", "https://www.youtube.com/")
             .header("Origin", "https://www.youtube.com")
             .header("Accept", "*/*")
-            .build();
+            .header("Accept-Encoding", "identity");
 
-        try (Response response = client.newCall(request).execute()) {
+        if (rangeHeader != null && !rangeHeader.isEmpty()) {
+            builder.header("Range", rangeHeader);
+        }
+
+        try (Response response = client.newCall(builder.build()).execute()) {
             ResponseBody body = response.body();
 
             if (!response.isSuccessful() || body == null) {
@@ -194,6 +213,14 @@ public class HlsProxyServer {
     }
 
     private String rewritePlaylist(String playlistUrl, String playlist) {
+        if (playlist.contains("#EXTINF")) {
+            return rewriteMediaPlaylistAtLiveEdge(playlistUrl, playlist);
+        }
+
+        return rewriteMasterPlaylist(playlistUrl, playlist);
+    }
+
+    private String rewriteMasterPlaylist(String playlistUrl, String playlist) {
         StringBuilder out = new StringBuilder();
         String[] lines = playlist.split("\\r?\\n");
 
@@ -212,6 +239,110 @@ public class HlsProxyServer {
 
             String absolute = resolveUrl(playlistUrl, trimmed);
             out.append(createProxyUrl(absolute)).append('\n');
+        }
+
+        return out.toString();
+    }
+
+    private String rewriteMediaPlaylistAtLiveEdge(String playlistUrl, String playlist) {
+        String[] lines = playlist.split("\\r?\\n");
+
+        List<String> headerLines = new ArrayList<>();
+        List<List<String>> segmentGroups = new ArrayList<>();
+        List<String> pendingGroup = new ArrayList<>();
+
+        boolean sawFirstSegment = false;
+        boolean collectingSegment = false;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+
+            if (trimmed.equals("#EXT-X-ENDLIST")) {
+                continue;
+            }
+
+            if (trimmed.startsWith("#EXTINF")) {
+                collectingSegment = true;
+                pendingGroup = new ArrayList<>();
+                pendingGroup.add(rewriteTagUris(playlistUrl, line));
+                continue;
+            }
+
+            if (collectingSegment) {
+                if (trimmed.startsWith("#")) {
+                    pendingGroup.add(rewriteTagUris(playlistUrl, line));
+                    continue;
+                }
+
+                String absolute = resolveUrl(playlistUrl, trimmed);
+                pendingGroup.add(createProxyUrl(absolute));
+                segmentGroups.add(pendingGroup);
+
+                pendingGroup = new ArrayList<>();
+                collectingSegment = false;
+                sawFirstSegment = true;
+                continue;
+            }
+
+            if (!sawFirstSegment) {
+                if (trimmed.startsWith("#EXT-X-MEDIA-SEQUENCE")) {
+                    continue;
+                }
+
+                headerLines.add(rewriteTagUris(playlistUrl, line));
+            }
+        }
+
+        int from = Math.max(0, segmentGroups.size() - LIVE_SEGMENTS_TO_KEEP);
+
+        StringBuilder out = new StringBuilder();
+
+        boolean hasPlaylistHeader = false;
+        boolean hasVersion = false;
+        boolean hasTargetDuration = false;
+
+        for (String header : headerLines) {
+            if (header.startsWith("#EXTM3U")) {
+                hasPlaylistHeader = true;
+            }
+
+            if (header.startsWith("#EXT-X-VERSION")) {
+                hasVersion = true;
+            }
+
+            if (header.startsWith("#EXT-X-TARGETDURATION")) {
+                hasTargetDuration = true;
+            }
+        }
+
+        if (!hasPlaylistHeader) {
+            out.append("#EXTM3U\n");
+        }
+
+        for (String header : headerLines) {
+            out.append(header).append('\n');
+        }
+
+        if (!hasVersion) {
+            out.append("#EXT-X-VERSION:3\n");
+        }
+
+        if (!hasTargetDuration) {
+            out.append("#EXT-X-TARGETDURATION:6\n");
+        }
+
+        out.append("#EXT-X-MEDIA-SEQUENCE:").append(from).append('\n');
+
+        for (int i = from; i < segmentGroups.size(); i++) {
+            List<String> group = segmentGroups.get(i);
+
+            for (String groupLine : group) {
+                out.append(groupLine).append('\n');
+            }
         }
 
         return out.toString();
@@ -244,14 +375,16 @@ public class HlsProxyServer {
 
     private void writeStreamResponse(Socket socket, Response response, ResponseBody body) throws IOException {
         String contentType = response.header("Content-Type", "application/octet-stream");
+        String contentRange = response.header("Content-Range", null);
         long contentLength = body.contentLength();
+        int code = response.code();
 
         BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
 
         if (contentLength >= 0 && contentLength <= Integer.MAX_VALUE) {
-            writeHeaders(out, 200, "OK", contentType, (int) contentLength);
+            writeHeaders(out, code, response.message(), contentType, (int) contentLength, contentRange);
         } else {
-            writeHeaders(out, 200, "OK", contentType);
+            writeHeaders(out, code, response.message(), contentType, contentRange);
         }
 
         try (InputStream in = body.byteStream()) {
@@ -278,7 +411,7 @@ public class HlsProxyServer {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
 
         BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
-        writeHeaders(out, code, status, contentType, bytes.length);
+        writeHeaders(out, code, status, contentType, bytes.length, null);
         out.write(bytes);
         out.flush();
     }
@@ -286,10 +419,13 @@ public class HlsProxyServer {
     private void writeHeaders(BufferedOutputStream out,
                               int code,
                               String status,
-                              String contentType) throws IOException {
+                              String contentType,
+                              String contentRange) throws IOException {
         String headers =
             "HTTP/1.1 " + code + " " + status + "\r\n"
             + "Content-Type: " + contentType + "\r\n"
+            + "Accept-Ranges: bytes\r\n"
+            + contentRangeHeader(contentRange)
             + "Connection: close\r\n"
             + "\r\n";
 
@@ -300,14 +436,25 @@ public class HlsProxyServer {
                               int code,
                               String status,
                               String contentType,
-                              int contentLength) throws IOException {
+                              int contentLength,
+                              String contentRange) throws IOException {
         String headers =
             "HTTP/1.1 " + code + " " + status + "\r\n"
             + "Content-Type: " + contentType + "\r\n"
             + "Content-Length: " + contentLength + "\r\n"
+            + "Accept-Ranges: bytes\r\n"
+            + contentRangeHeader(contentRange)
             + "Connection: close\r\n"
             + "\r\n";
 
         out.write(headers.getBytes(StandardCharsets.UTF_8));
     }
-}
+
+    private String contentRangeHeader(String contentRange) {
+        if (contentRange == null || contentRange.isEmpty()) {
+            return "";
+        }
+
+        return "Content-Range: " + contentRange + "\r\n";
+    }
+                    }
