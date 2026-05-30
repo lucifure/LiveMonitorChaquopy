@@ -68,6 +68,7 @@ public class HlsProxyServer {
                 serverSocket.close();
             } catch (IOException ignored) {
             }
+
             serverSocket = null;
         }
 
@@ -105,6 +106,7 @@ public class HlsProxyServer {
             );
 
             String requestLine = reader.readLine();
+
             if (requestLine == null || requestLine.isEmpty()) {
                 return;
             }
@@ -115,6 +117,7 @@ public class HlsProxyServer {
             }
 
             String[] parts = requestLine.split(" ");
+
             if (parts.length < 2) {
                 writeTextResponse(s, 400, "Bad Request", "Bad request");
                 return;
@@ -137,12 +140,14 @@ public class HlsProxyServer {
 
     private String extractRemoteUrl(String path) {
         int marker = path.indexOf("?url=");
+
         if (marker < 0) {
             return null;
         }
 
         String encoded = path.substring(marker + 5);
         int amp = encoded.indexOf('&');
+
         if (amp >= 0) {
             encoded = encoded.substring(0, amp);
         }
@@ -239,9 +244,15 @@ public class HlsProxyServer {
 
     private void writeStreamResponse(Socket socket, Response response, ResponseBody body) throws IOException {
         String contentType = response.header("Content-Type", "application/octet-stream");
+        long contentLength = body.contentLength();
 
         BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
-        writeHeaders(out, 200, "OK", contentType);
+
+        if (contentLength >= 0 && contentLength <= Integer.MAX_VALUE) {
+            writeHeaders(out, 200, "OK", contentType, (int) contentLength);
+        } else {
+            writeHeaders(out, 200, "OK", contentType);
+        }
 
         try (InputStream in = body.byteStream()) {
             byte[] buffer = new byte[64 * 1024];
@@ -299,4 +310,4 @@ public class HlsProxyServer {
 
         out.write(headers.getBytes(StandardCharsets.UTF_8));
     }
-          }
+}
