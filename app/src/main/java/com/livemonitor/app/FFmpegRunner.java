@@ -25,7 +25,7 @@ public class FFmpegRunner {
         try {
             stopProxy();
 
-            proxyServer = new HlsProxyServer();
+            proxyServer = new HlsProxyServer(logCallback);
             proxyServer.start();
 
             String proxyManifestUrl = proxyServer.createProxyUrl(manifestUrl);
@@ -42,6 +42,7 @@ public class FFmpegRunner {
                 + " -reconnect 1"
                 + " -reconnect_streamed 1"
                 + " -reconnect_delay_max 5"
+                + " -rw_timeout 90000000"
                 + " -live_start_index -3"
                 + " -i " + quote(proxyManifestUrl)
                 + " -map 0:v:0?"
@@ -49,6 +50,7 @@ public class FFmpegRunner {
                 + " -c copy"
                 + " -bsf:a aac_adtstoasc"
                 + " -movflags +faststart"
+                + " -f mp4"
                 + " " + quote(outPath);
 
             if (logCallback != null) {
