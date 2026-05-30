@@ -125,16 +125,22 @@ public class HlsProxyServer {
         String encoded = URLEncoder.encode(remoteUrl, StandardCharsets.UTF_8);
         String lower = remoteUrl == null ? "" : remoteUrl.toLowerCase(Locale.US);
 
+        boolean isSegmentUrl =
+            lower.contains("/videoplayback/")
+            || lower.contains("/seg.ts")
+            || lower.contains("file/seg.ts");
+
+        boolean isPlaylistUrl =
+            lower.contains(".m3u8")
+            || lower.contains("/hls_playlist/")
+            || lower.contains("/hls_variant/");
+
         String localPath = "/proxy";
 
-        if (lower.contains(".m3u8")
-            || lower.contains("/hls_playlist/")
-            || lower.contains("/hls_variant/")) {
-            localPath = "/playlist.m3u8";
-        } else if (lower.contains("/videoplayback/")
-            || lower.contains("/seg.ts")
-            || lower.contains("file/seg.ts")) {
+        if (isSegmentUrl) {
             localPath = "/seg.ts";
+        } else if (isPlaylistUrl) {
+            localPath = "/playlist.m3u8";
         }
 
         return "http://" + HOST + ":" + port + localPath + "?url=" + encoded;
@@ -290,9 +296,10 @@ public class HlsProxyServer {
             }
 
             boolean isPlaylist =
-                remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
-                || contentType.toLowerCase(Locale.US).contains("mpegurl")
-                || contentType.toLowerCase(Locale.US).contains("application/vnd.apple.mpegurl");
+                !isSegmentUrl
+                && (remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
+                    || contentType.toLowerCase(Locale.US).contains("mpegurl")
+                    || contentType.toLowerCase(Locale.US).contains("application/vnd.apple.mpegurl"));
 
             if (isPlaylist) {
                 String playlist = body.string();
@@ -824,4 +831,4 @@ public class HlsProxyServer {
             this.remoteUrl = remoteUrl;
         }
     }
-                         }
+}
