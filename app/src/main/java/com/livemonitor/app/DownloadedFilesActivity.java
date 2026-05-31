@@ -201,4 +201,4 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         return Math.round(value * density);
     }
-          }
+}
