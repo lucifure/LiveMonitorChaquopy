@@ -574,7 +574,7 @@ public class RecordingItem {
         touch();
     }
 
-    public void setQuality(String quality) {
+        public void setQuality(String quality) {
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         touch();
     }
@@ -583,3 +583,4 @@ public class RecordingItem {
         this.progressPercent = clampProgress(progressPercent);
         touch();
     }
+}
