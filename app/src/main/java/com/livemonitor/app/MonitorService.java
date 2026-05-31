@@ -17,6 +17,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
@@ -308,15 +309,44 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel = storage.findChannelById(channelId);
 
         try {
-            log(LogItem.LEVEL_INFO, LogItem.SOURCE_RECORDER, channel, "Getting HLS manifest.", "");
+            String videoId = liveInfo == null ? "" : liveInfo.videoId;
 
-            String manifestUrl = getHlsManifestUrl(liveInfo.videoId);
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Getting HLS manifest.",
+                "videoId="
+                    + videoId
+                    + ", clients="
+                    + getConfiguredClientCountForLog()
+                    + ", apiKeys="
+                    + getConfiguredApiKeyCountForLog()
+            );
 
-            if (manifestUrl == null) {
-                throw new IllegalStateException("Could not get HLS manifest URL.");
+            String manifestUrl = getHlsManifestUrl(videoId, channel);
+
+            if (manifestUrl == null || manifestUrl.trim().isEmpty()) {
+                throw new IllegalStateException(
+                    "Could not get HLS manifest URL. Manifest resolver returned empty URL."
+                );
             }
 
-            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording started.", "");
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "HLS manifest found.",
+                "videoId=" + videoId + ", manifest=" + describeUrlForLog(manifestUrl)
+            );
+
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recording started.",
+                ""
+            );
 
             final ChannelItem logChannel = channel;
 
@@ -333,7 +363,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             );
         } catch (Exception e) {
-            recording.markFailed(e.getMessage());
+            String errorMessage = normalizeErrorMessage(e);
+
+            recording.markFailed(errorMessage);
             storage.upsertRecording(recording);
             activeRecordings.remove(channelId);
             progressTracker.untrack(recording);
@@ -341,15 +373,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ChannelItem latest = storage.findChannelById(channelId);
 
             if (latest != null) {
-                latest.markFailed(e.getMessage());
+                latest.markFailed(errorMessage);
                 storage.upsertChannel(latest);
                 notificationHelper.showChannelMonitoringNotification(latest);
             }
 
-            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, latest, "Recording failed.", e.getMessage());
+            log(
+                LogItem.LEVEL_ERROR,
+                LogItem.SOURCE_RECORDER,
+                latest,
+                "Recording failed.",
+                errorMessage
+            );
+
             broadcastRecordingUpdated("Recording failed.");
         }
-        }
+    }
 
     private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
         RecordingItem recording = storage.findRecordingById(recordingId);
@@ -452,9 +491,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     .replaceAll("[/?#].*", "");
             }
 
-            if (handle == null || handle.trim().isEmpty()) return null;
-
-            String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
+            if (handle == null || handle.trim().isEmpty()) return null;            String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
                 + "?part=id&forHandle=" + URLEncoder.encode(handle, "UTF-8")
                 + "&key=" + getApiKey();
 
@@ -492,28 +529,153 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-    private String getHlsManifestUrl(String videoId) {
-        try {
-            String apiUrl = remoteConfig.getInnertubeBaseUrl() + "/player?key=" + getApiKey();
-
-            JSONObject context = new JSONObject()
-                .put("client", remoteConfig.getPrimaryClient().toInnertubeClientJson());
-
-            JSONObject body = new JSONObject()
-                .put("context", context)
-                .put("videoId", videoId)
-                .put("playbackContext", new JSONObject()
-                    .put("contentPlaybackContext", new JSONObject()
-                        .put("html5Preference", "HTML5_PREF_WANTS")));
-
-            JSONObject json = new JSONObject(httpPost(apiUrl, body.toString()));
-            JSONObject streamingData = json.optJSONObject("streamingData");
-
-            return streamingData == null ? null : streamingData.optString("hlsManifestUrl", null);
-        } catch (Exception e) {
-            Log.w(TAG, "getHlsManifestUrl failed", e);
-            return null;
+    private String getHlsManifestUrl(String videoId, ChannelItem channel) {
+        if (videoId == null || videoId.trim().isEmpty()) {
+            throw new IllegalStateException("Could not get HLS manifest URL. videoId is empty.");
         }
+
+        List<RemoteConfig.YoutubeClient> clients = remoteConfig.getYoutubeClients();
+        int clientCount = clients == null || clients.isEmpty() ? 1 : clients.size();
+        int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
+
+        String lastFailure = "";
+
+        for (int clientIndex = 0; clientIndex < clientCount; clientIndex++) {
+            RemoteConfig.YoutubeClient client = remoteConfig.getClientForAttempt(clientIndex);
+
+            if (client == null || !client.isValid()) {
+                lastFailure = "Invalid YouTube client. clientIndex=" + clientIndex;
+
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "HLS manifest client skipped.",
+                    lastFailure
+                );
+
+                continue;
+            }
+
+            for (int keyIndex = 0; keyIndex < apiKeyCount; keyIndex++) {
+                String apiKey = getApiKeyForAttempt(keyIndex);
+                String apiUrl = remoteConfig.getInnertubeBaseUrl() + "/player?key=" + apiKey;
+
+                String attemptDetails = "videoId="
+                    + videoId
+                    + ", clientIndex="
+                    + clientIndex
+                    + ", client="
+                    + describeClientForLog(client)
+                    + ", keyAttempt="
+                    + keyIndex
+                    + ", key="
+                    + maskApiKeyForLog(apiKey);
+
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Trying HLS manifest request.",
+                    attemptDetails
+                );
+
+                try {
+                    JSONObject context = new JSONObject()
+                        .put("client", client.toInnertubeClientJson());
+
+                    JSONObject body = new JSONObject()
+                        .put("context", context)
+                        .put("videoId", videoId)
+                        .put("contentCheckOk", true)
+                        .put("racyCheckOk", true)
+                        .put("playbackContext", new JSONObject()
+                            .put("contentPlaybackContext", new JSONObject()
+                                .put("html5Preference", "HTML5_PREF_WANTS")));
+
+                    String response = httpPost(apiUrl, body.toString(), client);
+                    JSONObject json = new JSONObject(response);
+
+                    JSONObject playabilityStatus = json.optJSONObject("playabilityStatus");
+                    String status = playabilityStatus == null
+                        ? ""
+                        : playabilityStatus.optString("status", "");
+                    String reason = playabilityStatus == null
+                        ? ""
+                        : playabilityStatus.optString("reason", "");
+
+                    JSONObject streamingData = json.optJSONObject("streamingData");
+
+                    if (streamingData == null) {
+                        lastFailure = "No streamingData. "
+                            + attemptDetails
+                            + ", status="
+                            + status
+                            + ", reason="
+                            + reason
+                            + ", response="
+                            + summarizeInnertubeResponseForLog(json);
+
+                        log(
+                            LogItem.LEVEL_WARNING,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            "HLS manifest attempt failed.",
+                            lastFailure
+                        );
+
+                        continue;
+                    }
+
+                    String hlsManifestUrl = streamingData.optString("hlsManifestUrl", "");
+
+                    if (hlsManifestUrl == null || hlsManifestUrl.trim().isEmpty()) {
+                        lastFailure = "No hlsManifestUrl. "
+                            + attemptDetails
+                            + ", status="
+                            + status
+                            + ", reason="
+                            + reason
+                            + ", streamingDataKeys="
+                            + streamingData.names();
+
+                        log(
+                            LogItem.LEVEL_WARNING,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            "HLS manifest attempt failed.",
+                            lastFailure
+                        );
+
+                        continue;
+                    }
+
+                    log(
+                        LogItem.LEVEL_SUCCESS,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "HLS manifest request succeeded.",
+                        attemptDetails + ", manifest=" + describeUrlForLog(hlsManifestUrl)
+                    );
+
+                    return hlsManifestUrl;
+                } catch (Exception e) {
+                    lastFailure = attemptDetails + ", error=" + normalizeErrorMessage(e);
+
+                    log(
+                        LogItem.LEVEL_WARNING,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "HLS manifest request error.",
+                        lastFailure
+                    );
+
+                    Log.w(TAG, "getHlsManifestUrl attempt failed: " + lastFailure, e);
+                }
+            }
+        }
+
+        throw new IllegalStateException("Could not get HLS manifest URL. " + lastFailure);
     }
 
     private String httpGet(String urlString) throws Exception {
@@ -525,7 +687,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return readResponse(connection);
     }
 
-    private String httpPost(String urlString, String body) throws Exception {
+    private String httpPost(
+        String urlString,
+        String body,
+        RemoteConfig.YoutubeClient client
+    ) throws Exception {
         byte[] bodyBytes = body.getBytes("UTF-8");
 
         HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
@@ -535,6 +701,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
         connection.setRequestProperty("User-Agent", remoteConfig.getUserAgent());
+        connection.setRequestProperty("Origin", remoteConfig.getWebPlayerBaseUrl());
+        connection.setRequestProperty("Referer", remoteConfig.getWebPlayerBaseUrl() + "/");
+        connection.setRequestProperty("X-Youtube-Client-Name", client.getClientName());
+        connection.setRequestProperty("X-Youtube-Client-Version", client.getClientVersion());
         connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
         connection.getOutputStream().write(bodyBytes);
 
@@ -544,27 +714,162 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private String readResponse(HttpURLConnection connection) throws Exception {
         int responseCode = connection.getResponseCode();
 
-        if (responseCode < 200 || responseCode >= 300) {
-            throw new IllegalStateException("HTTP " + responseCode);
+        InputStream stream = responseCode >= 200 && responseCode < 300
+            ? connection.getInputStream()
+            : connection.getErrorStream();
+
+        BufferedReader reader = null;
+
+        try {
+            StringBuilder builder = new StringBuilder();
+
+            if (stream != null) {
+                reader = new BufferedReader(new InputStreamReader(stream));
+                String line;
+
+                while ((line = reader.readLine()) != null) {
+                    builder.append(line);
+                }
+            }
+
+            String response = builder.toString();
+
+            if (responseCode < 200 || responseCode >= 300) {
+                throw new IllegalStateException(
+                    "HTTP "
+                        + responseCode
+                        + ": "
+                        + shortenForLog(response, 700)
+                );
+            }
+
+            return response;
+        } finally {
+            if (reader != null) {
+                reader.close();
+            }
+
+            connection.disconnect();
         }
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-        StringBuilder builder = new StringBuilder();
-        String line;
-
-        while ((line = reader.readLine()) != null) {
-            builder.append(line);
-        }
-
-        reader.close();
-        connection.disconnect();
-
-        return builder.toString();
     }
 
     private String getApiKey() {
-        String key = remoteConfig.getPrimaryApiKey();
-        return key == null || key.trim().isEmpty() ? FALLBACK_YT_API_KEY : key;
+        return getApiKeyForAttempt(0);
+    }
+
+    private String getApiKeyForAttempt(int attempt) {
+        String key = remoteConfig.getApiKeyForAttempt(attempt);
+
+        if (key == null || key.trim().isEmpty()) {
+            return FALLBACK_YT_API_KEY;
+        }
+
+        return key.trim();
+    }
+
+    private int getConfiguredClientCountForLog() {
+        List<RemoteConfig.YoutubeClient> clients = remoteConfig.getYoutubeClients();
+        return clients == null || clients.isEmpty() ? 1 : clients.size();
+    }
+
+    private int getConfiguredApiKeyCountForLog() {
+        return Math.max(1, remoteConfig.getApiKeys().size());
+    }
+
+    private static String describeClientForLog(RemoteConfig.YoutubeClient client) {
+        if (client == null) {
+            return "null";
+        }
+
+        return client.getClientName() + "/" + client.getClientVersion();
+    }
+
+    private static String maskApiKeyForLog(String apiKey) {
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            return "empty";
+        }
+
+        String trimmed = apiKey.trim();
+
+        if (trimmed.length() <= 8) {
+            return "****";
+        }
+
+        return trimmed.substring(0, 4)
+            + "..."
+            + trimmed.substring(trimmed.length() - 4);
+    }
+
+    private static String summarizeInnertubeResponseForLog(JSONObject json) {
+        if (json == null) {
+            return "empty";
+        }
+
+        JSONObject playabilityStatus = json.optJSONObject("playabilityStatus");
+        JSONObject videoDetails = json.optJSONObject("videoDetails");
+
+        String status = playabilityStatus == null
+            ? ""
+            : playabilityStatus.optString("status", "");
+        String reason = playabilityStatus == null
+            ? ""
+            : playabilityStatus.optString("reason", "");
+        String playableInEmbed = playabilityStatus == null
+            ? ""
+            : playabilityStatus.optString("playableInEmbed", "");
+        String liveContent = videoDetails == null
+            ? ""
+            : videoDetails.optString("isLiveContent", "");
+
+        return "status="
+            + status
+            + ", reason="
+            + reason
+            + ", playableInEmbed="
+            + playableInEmbed
+            + ", isLiveContent="
+            + liveContent
+            + ", topLevelKeys="
+            + json.names();
+    }
+
+    private static String describeUrlForLog(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return "empty";
+        }
+
+        try {
+            URL parsed = new URL(url);
+            return parsed.getProtocol() + "://" + parsed.getHost() + parsed.getPath();
+        } catch (Exception e) {
+            return shortenForLog(url, 160);
+        }
+    }
+
+    private static String normalizeErrorMessage(Exception e) {
+        if (e == null) {
+            return "Unknown error.";
+        }
+
+        String message = e.getMessage();
+
+        if (message == null || message.trim().isEmpty()) {
+            return e.getClass().getSimpleName();
+        }
+
+        return message.trim();
+    }
+
+    private static String shortenForLog(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+
+        if (maxLength <= 0 || value.length() <= maxLength) {
+            return value;
+        }
+
+        return value.substring(0, maxLength) + "...";
     }
 
     @Override
@@ -740,4 +1045,4 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             this.videoUrl = videoUrl;
         }
     }
-}
+                                                              }
