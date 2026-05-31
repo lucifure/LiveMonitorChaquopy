@@ -27,11 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Foreground service for multi-channel monitoring and recording.
- */
 public class MonitorService extends Service implements NetworkMonitor.Listener {
-
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
 
@@ -55,7 +51,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     @Override
     public void onCreate() {
         super.onCreate();
-
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
@@ -73,7 +68,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
-
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
 
@@ -81,7 +75,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public int onStartCommand(Intent intent, int flags, int startId) {
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
-
         ensureForeground();
         acquireWakeLock();
 
@@ -116,7 +109,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void handleStart(Intent intent) {
         String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
         String url = intent.getStringExtra(LiveMonitorActions.EXTRA_URL);
-
         ChannelItem channel = storage.findChannelById(channelId);
 
         if (channel == null && url != null && !url.trim().isEmpty()) {
@@ -135,16 +127,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         channel.resumeMonitoring();
         channel.markWaitingForLive();
         storage.upsertChannel(channel);
-
         startChannelLoop(channel);
     }
 
     private void handlePause(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
-
-        if (channel == null) {
-            return;
-        }
+        if (channel == null) return;
 
         channel.markPausedByUser();
         storage.upsertChannel(channel);
@@ -155,10 +143,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private void handleResume(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
-
-        if (channel == null) {
-            return;
-        }
+        if (channel == null) return;
 
         channel.resumeMonitoring();
         channel.markWaitingForLive();
@@ -169,10 +154,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private void handleRemove(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
-
-        if (channel == null) {
-            return;
-        }
+        if (channel == null) return;
 
         activeLoops.remove(channel.getId());
         notificationHelper.cancelChannelNotification(channel);
@@ -182,10 +164,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private void handleStopChannel(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
-
-        if (channel == null) {
-            return;
-        }
+        if (channel == null) return;
 
         activeLoops.remove(channel.getId());
         channel.markStopped();
@@ -195,20 +174,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
-        if (intent == null) {
-            return null;
-        }
+        if (intent == null) return null;
 
         String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
         String url = intent.getStringExtra(LiveMonitorActions.EXTRA_URL);
-
         ChannelItem channel = storage.findChannelById(channelId);
 
-        if (channel == null && url != null) {
-            channel = storage.findChannelByNormalizedUrl(url);
-        }
-
-        return channel;
+        return channel != null || url == null
+            ? channel
+            : storage.findChannelByNormalizedUrl(url);
     }
 
     private void restoreSavedChannels() {
@@ -226,17 +200,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void startChannelLoop(ChannelItem channel) {
-        if (channel == null || activeLoops.containsKey(channel.getId())) {
-            return;
-        }
+        if (channel == null || activeLoops.containsKey(channel.getId())) return;
 
         serviceRunning = true;
         activeLoops.put(channel.getId(), true);
         notificationHelper.showChannelMonitoringNotification(channel);
-
         executor.execute(() -> monitorChannel(channel.getId()));
         updateServiceNotification();
-
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, channel, "Monitoring started.", "");
     }
 
@@ -298,15 +268,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 notificationHelper.showLiveDetectedNotification(channel);
                 notificationHelper.showChannelMonitoringNotification(channel);
                 broadcastChannelUpdated("Live detected.");
-
                 startRecording(channel, liveInfo);
                 sleep(settings.getPollIntervalMillis());
             } catch (Exception e) {
                 ChannelItem latest = storage.findChannelById(channelId);
-
-                if (latest != null) {
-                    handleRetry(latest, e.getMessage());
-                }
+                if (latest != null) handleRetry(latest, e.getMessage());
             }
         }
 
@@ -326,7 +292,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
 
         fileManager.cleanupTempFolderBeforeRecording();
-
         recording.markRecording();
         storage.upsertRecording(recording);
         activeRecordings.put(channel.getId(), recording);
@@ -388,9 +353,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = storage.findRecordingById(recordingId);
         ChannelItem channel = storage.findChannelById(channelId);
 
-        if (recording == null) {
-            return;
-        }
+        if (recording == null) return;
 
         activeRecordings.remove(channelId);
         progressTracker.untrack(recording);
@@ -450,9 +413,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void handleRetry(ChannelItem channel, String message) {
-        if (channel == null) {
-            return;
-        }
+        if (channel == null) return;
 
         if (!channel.canRetry()) {
             channel.markFailed(message);
@@ -472,9 +433,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private String resolveChannelId(String channelUrl) {
         try {
-            if (channelUrl == null) {
-                return null;
-            }
+            if (channelUrl == null) return null;
 
             if (channelUrl.contains("/channel/")) {
                 return channelUrl.substring(channelUrl.indexOf("/channel/") + 9)
@@ -491,9 +450,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     .replaceAll("[/?#].*", "");
             }
 
-            if (handle == null || handle.trim().isEmpty()) {
-                return null;
-            }
+            if (handle == null || handle.trim().isEmpty()) return null;
 
             String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
                 + "?part=id&forHandle=" + URLEncoder.encode(handle, "UTF-8")
@@ -502,14 +459,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             JSONObject json = new JSONObject(httpGet(apiUrl));
             JSONArray items = json.optJSONArray("items");
 
-            if (items != null && items.length() > 0) {
-                return items.getJSONObject(0).getString("id");
-            }
+            return items != null && items.length() > 0
+                ? items.getJSONObject(0).getString("id")
+                : null;
         } catch (Exception e) {
             Log.w(TAG, "resolveChannelId failed", e);
+            return null;
         }
-
-        return null;
     }
 
     private LiveInfo checkLive(String channelId) {
@@ -521,9 +477,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             JSONObject json = new JSONObject(httpGet(apiUrl));
             JSONArray items = json.optJSONArray("items");
 
-            if (items == null || items.length() == 0) {
-                return null;
-            }
+            if (items == null || items.length() == 0) return null;
 
             JSONObject item = items.getJSONObject(0);
             String videoId = item.getJSONObject("id").getString("videoId");
@@ -553,11 +507,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             JSONObject json = new JSONObject(httpPost(apiUrl, body.toString()));
             JSONObject streamingData = json.optJSONObject("streamingData");
 
-            if (streamingData == null) {
-                return null;
-            }
-
-            return streamingData.optString("hlsManifestUrl", null);
+            return streamingData == null ? null : streamingData.optString("hlsManifestUrl", null);
         } catch (Exception e) {
             Log.w(TAG, "getHlsManifestUrl failed", e);
             return null;
@@ -667,9 +617,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void acquireWakeLock() {
-        if (wakeLock != null && wakeLock.isHeld()) {
-            return;
-        }
+        if (wakeLock != null && wakeLock.isHeld()) return;
 
         PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveMonitor::WakeLock");
@@ -677,17 +625,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void releaseWakeLock() {
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
-        }
-
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         wakeLock = null;
     }
 
     private void stopAll() {
-        if (shuttingDown) {
-            return;
-        }
+        if (shuttingDown) return;
 
         shuttingDown = true;
         serviceRunning = false;
@@ -703,13 +646,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         activeRecordings.clear();
         FFmpegRunner.cancel();
 
-        if (progressTracker != null) {
-            progressTracker.stop();
-        }
-
-        if (networkMonitor != null) {
-            networkMonitor.stop();
-        }
+        if (progressTracker != null) progressTracker.stop();
+        if (networkMonitor != null) networkMonitor.stop();
 
         notificationHelper.cancelAllChannelNotifications(storage.loadChannels());
         releaseWakeLock();
@@ -759,20 +697,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private static String quote(String value) {
-        if (value == null) {
-            return "''";
-        }
-
-        return "'" + value.replace("'", "'\\''") + "'";
+        return value == null ? "''" : "'" + value.replace("'", "'\\''") + "'";
     }
 
     private static void safeDelete(String path) {
         try {
             if (path != null) {
                 File file = new File(path);
-                if (file.exists()) {
-                    file.delete();
-                }
+                if (file.exists()) file.delete();
             }
         } catch (Exception ignored) {
             // Ignore cleanup failure.
