@@ -653,4 +653,3 @@ public class AppStorage {
     public synchronized List<LogItem> loadLogsReadOnly() {
         return Collections.unmodifiableList(loadLogs());
     }
-        }
