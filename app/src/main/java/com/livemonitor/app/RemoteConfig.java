@@ -592,4 +592,3 @@ public class RemoteConfig {
             this.enabled = enabled;
         }
     }
-        }
