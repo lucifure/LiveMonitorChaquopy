@@ -50,6 +50,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
+    private volatile boolean shuttingDown = false;
 
     @Override
     public void onCreate() {
@@ -269,6 +270,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 storage.upsertChannel(channel);
 
                 String resolvedChannelId = resolveChannelId(channel.getUrl());
+
                 if (resolvedChannelId == null) {
                     handleRetry(channel, "Could not resolve channel ID.");
                     continue;
@@ -300,10 +302,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 startRecording(channel, liveInfo);
                 sleep(settings.getPollIntervalMillis());
             } catch (Exception e) {
-                channel = storage.findChannelById(channelId);
+                ChannelItem latest = storage.findChannelById(channelId);
 
-                if (channel != null) {
-                    handleRetry(channel, e.getMessage());
+                if (latest != null) {
+                    handleRetry(latest, e.getMessage());
                 }
             }
         }
@@ -312,11 +314,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void startRecording(ChannelItem channel, LiveInfo liveInfo) {
-        if (channel == null || liveInfo == null) {
-            return;
-        }
-
-        if (activeRecordings.containsKey(channel.getId())) {
+        if (channel == null || liveInfo == null || activeRecordings.containsKey(channel.getId())) {
             return;
         }
 
@@ -355,6 +353,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording started.", "");
 
+            final ChannelItem logChannel = channel;
+
             FFmpegRunner.executeAsync(
                 manifestUrl,
                 recording.getTempTsPath(),
@@ -363,7 +363,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     if (message != null
                         && !message.startsWith("frame=")
                         && !message.startsWith("size=")) {
-                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, channel, message, "");
+                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
                     }
                 }
             );
@@ -373,14 +373,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             activeRecordings.remove(channelId);
             progressTracker.untrack(recording);
 
-            channel = storage.findChannelById(channelId);
-            if (channel != null) {
-                channel.markFailed(e.getMessage());
-                storage.upsertChannel(channel);
-                notificationHelper.showChannelMonitoringNotification(channel);
+            ChannelItem latest = storage.findChannelById(channelId);
+
+            if (latest != null) {
+                latest.markFailed(e.getMessage());
+                storage.upsertChannel(latest);
+                notificationHelper.showChannelMonitoringNotification(latest);
             }
 
-            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, channel, "Recording failed.", e.getMessage());
+            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, latest, "Recording failed.", e.getMessage());
             broadcastRecordingUpdated("Recording failed.");
         }
     }    private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
@@ -435,32 +436,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ReturnCode.isSuccess(code)) {
                 recording.markCompleted(recording.getFinalMp4Path());
                 safeDelete(recording.getTempTsPath());
-                log(
-                    LogItem.LEVEL_SUCCESS,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "Recording completed.",
-                    recording.getFinalMp4Path()
-                );
+                log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording completed.", recording.getFinalMp4Path());
             } else {
                 recording.markRecoverable("MP4 conversion failed.");
-                log(
-                    LogItem.LEVEL_WARNING,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "Conversion failed.",
-                    ""
-                );
+                log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "Conversion failed.", "");
             }
         } catch (Exception e) {
             recording.markRecoverable(e.getMessage());
-            log(
-                LogItem.LEVEL_ERROR,
-                LogItem.SOURCE_RECORDER,
-                channel,
-                "Conversion error.",
-                e.getMessage()
-            );
+            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, channel, "Conversion error.", e.getMessage());
         }
 
         storage.upsertRecording(recording);
@@ -484,7 +467,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertChannel(channel);
         notificationHelper.showChannelMonitoringNotification(channel);
         broadcastChannelUpdated("Retrying.");
-
         sleep(channel.getNextRetryDelayMillis());
     }
 
@@ -514,10 +496,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
-                + "?part=id&forHandle="
-                + URLEncoder.encode(handle, "UTF-8")
-                + "&key="
-                + getApiKey();
+                + "?part=id&forHandle=" + URLEncoder.encode(handle, "UTF-8")
+                + "&key=" + getApiKey();
 
             JSONObject json = new JSONObject(httpGet(apiUrl));
             JSONArray items = json.optJSONArray("items");
@@ -535,10 +515,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private LiveInfo checkLive(String channelId) {
         try {
             String apiUrl = "https://www.googleapis.com/youtube/v3/search"
-                + "?part=snippet&channelId="
-                + URLEncoder.encode(channelId, "UTF-8")
-                + "&eventType=live&type=video&maxResults=1&key="
-                + getApiKey();
+                + "?part=snippet&channelId=" + URLEncoder.encode(channelId, "UTF-8")
+                + "&eventType=live&type=video&maxResults=1&key=" + getApiKey();
 
             JSONObject json = new JSONObject(httpGet(apiUrl));
             JSONArray items = json.optJSONArray("items");
@@ -560,12 +538,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private String getHlsManifestUrl(String videoId) {
         try {
-            String apiUrl = remoteConfig.getInnertubeBaseUrl()
-                + "/player?key="
-                + getApiKey();
+            String apiUrl = remoteConfig.getInnertubeBaseUrl() + "/player?key=" + getApiKey();
 
-            JSONObject client = remoteConfig.getPrimaryClient().toInnertubeClientJson();
-            JSONObject context = new JSONObject().put("client", client);
+            JSONObject context = new JSONObject()
+                .put("client", remoteConfig.getPrimaryClient().toInnertubeClientJson());
+
             JSONObject body = new JSONObject()
                 .put("context", context)
                 .put("videoId", videoId)
@@ -708,6 +685,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void stopAll() {
+        if (shuttingDown) {
+            return;
+        }
+
+        shuttingDown = true;
         serviceRunning = false;
         activeLoops.clear();
 
@@ -720,8 +702,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         activeRecordings.clear();
         FFmpegRunner.cancel();
-        progressTracker.stop();
-        networkMonitor.stop();
+
+        if (progressTracker != null) {
+            progressTracker.stop();
+        }
+
+        if (networkMonitor != null) {
+            networkMonitor.stop();
+        }
+
         notificationHelper.cancelAllChannelNotifications(storage.loadChannels());
         releaseWakeLock();
 
@@ -817,4 +806,4 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             this.videoUrl = videoUrl;
         }
     }
-             }
+                }
