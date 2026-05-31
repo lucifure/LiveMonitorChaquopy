@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- App-specific external files directory:
+         Used for recordings saved under getExternalFilesDir(...). -->
+    <external-files-path
+        name="external_files"
+        path="." />
+
+    <!-- App internal files directory fallback:
+         Used if external app-specific storage is unavailable. -->
+    <files-path
+        name="internal_files"
+        path="." />
+
+    <!-- Cache fallback if needed for temporary shared files. -->
+    <cache-path
+        name="cache"
+        path="." />
+
+    <!-- External cache fallback if needed for temporary shared files. -->
+    <external-cache-path
+        name="external_cache"
+        path="." />
+
+</paths>
