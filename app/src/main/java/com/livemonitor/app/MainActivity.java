@@ -485,4 +485,3 @@ public class MainActivity extends AppCompatActivity {
         return android.graphics.Color.parseColor(color);
     }
 }
-            }
