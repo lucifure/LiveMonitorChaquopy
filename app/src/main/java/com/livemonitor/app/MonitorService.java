@@ -740,3 +740,4 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             this.videoUrl = videoUrl;
         }
     }
+}
