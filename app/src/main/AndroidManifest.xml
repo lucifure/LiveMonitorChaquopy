@@ -1,11 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet access for monitoring streams, remote config, API calls, and downloads. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Required for ConnectivityManager network checks and network callback listener. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Requested by your requirements. Note: ACCESS_NETWORK_STATE is the important one for detecting drops. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!-- Keep CPU awake while monitoring/recording in foreground service. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Foreground service support. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Android 14+ specific permission for data sync foreground services. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Android 13+ notification runtime permission. Must also be requested in code. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Optional: allows restoring monitoring after device reboot if user enabled saved monitoring. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Optional: lets app open battery optimization exemption screen.
+         Use carefully and only ask user when needed. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -16,6 +38,10 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
+        <!-- Main app screen:
+             - Top URL input and Add Channel button
+             - Bottom navigation with Monitoring and Downloads tabs
+             - 3-dot menu for Log, Downloaded Files, Settings -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -26,10 +52,69 @@
             </intent-filter>
         </activity>
 
+        <!-- Settings screen:
+             - Poll interval
+             - Download quality
+             - Save location
+             - Scheduled monitoring hours
+             - Battery optimization helper -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Global log screen:
+             - All channels tagged
+             - Copy log
+             - Clear log -->
+        <activity
+            android:name=".LogActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Per-channel log screen:
+             - Opened by tapping a channel
+             - Copy log
+             - Clear log -->
+        <activity
+            android:name=".ChannelLogActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Downloaded files screen:
+             - Saved recordings
+             - Completed converted MP4 files
+             - Recoverable TS files if crash happened before conversion -->
+        <activity
+            android:name=".DownloadedFilesActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Foreground monitoring service:
+             - Multi-channel monitoring
+             - Per-channel notifications
+             - Wake lock handling
+             - Network callback handling
+             - Auto retry/restart recording -->
         <service
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Boot receiver:
+             - Restores persisted monitoring list after phone reboot
+             - Should only restart monitoring if user enabled auto-restore behavior -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
     </application>
+
 </manifest>
