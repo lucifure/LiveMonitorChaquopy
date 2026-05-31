@@ -2,255 +2,486 @@ package com.livemonitor.app;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
-import android.text.Spannable;
-import android.text.SpannableStringBuilder;
-import android.text.method.ScrollingMovementMethod;
-import android.text.style.ForegroundColorSpan;
-import android.widget.ScrollView;
+import android.view.View;
+import android.widget.PopupMenu;
 import android.widget.Toast;
+
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import com.livemonitor.app.databinding.ActivityMainBinding;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 
+import com.livemonitor.app.databinding.ActivityMainBinding;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Main home screen.
+ *
+ * Layout:
+ * - fixed top URL input + Add Channel button
+ * - Monitoring tab
+ * - Downloads tab
+ * - 3-dot menu for logs, downloaded files, settings
+ */
 public class MainActivity extends AppCompatActivity {
 
     private ActivityMainBinding binding;
-    private BroadcastReceiver logReceiver;
-    private SpannableStringBuilder logBuilder = new SpannableStringBuilder();
-    private StringBuilder plainLogBuilder = new StringBuilder();
-    private int logLineCount = 0;
-    private static final int MAX_LOG_LINES = 200;
+    private AppStorage storage;
+    private ChannelAdapter channelAdapter;
+    private RecordingAdapter recordingAdapter;
+    private BroadcastReceiver updateReceiver;
+
+    private boolean showingMonitoring = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
-        binding.logText.setMovementMethod(new ScrollingMovementMethod());
-        binding.logText.setTextIsSelectable(true);
-        binding.btnStop.setEnabled(false);
+        storage = new AppStorage(this);
 
-        requestPermissions();
+        requestNotificationPermission();
+        setupAdapters();
+        setupClickListeners();
+        setupUpdateReceiver();
 
-        binding.btnStart.setOnClickListener(v -> {
-            String url = binding.urlInput.getText().toString()
-                .trim()
-                .replaceAll("\\s+", "")
-                .replaceAll("/+$", "");
-            if (url.isEmpty()) {
-                Toast.makeText(this, "Please enter a YouTube URL", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            startMonitoring(url);
-        });
+        fetchRemoteConfigOnStart();
+        refreshAll();
+        showMonitoringTab();
 
-        binding.btnStop.setOnClickListener(v -> stopMonitoring());
-
-        binding.btnClearLog.setOnClickListener(v -> {
-            logBuilder = new SpannableStringBuilder();
-            plainLogBuilder = new StringBuilder();
-            logLineCount = 0;
-            binding.logText.setText("");
-            appendLog("Log cleared.", "dim");
-        });
-
-        binding.btnCopyLog.setOnClickListener(v -> {
-            if (plainLogBuilder.length() == 0) {
-                Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            ClipboardManager clipboard =
-                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            ClipData clip = ClipData.newPlainText("LiveMonitor Log", plainLogBuilder.toString());
-            clipboard.setPrimaryClip(clip);
-            Toast.makeText(this, "Log copied to clipboard!", Toast.LENGTH_SHORT).show();
-        });
-
-        logReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                String msg  = intent.getStringExtra("message");
-                String type = intent.getStringExtra("type");
-                if (msg != null) appendLog(msg, type);
-            }
-        };
-        LocalBroadcastManager.getInstance(this)
-            .registerReceiver(logReceiver, new IntentFilter("MONITOR_LOG"));
-
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-        appendLog("  Live Monitor — Ready", "header");
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-        appendLog("Paste a YouTube channel URL and tap Start.", "info");
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Live Monitor opened."));
     }
 
-    private void startMonitoring(String url) {
-        binding.btnStart.setEnabled(false);
-        binding.btnStop.setEnabled(true);
-        binding.urlInput.setEnabled(false);
-        binding.statusText.setText("● Monitoring");
-        binding.statusText.setTextColor(getColor(R.color.green));
-
-        Intent intent = new Intent(this, MonitorService.class);
-        intent.setAction("START");
-        intent.putExtra("url", url);
-        startForegroundService(intent);
-
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-        appendLog("SESSION STARTED", "header");
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-        appendLog("URL: " + url, "info");
-    }
-
-    private void stopMonitoring() {
-        binding.btnStart.setEnabled(true);
-        binding.btnStop.setEnabled(false);
-        binding.urlInput.setEnabled(true);
-        binding.statusText.setText("○ Stopped");
-        binding.statusText.setTextColor(getColor(R.color.text_dim));
-
-        Intent intent = new Intent(this, MonitorService.class);
-        intent.setAction("STOP");
-        startService(intent);
-
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-        appendLog("SESSION STOPPED BY USER", "warning");
-        appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "divider");
-    }
-
-    private void appendLog(String message, String type) {
-        runOnUiThread(() -> {
-            String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-
-            if (logLineCount > MAX_LOG_LINES) {
-                logBuilder = new SpannableStringBuilder();
-                plainLogBuilder = new StringBuilder();
-                logLineCount = 0;
-                appendLog("[ Log trimmed — too many lines ]", "dim");
-                return;
-            }
-
-            String prefix;
-            int prefixColor;
-            int msgColor;
-
-            switch (type) {
-                case "header":
-                    prefix      = "  ";
-                    prefixColor = Color.parseColor("#00A884");
-                    msgColor    = Color.parseColor("#00A884");
-                    break;
-                case "divider":
-                    prefix      = "";
-                    prefixColor = Color.parseColor("#3D5263");
-                    msgColor    = Color.parseColor("#3D5263");
-                    break;
-                case "success":
-                    prefix      = "[" + time + "] ✔ OK   » ";
-                    prefixColor = Color.parseColor("#00A884");
-                    msgColor    = Color.parseColor("#00C49A");
-                    break;
-                case "live":
-                    prefix      = "[" + time + "] 🔴 LIVE » ";
-                    prefixColor = Color.parseColor("#FF5252");
-                    msgColor    = Color.parseColor("#FF5252");
-                    break;
-                case "error":
-                    prefix      = "[" + time + "] ✖ ERR  » ";
-                    prefixColor = Color.parseColor("#FF5252");
-                    msgColor    = Color.parseColor("#FF6E6E");
-                    break;
-                case "warning":
-                    prefix      = "[" + time + "] ⚠ WARN » ";
-                    prefixColor = Color.parseColor("#FFB300");
-                    msgColor    = Color.parseColor("#FFD54F");
-                    break;
-                case "download":
-                    prefix      = "[" + time + "] ↓ REC  » ";
-                    prefixColor = Color.parseColor("#7C4DFF");
-                    msgColor    = Color.parseColor("#B39DDB");
-                    break;
-                case "info":
-                    prefix      = "[" + time + "] ℹ INFO » ";
-                    prefixColor = Color.parseColor("#29B6F6");
-                    msgColor    = Color.parseColor("#81D4FA");
-                    break;
-                case "dim":
-                default:
-                    prefix      = "[" + time + "] ·      » ";
-                    prefixColor = Color.parseColor("#3D5263");
-                    msgColor    = Color.parseColor("#667781");
-                    break;
-            }
-
-            // Add to plain text log for copying
-            if (plainLogBuilder.length() > 0) plainLogBuilder.append("\n");
-            plainLogBuilder.append(prefix).append(message);
-
-            // Add newline to spannable if not first line
-            if (logBuilder.length() > 0) logBuilder.append("\n");
-
-            // Append colored prefix
-            int start = logBuilder.length();
-            logBuilder.append(prefix);
-            logBuilder.setSpan(
-                new ForegroundColorSpan(prefixColor),
-                start,
-                logBuilder.length(),
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-
-            // Append colored message
-            start = logBuilder.length();
-            logBuilder.append(message);
-            logBuilder.setSpan(
-                new ForegroundColorSpan(msgColor),
-                start,
-                logBuilder.length(),
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-
-            logLineCount++;
-            binding.logText.setText(logBuilder);
-
-            // Auto scroll to bottom
-            binding.logText.post(() -> {
-                ScrollView scrollView = findViewById(R.id.logScrollView);
-                if (scrollView != null) {
-                    scrollView.fullScroll(ScrollView.FOCUS_DOWN);
-                }
-            });
-        });
-    }
-
-    private void requestPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this,
-                    Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
-            }
-        }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshAll();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(logReceiver);
+
+        if (updateReceiver != null) {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(updateReceiver);
+        }
     }
-}
+
+    private void setupAdapters() {
+        channelAdapter = new ChannelAdapter(this);
+        channelAdapter.setListener(new ChannelAdapter.Listener() {
+            @Override
+            public void onChannelClicked(ChannelItem channel) {
+                openChannelLog(channel);
+            }
+
+            @Override
+            public void onPauseResumeClicked(ChannelItem channel) {
+                toggleChannelPaused(channel);
+            }
+
+            @Override
+            public void onStopClicked(ChannelItem channel) {
+                stopChannel(channel);
+            }
+        });
+
+        recordingAdapter = new RecordingAdapter(this);
+        recordingAdapter.setListener(new RecordingAdapter.Listener() {
+            @Override
+            public void onRecordingClicked(RecordingItem recording) {
+                Toast.makeText(
+                    MainActivity.this,
+                    UiTextUtils.formatRecordingDetails(recording),
+                    Toast.LENGTH_SHORT
+                ).show();
+            }
+
+            @Override
+            public void onOpenFileClicked(RecordingItem recording) {
+                Intent intent = new Intent(MainActivity.this, DownloadedFilesActivity.class);
+                startActivity(intent);
+            }
+
+            @Override
+            public void onRecoverClicked(RecordingItem recording) {
+                storage.appendLog(LogItem.recording(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_UI,
+                    recording,
+                    "Recover selected from Downloads tab."
+                ));
+                Toast.makeText(
+                    MainActivity.this,
+                    "Recovery will run after recorder integration.",
+                    Toast.LENGTH_SHORT
+                ).show();
+            }
+        });
+
+        binding.channelListView.setAdapter(channelAdapter);
+        binding.channelListView.setEmptyView(binding.emptyMonitoringText);
+
+        binding.recordingListView.setAdapter(recordingAdapter);
+        binding.recordingListView.setEmptyView(binding.emptyDownloadsText);
+    }
+
+    private void setupClickListeners() {
+        binding.btnAddChannel.setOnClickListener(v -> addChannelFromInput());
+
+        binding.navMonitoring.setOnClickListener(v -> showMonitoringTab());
+        binding.navDownloads.setOnClickListener(v -> showDownloadsTab());
+
+        binding.btnMenu.setOnClickListener(v -> showOverflowMenu());
+    }
+
+    private void setupUpdateReceiver() {
+        updateReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+
+                refreshAll();
+
+                String message = intent.getStringExtra(LiveMonitorActions.EXTRA_MESSAGE);
+
+                if (message != null && !message.trim().isEmpty()) {
+                    binding.statusText.setText(message);
+                }
+            }
+        };
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(LiveMonitorActions.ACTION_CHANNEL_UPDATED);
+        filter.addAction(LiveMonitorActions.ACTION_RECORDING_UPDATED);
+        filter.addAction(LiveMonitorActions.ACTION_LOG_UPDATED);
+        filter.addAction(LiveMonitorActions.ACTION_REMOTE_CONFIG_UPDATED);
+        filter.addAction(LiveMonitorActions.ACTION_NETWORK_AVAILABLE);
+        filter.addAction(LiveMonitorActions.ACTION_NETWORK_LOST);
+
+        /*
+         * Legacy log broadcast from existing MonitorService.
+         */
+        filter.addAction("MONITOR_LOG");
+
+        LocalBroadcastManager.getInstance(this).registerReceiver(updateReceiver, filter);
+    }
+
+    private void addChannelFromInput() {
+        String url = cleanUrl(binding.urlInput.getText().toString());
+
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Please enter a YouTube channel URL.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        ChannelItem existing = storage.findChannelByNormalizedUrl(url);
+
+        if (existing != null) {
+            existing.resumeMonitoring();
+            storage.upsertChannel(existing);
+            startMonitoringService(existing);
+
+            binding.urlInput.setText("");
+            refreshAll();
+
+            Toast.makeText(this, "Channel already exists. Monitoring resumed.", Toast.LENGTH_SHORT)
+                .show();
+            return;
+        }
+
+        ChannelItem channel = new ChannelItem(url);
+        AppSettings settings = storage.loadSettings();
+        channel.setMaxRetries(settings.getMaxRetries());
+        channel.markWaitingForLive();
+
+        storage.upsertChannel(channel);
+        storage.appendLog(LogItem.channel(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_UI,
+            channel,
+            "Channel added."
+        ));
+
+        startMonitoringService(channel);
+
+        binding.urlInput.setText("");
+        refreshAll();
+
+        Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleChannelPaused(ChannelItem channel) {
+        if (channel == null) {
+            return;
+        }
+
+        if (channel.shouldMonitor()) {
+            channel.markPausedByUser();
+            storage.upsertChannel(channel);
+            sendChannelAction(LiveMonitorActions.ACTION_PAUSE_CHANNEL, channel);
+
+            storage.appendLog(LogItem.channel(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_UI,
+                channel,
+                "Channel paused by user."
+            ));
+        } else {
+            channel.resumeMonitoring();
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            sendChannelAction(LiveMonitorActions.ACTION_RESUME_CHANNEL, channel);
+
+            storage.appendLog(LogItem.channel(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_UI,
+                channel,
+                "Channel resumed by user."
+            ));
+        }
+
+        refreshAll();
+    }
+
+    private void stopChannel(ChannelItem channel) {
+        if (channel == null) {
+            return;
+        }
+
+        channel.markStopped();
+        storage.upsertChannel(channel);
+        sendChannelAction(LiveMonitorActions.ACTION_STOP_MONITORING, channel);
+
+        storage.appendLog(LogItem.channel(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_UI,
+            channel,
+            "Channel stopped by user."
+        ));
+
+        refreshAll();
+    }
+
+    private void startMonitoringService(ChannelItem channel) {
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(LiveMonitorActions.ACTION_START_MONITORING);
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, channel.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_URL, channel.getUrl());
+
+        startServiceCompat(intent);
+    }
+
+    private void sendChannelAction(String action, ChannelItem channel) {
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(action);
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, channel.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_URL, channel.getUrl());
+
+        startServiceCompat(intent);
+    }
+
+    private void startServiceCompat(Intent intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
+    private void showOverflowMenu() {
+        PopupMenu menu = new PopupMenu(this, binding.btnMenu);
+        menu.getMenu().add("Log");
+        menu.getMenu().add("Downloaded Files");
+        menu.getMenu().add("Settings");
+        menu.getMenu().add("Stop All");
+
+        menu.setOnMenuItemClickListener(item -> {
+            String title = String.valueOf(item.getTitle());
+
+            if ("Log".equals(title)) {
+                startActivity(new Intent(this, LogActivity.class));
+                return true;
+            }
+
+            if ("Downloaded Files".equals(title)) {
+                startActivity(new Intent(this, DownloadedFilesActivity.class));
+                return true;
+            }
+
+            if ("Settings".equals(title)) {
+                startActivity(new Intent(this, SettingsActivity.class));
+                return true;
+            }
+
+            if ("Stop All".equals(title)) {
+                stopAllMonitoring();
+                return true;
+            }
+
+            return false;
+        });
+
+        menu.show();
+    }
+
+    private void stopAllMonitoring() {
+        List<ChannelItem> channels = storage.loadChannels();
+
+        for (ChannelItem channel : channels) {
+            if (channel != null) {
+                channel.markStopped();
+            }
+        }
+
+        storage.saveChannels(channels);
+
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(LiveMonitorActions.ACTION_STOP_ALL);
+        startServiceCompat(intent);
+
+        storage.appendLog(LogItem.warning(LogItem.SOURCE_UI, "Stop All selected."));
+        refreshAll();
+
+        Toast.makeText(this, "All monitoring stopped.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void openChannelLog(ChannelItem channel) {
+        if (channel == null) {
+            return;
+        }
+
+        Intent intent = new Intent(this, ChannelLogActivity.class);
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, channel.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_TITLE, channel.getDisplayTitle());
+        startActivity(intent);
+    }
+
+    private void showMonitoringTab() {
+        showingMonitoring = true;
+
+        binding.monitoringPanel.setVisibility(View.VISIBLE);
+        binding.downloadsPanel.setVisibility(View.GONE);
+
+        binding.navMonitoringText.setTextColor(getColorCompat("#00A884"));
+        binding.navMonitoringIcon.setTextColor(getColorCompat("#00A884"));
+        binding.navDownloadsText.setTextColor(getColorCompat("#667781"));
+        binding.navDownloadsIcon.setTextColor(getColorCompat("#667781"));
+
+        refreshAll();
+    }
+
+    private void showDownloadsTab() {
+        showingMonitoring = false;
+
+        binding.monitoringPanel.setVisibility(View.GONE);
+        binding.downloadsPanel.setVisibility(View.VISIBLE);
+
+        binding.navMonitoringText.setTextColor(getColorCompat("#667781"));
+        binding.navMonitoringIcon.setTextColor(getColorCompat("#667781"));
+        binding.navDownloadsText.setTextColor(getColorCompat("#00A884"));
+        binding.navDownloadsIcon.setTextColor(getColorCompat("#00A884"));
+
+        refreshAll();
+    }
+
+    private void refreshAll() {
+        List<ChannelItem> channels = storage.loadChannels();
+        channelAdapter.setChannels(channels);
+
+        List<RecordingItem> recordings = new ArrayList<>();
+        recordings.addAll(storage.loadActiveRecordings());
+        recordings.addAll(storage.loadCompletedRecordings());
+        recordingAdapter.setRecordings(recordings);
+
+        int monitoringCount = 0;
+
+        for (ChannelItem channel : channels) {
+            if (channel != null && channel.shouldMonitor()) {
+                monitoringCount++;
+            }
+        }
+
+        if (monitoringCount > 0) {
+            binding.statusText.setText("Monitoring " + monitoringCount);
+        } else {
+            binding.statusText.setText("Ready");
+        }
+
+        if (showingMonitoring) {
+            binding.emptyMonitoringText.setVisibility(
+                channels.isEmpty() ? View.VISIBLE : View.GONE
+            );
+        } else {
+            binding.emptyDownloadsText.setVisibility(
+                recordings.isEmpty() ? View.VISIBLE : View.GONE
+            );
+        }
+    }
+
+    private void fetchRemoteConfigOnStart() {
+        RemoteConfigFetcher fetcher = new RemoteConfigFetcher(this);
+        fetcher.fetchAsync((config, fromNetwork, message) -> runOnUiThread(() -> {
+            storage.appendLog(new LogItem(
+                fromNetwork ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_INFO,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "",
+                "",
+                "",
+                "",
+                message,
+                config == null ? "" : config.buildDebugSummary()
+            ));
+
+            Intent updateIntent = new Intent(LiveMonitorActions.ACTION_REMOTE_CONFIG_UPDATED);
+            updateIntent.putExtra(LiveMonitorActions.EXTRA_MESSAGE, "Remote config ready");
+            LocalBroadcastManager.getInstance(this).sendBroadcast(updateIntent);
+        }));
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+
+        if (ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        ActivityCompat.requestPermissions(
+            this,
+            new String[] { Manifest.permission.POST_NOTIFICATIONS },
+            1
+        );
+    }
+
+    private static String cleanUrl(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+            .trim()
+            .replaceAll("\\s+", "")
+            .replaceAll("/+$", "");
+    }
+
+    private int getColorCompat(String color) {
+        return android.graphics.Color.parseColor(color);
+    }
+            }
