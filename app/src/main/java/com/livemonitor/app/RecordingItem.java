@@ -583,4 +583,3 @@ public class RecordingItem {
         this.progressPercent = clampProgress(progressPercent);
         touch();
     }
-          }
