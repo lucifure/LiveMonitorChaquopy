@@ -346,4 +346,4 @@ public class RecordingAdapter extends BaseAdapter {
         Button openButton;
         Button recoverButton;
     }
-            }
+}
