@@ -434,7 +434,9 @@ public class HlsProxyServer {
         out.append(chosen.proxyUrl).append('\n');
 
         return out.toString();
-    }    private Variant chooseBestVariant(List<Variant> variants) {
+       }
+
+    private Variant chooseBestVariant(List<Variant> variants) {
         Variant bestUnder480 = null;
         Variant bestAny = null;
 
