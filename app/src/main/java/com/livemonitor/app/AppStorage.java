@@ -642,7 +642,7 @@ public class AppStorage {
         return value == null || value.trim().isEmpty();
     }
 
-    public synchronized List<ChannelItem> loadChannelsReadOnly() {
+        public synchronized List<ChannelItem> loadChannelsReadOnly() {
         return Collections.unmodifiableList(loadChannels());
     }
 
@@ -653,3 +653,4 @@ public class AppStorage {
     public synchronized List<LogItem> loadLogsReadOnly() {
         return Collections.unmodifiableList(loadLogs());
     }
+}
