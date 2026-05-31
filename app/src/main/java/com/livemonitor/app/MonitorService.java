@@ -349,7 +349,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, latest, "Recording failed.", e.getMessage());
             broadcastRecordingUpdated("Recording failed.");
         }
-    }    private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
+        }
+
+    private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
         RecordingItem recording = storage.findRecordingById(recordingId);
         ChannelItem channel = storage.findChannelById(channelId);
 
