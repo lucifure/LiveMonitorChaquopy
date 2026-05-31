@@ -484,4 +484,5 @@ public class MainActivity extends AppCompatActivity {
     private int getColorCompat(String color) {
         return android.graphics.Color.parseColor(color);
     }
+}
             }
