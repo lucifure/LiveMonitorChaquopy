@@ -565,4 +565,3 @@ public class ChannelItem {
             : notificationId;
         touch();
     }
-                               }
