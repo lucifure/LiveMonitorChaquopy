@@ -12,6 +12,7 @@ import android.view.View;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -94,6 +95,11 @@ public class MainActivity extends AppCompatActivity {
             public void onStopClicked(ChannelItem channel) {
                 stopChannel(channel);
             }
+
+            @Override
+            public void onDeleteClicked(ChannelItem channel) {
+                confirmDeleteChannel(channel);
+            }
         });
 
         recordingAdapter = new RecordingAdapter(this);
@@ -126,6 +132,11 @@ public class MainActivity extends AppCompatActivity {
                     "Recovery will run after recorder integration.",
                     Toast.LENGTH_SHORT
                 ).show();
+            }
+
+            @Override
+            public void onDeleteClicked(RecordingItem recording) {
+                confirmStopDownload(recording);
             }
         });
 
@@ -187,6 +198,11 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        if (YouTubeUrlUtils.isDirectVideoUrl(url)) {
+            confirmDownloadVideoUrl(url);
+            return;
+        }
+
         ChannelItem existing = storage.findChannelByNormalizedUrl(url);
 
         if (existing != null) {
@@ -221,6 +237,35 @@ public class MainActivity extends AppCompatActivity {
         refreshAll();
 
         Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show();
+    }
+
+
+    private void confirmDownloadVideoUrl(String url) {
+        String videoId = YouTubeUrlUtils.extractVideoId(url);
+
+        if (videoId.isEmpty()) {
+            Toast.makeText(this, "Could not detect video ID.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Download video")
+            .setMessage("This looks like a YouTube video/live replay link. Download it now?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Download", (dialog, which) -> startDirectVideoDownload(url, videoId))
+            .show();
+    }
+
+    private void startDirectVideoDownload(String url, String videoId) {
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(LiveMonitorActions.ACTION_DOWNLOAD_VIDEO);
+        intent.putExtra(LiveMonitorActions.EXTRA_URL, url);
+        intent.putExtra(LiveMonitorActions.EXTRA_VIDEO_ID, videoId);
+        startServiceCompat(intent);
+
+        binding.urlInput.setText("");
+        refreshAll();
+        Toast.makeText(this, "Video download started.", Toast.LENGTH_SHORT).show();
     }
 
     private void toggleChannelPaused(ChannelItem channel) {
@@ -273,6 +318,73 @@ public class MainActivity extends AppCompatActivity {
         ));
 
         refreshAll();
+    }
+
+
+    private void confirmDeleteChannel(ChannelItem channel) {
+        if (channel == null) {
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Delete channel?")
+            .setMessage("Stop monitoring and delete this channel from the Monitoring section?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete", (dialog, which) -> deleteChannel(channel))
+            .show();
+    }
+
+    private void deleteChannel(ChannelItem channel) {
+        if (channel == null) {
+            return;
+        }
+
+        sendChannelAction(LiveMonitorActions.ACTION_REMOVE_CHANNEL, channel);
+        storage.removeChannel(channel.getId());
+        storage.appendLog(LogItem.channel(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_UI,
+            channel,
+            "Channel deleted by user."
+        ));
+
+        refreshAll();
+        Toast.makeText(this, "Channel deleted.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void confirmStopDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Stop download?")
+            .setMessage("Stop further downloading and keep the file saved so far?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Stop", (dialog, which) -> stopDownload(recording))
+            .show();
+    }
+
+    private void stopDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(LiveMonitorActions.ACTION_STOP_RECORDING);
+        intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
+        startServiceCompat(intent);
+
+        recording.markStoppedByUser();
+        storage.upsertRecording(recording);
+
+        if (recording.getChannelId() != null && !recording.getChannelId().trim().isEmpty()) {
+            storage.removeChannel(recording.getChannelId());
+        }
+
+        refreshAll();
+        Toast.makeText(this, "Download stopped. Saved file kept.", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {

@@ -22,6 +22,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,6 +97,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             handleRemove(intent);
         } else if (LiveMonitorActions.ACTION_STOP_MONITORING.equals(action)) {
             handleStopChannel(intent);
+        } else if (LiveMonitorActions.ACTION_DOWNLOAD_VIDEO.equals(action)) {
+            handleDownloadVideo(intent);
+        } else if (LiveMonitorActions.ACTION_STOP_RECORDING.equals(action)) {
+            handleStopRecording(intent);
         } else if (LiveMonitorActions.ACTION_STOP_ALL.equals(action)
             || LiveMonitorActions.LEGACY_ACTION_STOP.equals(action)) {
             stopAll();
@@ -172,6 +177,70 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertChannel(channel);
         notificationHelper.cancelChannelNotification(channel);
         broadcastChannelUpdated("Channel stopped.");
+    }
+
+    private void handleDownloadVideo(Intent intent) {
+        if (intent == null) return;
+
+        String url = intent.getStringExtra(LiveMonitorActions.EXTRA_URL);
+        String videoId = intent.getStringExtra(LiveMonitorActions.EXTRA_VIDEO_ID);
+
+        if (videoId == null || videoId.trim().isEmpty()) {
+            videoId = YouTubeUrlUtils.extractVideoId(url);
+        }
+
+        if (videoId == null || videoId.trim().isEmpty()) {
+            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, null, "Direct download failed.", "Could not detect video ID.");
+            return;
+        }
+
+        String watchUrl = YouTubeUrlUtils.buildWatchUrl(videoId);
+        RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
+        recording.setTitle("Direct download - " + videoId);
+        recording.markRecording();
+        storage.upsertRecording(recording);
+        activeRecordings.put(recording.getId(), recording);
+        progressTracker.track(recording);
+        executor.execute(() -> runDirectVideoDownload(recording));
+        broadcastRecordingUpdated("Direct download started.");
+    }
+
+    private void handleStopRecording(Intent intent) {
+        if (intent == null) return;
+
+        String recordingId = intent.getStringExtra(LiveMonitorActions.EXTRA_RECORDING_ID);
+        String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
+        RecordingItem recording = storage.findRecordingById(recordingId);
+
+        if (recording != null) {
+            recording.markStoppedByUser();
+            storage.upsertRecording(recording);
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(recording.getChannelId());
+            progressTracker.untrack(recording);
+
+            if ((channelId == null || channelId.trim().isEmpty())
+                && recording.getChannelId() != null
+                && !recording.getChannelId().trim().isEmpty()) {
+                channelId = recording.getChannelId();
+            }
+        }
+
+        if (channelId != null && !channelId.trim().isEmpty()) {
+            activeLoops.remove(channelId);
+            ChannelItem channel = storage.findChannelById(channelId);
+
+            if (channel != null) {
+                channel.markStopped();
+                notificationHelper.cancelChannelNotification(channel);
+            }
+
+            storage.removeChannel(channelId);
+        }
+
+        FFmpegRunner.cancel();
+        FFmpegKit.cancel();
+        broadcastRecordingUpdated("Download stopped.");
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
@@ -390,6 +459,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+
+    private void runDirectVideoDownload(RecordingItem recording) {
+        if (recording == null) return;
+
+        try {
+            String videoId = recording.getVideoId();
+            String inputUrl = getDirectDownloadInputUrl(videoId, null);
+
+            if (inputUrl == null || inputUrl.trim().isEmpty()) {
+                throw new IllegalStateException("Could not get playable URL for ended live/video.");
+            }
+
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video URL found.", describeUrlForLog(inputUrl));
+
+            String command = "-y -hide_banner -loglevel info"
+                + " -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1"
+                + " -i " + quote(inputUrl)
+                + " -c copy -f mpegts "
+                + quote(recording.getTempTsPath());
+
+            ReturnCode code = FFmpegKit.execute(command).getReturnCode();
+            activeRecordings.remove(recording.getId());
+            progressTracker.untrack(recording);
+
+            if (ReturnCode.isSuccess(code)) {
+                convertRecording(recording, null);
+            } else if (ReturnCode.isCancel(code)) {
+                recording.markStoppedByUser();
+                storage.upsertRecording(recording);
+            } else {
+                recording.markRecoverable("Direct download exited with code " + (code == null ? -1 : code.getValue()));
+                storage.upsertRecording(recording);
+            }
+        } catch (Exception e) {
+            activeRecordings.remove(recording.getId());
+            progressTracker.untrack(recording);
+            recording.markFailed(normalizeErrorMessage(e));
+            storage.upsertRecording(recording);
+            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, null, "Direct download failed.", normalizeErrorMessage(e));
+        }
+
+        broadcastRecordingUpdated("Direct download updated.");
+    }
+
     private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
         RecordingItem recording = storage.findRecordingById(recordingId);
         ChannelItem channel = storage.findChannelById(channelId);
@@ -534,14 +647,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             throw new IllegalStateException("Could not get HLS manifest URL. videoId is empty.");
         }
 
-        List<RemoteConfig.YoutubeClient> clients = remoteConfig.getYoutubeClients();
-        int clientCount = clients == null || clients.isEmpty() ? 1 : clients.size();
+        List<RemoteConfig.YoutubeClient> clients = getManifestClientsForAttempts();
         int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
 
         String lastFailure = "";
 
-        for (int clientIndex = 0; clientIndex < clientCount; clientIndex++) {
-            RemoteConfig.YoutubeClient client = remoteConfig.getClientForAttempt(clientIndex);
+        for (int clientIndex = 0; clientIndex < clients.size(); clientIndex++) {
+            RemoteConfig.YoutubeClient client = clients.get(clientIndex);
 
             if (client == null || !client.isValid()) {
                 lastFailure = "Invalid YouTube client. clientIndex=" + clientIndex;
@@ -678,6 +790,102 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         throw new IllegalStateException("Could not get HLS manifest URL. " + lastFailure);
     }
 
+
+    private String getDirectDownloadInputUrl(String videoId, ChannelItem channel) {
+        try {
+            return getHlsManifestUrl(videoId, channel);
+        } catch (Exception e) {
+            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "HLS unavailable for direct download.", normalizeErrorMessage(e));
+        }
+
+        return getProgressiveVideoUrl(videoId, channel);
+    }
+
+    private String getProgressiveVideoUrl(String videoId, ChannelItem channel) {
+        List<RemoteConfig.YoutubeClient> clients = getManifestClientsForAttempts();
+        int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
+        String lastFailure = "";
+
+        for (int clientIndex = 0; clientIndex < clients.size(); clientIndex++) {
+            RemoteConfig.YoutubeClient client = clients.get(clientIndex);
+
+            if (client == null || !client.isValid()) continue;
+
+            for (int keyIndex = 0; keyIndex < apiKeyCount; keyIndex++) {
+                String apiKey = getApiKeyForAttempt(keyIndex);
+                String apiUrl = remoteConfig.getInnertubeBaseUrl() + "/player?key=" + apiKey;
+                String details = "videoId=" + videoId
+                    + ", clientIndex=" + clientIndex
+                    + ", client=" + describeClientForLog(client)
+                    + ", keyAttempt=" + keyIndex;
+
+                try {
+                    JSONObject context = new JSONObject()
+                        .put("client", client.toInnertubeClientJson());
+                    JSONObject body = new JSONObject()
+                        .put("context", context)
+                        .put("videoId", videoId)
+                        .put("contentCheckOk", true)
+                        .put("racyCheckOk", true);
+                    JSONObject json = new JSONObject(httpPost(apiUrl, body.toString(), client));
+                    JSONObject streamingData = json.optJSONObject("streamingData");
+
+                    if (streamingData == null) {
+                        lastFailure = "No streamingData. " + details + ", response=" + summarizeInnertubeResponseForLog(json);
+                        continue;
+                    }
+
+                    String url = findBestFormatUrl(streamingData.optJSONArray("formats"));
+
+                    if (url == null || url.trim().isEmpty()) {
+                        url = findBestFormatUrl(streamingData.optJSONArray("adaptiveFormats"));
+                    }
+
+                    if (url != null && !url.trim().isEmpty()) {
+                        return url;
+                    }
+
+                    lastFailure = "No direct format URL. " + details;
+                } catch (Exception e) {
+                    lastFailure = details + ", error=" + normalizeErrorMessage(e);
+                    Log.w(TAG, "getProgressiveVideoUrl failed: " + lastFailure, e);
+                }
+            }
+        }
+
+        throw new IllegalStateException("Could not get ended-live/video download URL. " + lastFailure);
+    }
+
+    private static String findBestFormatUrl(JSONArray formats) {
+        if (formats == null) {
+            return "";
+        }
+
+        String fallback = "";
+
+        for (int i = 0; i < formats.length(); i++) {
+            JSONObject format = formats.optJSONObject(i);
+
+            if (format == null) continue;
+
+            String url = format.optString("url", "");
+
+            if (url == null || url.trim().isEmpty()) continue;
+
+            String mimeType = format.optString("mimeType", "");
+
+            if (mimeType.contains("video/mp4") && mimeType.contains("audio")) {
+                return url;
+            }
+
+            if (fallback.isEmpty() && mimeType.contains("video")) {
+                fallback = url;
+            }
+        }
+
+        return fallback;
+    }
+
     private String httpGet(String urlString) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
         connection.setConnectTimeout(15_000);
@@ -700,10 +908,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-        connection.setRequestProperty("User-Agent", remoteConfig.getUserAgent());
+        connection.setRequestProperty("User-Agent", getUserAgentForClient(client));
         connection.setRequestProperty("Origin", remoteConfig.getWebPlayerBaseUrl());
         connection.setRequestProperty("Referer", remoteConfig.getWebPlayerBaseUrl() + "/");
-        connection.setRequestProperty("X-Youtube-Client-Name", client.getClientName());
+        connection.setRequestProperty("X-Youtube-Client-Name", getClientHeaderName(client));
         connection.setRequestProperty("X-Youtube-Client-Version", client.getClientVersion());
         connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
         connection.getOutputStream().write(bodyBytes);
@@ -768,12 +976,77 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private int getConfiguredClientCountForLog() {
-        List<RemoteConfig.YoutubeClient> clients = remoteConfig.getYoutubeClients();
-        return clients == null || clients.isEmpty() ? 1 : clients.size();
+        return getManifestClientsForAttempts().size();
     }
 
     private int getConfiguredApiKeyCountForLog() {
         return Math.max(1, remoteConfig.getApiKeys().size());
+    }
+
+    private List<RemoteConfig.YoutubeClient> getManifestClientsForAttempts() {
+        List<RemoteConfig.YoutubeClient> clients = new ArrayList<>();
+        List<RemoteConfig.YoutubeClient> configuredClients = remoteConfig.getYoutubeClients();
+
+        if (configuredClients != null) {
+            for (RemoteConfig.YoutubeClient client : configuredClients) {
+                addUniqueValidClient(clients, client);
+            }
+        }
+
+        for (RemoteConfig.YoutubeClient defaultClient : RemoteConfig.getDefaultClients()) {
+            addUniqueValidClient(clients, defaultClient);
+        }
+
+        if (clients.isEmpty()) {
+            addUniqueValidClient(clients, new RemoteConfig.YoutubeClient());
+        }
+
+        return clients;
+    }
+
+    private static void addUniqueValidClient(
+        List<RemoteConfig.YoutubeClient> clients,
+        RemoteConfig.YoutubeClient candidate
+    ) {
+        if (clients == null || candidate == null || !candidate.isValid()) {
+            return;
+        }
+
+        String candidateKey = getClientAttemptKey(candidate);
+
+        for (RemoteConfig.YoutubeClient existing : clients) {
+            if (candidateKey.equals(getClientAttemptKey(existing))) {
+                return;
+            }
+        }
+
+        clients.add(candidate);
+    }
+
+    private static String getClientAttemptKey(RemoteConfig.YoutubeClient client) {
+        if (client == null) {
+            return "";
+        }
+
+        return nullToEmpty(client.getClientName()).toUpperCase()
+            + "/"
+            + nullToEmpty(client.getClientVersion());
+    }
+
+    private static String getClientHeaderName(RemoteConfig.YoutubeClient client) {
+        if (client == null || isBlank(client.getClientId())) {
+            return client == null ? "" : client.getClientName();
+        }
+
+        return client.getClientId();
+    }
+
+    private String getUserAgentForClient(RemoteConfig.YoutubeClient client) {
+        if (client != null && !isBlank(client.getUserAgent())) {
+            return client.getUserAgent();
+        }
+
+        return remoteConfig.getUserAgent();
     }
 
     private static String describeClientForLog(RemoteConfig.YoutubeClient client) {
@@ -1001,6 +1274,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static String quote(String value) {

@@ -34,6 +34,8 @@ public class RecordingAdapter extends BaseAdapter {
         void onOpenFileClicked(RecordingItem recording);
 
         void onRecoverClicked(RecordingItem recording);
+
+        void onDeleteClicked(RecordingItem recording);
     }
 
     private final Context context;
@@ -180,6 +182,10 @@ public class RecordingAdapter extends BaseAdapter {
         recoverButton.setAllCaps(false);
         recoverButton.setText("Recover");
 
+        Button deleteButton = new Button(context);
+        deleteButton.setAllCaps(false);
+        deleteButton.setText("Delete");
+
         buttonRow.addView(openButton);
 
         LinearLayout.LayoutParams recoverParams = new LinearLayout.LayoutParams(
@@ -188,6 +194,13 @@ public class RecordingAdapter extends BaseAdapter {
         );
         recoverParams.leftMargin = dp(8);
         buttonRow.addView(recoverButton, recoverParams);
+
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        deleteParams.leftMargin = dp(8);
+        buttonRow.addView(deleteButton, deleteParams);
 
         root.addView(topRow);
         root.addView(subtitle);
@@ -204,6 +217,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.progressBar = progressBar;
         holder.openButton = openButton;
         holder.recoverButton = recoverButton;
+        holder.deleteButton = deleteButton;
 
         return holder;
     }
@@ -217,6 +231,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.progressBar.setProgress(0);
             holder.openButton.setVisibility(View.GONE);
             holder.recoverButton.setVisibility(View.GONE);
+            holder.deleteButton.setVisibility(View.GONE);
             return;
         }
 
@@ -229,6 +244,7 @@ public class RecordingAdapter extends BaseAdapter {
 
         holder.openButton.setVisibility(recording.hasExistingFinalMp4File() ? View.VISIBLE : View.GONE);
         holder.recoverButton.setVisibility(recording.isRecoverable() ? View.VISIBLE : View.GONE);
+        holder.deleteButton.setVisibility(View.VISIBLE);
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
@@ -245,6 +261,12 @@ public class RecordingAdapter extends BaseAdapter {
         holder.recoverButton.setOnClickListener(v -> {
             if (listener != null) {
                 listener.onRecoverClicked(recording);
+            }
+        });
+
+        holder.deleteButton.setOnClickListener(v -> {
+            if (listener != null) {
+                listener.onDeleteClicked(recording);
             }
         });
     }
@@ -345,5 +367,6 @@ public class RecordingAdapter extends BaseAdapter {
         ProgressBar progressBar;
         Button openButton;
         Button recoverButton;
+        Button deleteButton;
     }
 }

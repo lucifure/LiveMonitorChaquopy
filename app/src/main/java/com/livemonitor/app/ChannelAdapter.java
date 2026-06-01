@@ -35,6 +35,8 @@ public class ChannelAdapter extends BaseAdapter {
         void onPauseResumeClicked(ChannelItem channel);
 
         void onStopClicked(ChannelItem channel);
+
+        void onDeleteClicked(ChannelItem channel);
     }
 
     private final Context context;
@@ -183,6 +185,10 @@ public class ChannelAdapter extends BaseAdapter {
         stop.setAllCaps(false);
         stop.setText("Stop");
 
+        Button delete = new Button(context);
+        delete.setAllCaps(false);
+        delete.setText("Delete");
+
         buttonRow.addView(
             pauseResume,
             new LinearLayout.LayoutParams(
@@ -198,6 +204,13 @@ public class ChannelAdapter extends BaseAdapter {
         stopParams.leftMargin = dp(8);
         buttonRow.addView(stop, stopParams);
 
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        deleteParams.leftMargin = dp(8);
+        buttonRow.addView(delete, deleteParams);
+
         root.addView(topRow);
         root.addView(url);
         root.addView(details);
@@ -211,6 +224,7 @@ public class ChannelAdapter extends BaseAdapter {
         holder.details = details;
         holder.pauseResume = pauseResume;
         holder.stop = stop;
+        holder.delete = delete;
 
         return holder;
     }
@@ -246,6 +260,12 @@ public class ChannelAdapter extends BaseAdapter {
         holder.stop.setOnClickListener(v -> {
             if (listener != null) {
                 listener.onStopClicked(channel);
+            }
+        });
+
+        holder.delete.setOnClickListener(v -> {
+            if (listener != null) {
+                listener.onDeleteClicked(channel);
             }
         });
     }
@@ -359,5 +379,6 @@ public class ChannelAdapter extends BaseAdapter {
         TextView details;
         Button pauseResume;
         Button stop;
+        Button delete;
     }
 }

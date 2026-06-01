@@ -28,16 +28,24 @@ jobs:
       - name: Install ImageMagick
         run: sudo apt-get update && sudo apt-get install -y imagemagick
 
-      - name: Create placeholder icon
+      - name: Create launcher icons from repo logo
         run: |
+          test -f icon.png
+          mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
           mkdir -p app/src/main/res/mipmap-xxhdpi
           mkdir -p app/src/main/res/mipmap-xxxhdpi
-          convert -size 72x72 xc:#00A884 app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert -size 96x96 xc:#00A884 app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert -size 144x144 xc:#00A884 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert -size 192x192 xc:#00A884 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          convert icon.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          cp app/src/main/res/mipmap-mdpi/ic_launcher.png app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp app/src/main/res/mipmap-hdpi/ic_launcher.png app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp app/src/main/res/mipmap-xhdpi/ic_launcher.png app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp app/src/main/res/mipmap-xxhdpi/ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp app/src/main/res/mipmap-xxxhdpi/ic_launcher.png app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
 
       - name: Download Gradle wrapper jar
         run: |
@@ -47,6 +55,15 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
+
+      - name: Verify requested feature files
+        run: |
+          test -f app/src/main/java/com/livemonitor/app/YouTubeUrlUtils.java
+          grep -q 'delete.setText("Delete")' app/src/main/java/com/livemonitor/app/ChannelAdapter.java
+          grep -q 'deleteButton.setText("Delete")' app/src/main/java/com/livemonitor/app/RecordingAdapter.java
+          grep -q 'buildDebugSummary' app/src/main/java/com/livemonitor/app/RemoteConfig.java
+          grep -q 'markFetchedNow' app/src/main/java/com/livemonitor/app/RemoteConfig.java
+          grep -q 'ACTION_DOWNLOAD_VIDEO' app/src/main/java/com/livemonitor/app/LiveMonitorActions.java
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
