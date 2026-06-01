@@ -242,7 +242,7 @@ public class RemoteConfig {
         return ageMillis >= 0L && ageMillis <= ttlMillis;
     }
 
-    public String toSummary() {
+        public String toSummary() {
         return "RemoteConfig{"
             + "version=" + configVersion
             + ", minAppVersion=" + minAppVersion
@@ -251,6 +251,19 @@ public class RemoteConfig {
             + ", enabled=" + enabled
             + ", fetchedAt=" + fetchedAt
             + "}";
+    }
+
+    public String buildDebugSummary() {
+        return toSummary()
+            + ", updatedAt=" + updatedAt
+            + ", visitorDataUrl=" + (isBlank(visitorDataUrl) ? "empty" : visitorDataUrl.trim())
+            + ", innertubeBaseUrl=" + innertubeBaseUrl
+            + ", webPlayerBaseUrl=" + webPlayerBaseUrl
+            + ", notes=" + notes;
+    }
+
+    public void markFetchedNow() {
+        fetchedAt = System.currentTimeMillis();
     }
 
     private static List<YoutubeClient> buildDefaultClients() {
