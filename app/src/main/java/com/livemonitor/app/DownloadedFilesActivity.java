@@ -11,6 +11,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 
@@ -49,6 +50,11 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             @Override
             public void onRecoverClicked(RecordingItem recording) {
                 recoverRecording(recording);
+            }
+
+            @Override
+            public void onDeleteClicked(RecordingItem recording) {
+                confirmStopDownload(recording);
             }
         });
 
@@ -172,6 +178,47 @@ public class DownloadedFilesActivity extends AppCompatActivity {
                 Toast.LENGTH_LONG
             ).show();
         }
+    }
+
+
+    private void confirmStopDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Stop download?")
+            .setMessage("Stop further downloading and keep the file saved so far?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Stop", (dialog, which) -> stopDownload(recording))
+            .show();
+    }
+
+    private void stopDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(LiveMonitorActions.ACTION_STOP_RECORDING);
+        intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+
+        recording.markStoppedByUser();
+        storage.upsertRecording(recording);
+
+        if (recording.getChannelId() != null && !recording.getChannelId().trim().isEmpty()) {
+            storage.removeChannel(recording.getChannelId());
+        }
+
+        refreshFiles();
+        Toast.makeText(this, "Download stopped. Saved file kept.", Toast.LENGTH_SHORT).show();
     }
 
     private void recoverRecording(RecordingItem recording) {

@@ -256,7 +256,7 @@ public class RemoteConfig {
     public String buildDebugSummary() {
         return toSummary()
             + ", updatedAt=" + updatedAt
-            + ", visitorDataUrl=" + (isBlank(visitorDataUrl) ? "empty" : visitorDataUrl.trim())
+            + ", visitorDataUrl=" + describeOptionalUrl(visitorDataUrl)
             + ", innertubeBaseUrl=" + innertubeBaseUrl
             + ", webPlayerBaseUrl=" + webPlayerBaseUrl
             + ", notes=" + notes;
@@ -264,6 +264,10 @@ public class RemoteConfig {
 
     public void markFetchedNow() {
         fetchedAt = System.currentTimeMillis();
+    }
+
+    public static List<YoutubeClient> getDefaultClients() {
+        return Collections.unmodifiableList(buildDefaultClients());
     }
 
     private static List<YoutubeClient> buildDefaultClients() {
@@ -405,6 +409,10 @@ public class RemoteConfig {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private static String describeOptionalUrl(String value) {
+        return isBlank(value) ? "empty" : value.trim();
     }
 
     public int getConfigVersion() {
@@ -611,21 +619,154 @@ public class RemoteConfig {
             }
 
             YoutubeClient defaults = new YoutubeClient();
+            String clientName = json.optString(JSON_CLIENT_NAME, defaults.getClientName());
 
             return new YoutubeClient(
-                json.optString(JSON_CLIENT_NAME, defaults.getClientName()),
+                clientName,
                 json.optString(JSON_CLIENT_VERSION, defaults.getClientVersion()),
-                json.optString(JSON_OS_NAME, defaults.getOsName()),
-                json.optString(JSON_OS_VERSION, defaults.getOsVersion()),
-                json.optString(JSON_ANDROID_PACKAGE, defaults.getAndroidPackage()),
-                json.optString(JSON_ANDROID_SDK_VERSION, defaults.getAndroidSdkVersion()),
-                json.optString(JSON_DEVICE_MAKE, defaults.getDeviceMake()),
-                json.optString(JSON_DEVICE_MODEL, defaults.getDeviceModel()),
-                json.optString(JSON_CLIENT_ID, defaults.getClientId()),
-                json.optString(JSON_CLIENT_FORM_FACTOR, defaults.getClientFormFactor()),
-                json.optString(JSON_USER_AGENT, defaults.getUserAgent()),
+                json.optString(JSON_OS_NAME, inferOsName(clientName)),
+                json.optString(JSON_OS_VERSION, inferOsVersion(clientName)),
+                json.optString(JSON_ANDROID_PACKAGE, inferAndroidPackage(clientName)),
+                json.optString(JSON_ANDROID_SDK_VERSION, inferAndroidSdkVersion(clientName)),
+                json.optString(JSON_DEVICE_MAKE, inferDeviceMake(clientName)),
+                json.optString(JSON_DEVICE_MODEL, inferDeviceModel(clientName)),
+                json.optString(JSON_CLIENT_ID, inferClientId(clientName)),
+                json.optString(JSON_CLIENT_FORM_FACTOR, inferClientFormFactor(clientName)),
+                json.optString(JSON_USER_AGENT, inferUserAgent(clientName)),
                 json.optBoolean(JSON_ENABLED, defaults.isEnabled())
             );
+        }
+
+        private static String inferOsName(String clientName) {
+            if (isAndroidClient(clientName)) {
+                return "Android";
+            }
+
+            if (isIosClient(clientName)) {
+                return "iOS";
+            }
+
+            return "";
+        }
+
+        private static String inferOsVersion(String clientName) {
+            if (isAndroidClient(clientName)) {
+                return "14";
+            }
+
+            if (isIosClient(clientName)) {
+                return "17.5.1";
+            }
+
+            return "";
+        }
+
+        private static String inferAndroidPackage(String clientName) {
+            return isAndroidClient(clientName) ? "com.google.android.youtube" : "";
+        }
+
+        private static String inferAndroidSdkVersion(String clientName) {
+            return isAndroidClient(clientName) ? "34" : "";
+        }
+
+        private static String inferDeviceMake(String clientName) {
+            if (isAndroidClient(clientName)) {
+                return "Google";
+            }
+
+            if (isIosClient(clientName)) {
+                return "Apple";
+            }
+
+            return "";
+        }
+
+        private static String inferDeviceModel(String clientName) {
+            if (isAndroidClient(clientName)) {
+                return "Pixel 8 Pro";
+            }
+
+            if (isIosClient(clientName)) {
+                return "iPhone16,2";
+            }
+
+            return "";
+        }
+
+        private static String inferClientId(String clientName) {
+            if (isIosClient(clientName)) {
+                return "5";
+            }
+
+            if (isAndroidClient(clientName)) {
+                return "3";
+            }
+
+            if (isTvClient(clientName)) {
+                return "85";
+            }
+
+            if (isWebEmbeddedClient(clientName)) {
+                return "56";
+            }
+
+            if (isWebClient(clientName)) {
+                return "1";
+            }
+
+            return "";
+        }
+
+        private static String inferClientFormFactor(String clientName) {
+            if (isTvClient(clientName)) {
+                return "TV";
+            }
+
+            if (isAndroidClient(clientName) || isIosClient(clientName)) {
+                return "MOBILE";
+            }
+
+            if (isWebClient(clientName)) {
+                return "WEB";
+            }
+
+            return "";
+        }
+
+        private static String inferUserAgent(String clientName) {
+            if (isAndroidClient(clientName)) {
+                return buildAndroidUserAgent();
+            }
+
+            if (isIosClient(clientName)) {
+                return buildIosUserAgent();
+            }
+
+            if (isTvClient(clientName)) {
+                return buildTvUserAgent();
+            }
+
+            return buildDefaultUserAgent();
+        }
+
+        private static boolean isAndroidClient(String clientName) {
+            return "ANDROID".equalsIgnoreCase(nullToEmpty(clientName));
+        }
+
+        private static boolean isIosClient(String clientName) {
+            return "IOS".equalsIgnoreCase(nullToEmpty(clientName));
+        }
+
+        private static boolean isTvClient(String clientName) {
+            return nullToEmpty(clientName).toUpperCase().contains("TV");
+        }
+
+        private static boolean isWebEmbeddedClient(String clientName) {
+            return nullToEmpty(clientName).toUpperCase().contains("WEB_EMBEDDED");
+        }
+
+        private static boolean isWebClient(String clientName) {
+            return nullToEmpty(clientName).toUpperCase().startsWith("WEB");
         }
 
         public JSONObject toJson() throws JSONException {

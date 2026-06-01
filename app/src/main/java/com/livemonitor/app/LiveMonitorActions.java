@@ -35,6 +35,12 @@ public final class LiveMonitorActions {
     public static final String ACTION_RESTORE_MONITORING =
         PACKAGE + ".action.RESTORE_MONITORING";
 
+    public static final String ACTION_DOWNLOAD_VIDEO =
+        PACKAGE + ".action.DOWNLOAD_VIDEO";
+
+    public static final String ACTION_STOP_RECORDING =
+        PACKAGE + ".action.STOP_RECORDING";
+
     public static final String ACTION_NETWORK_AVAILABLE =
         PACKAGE + ".action.NETWORK_AVAILABLE";
 
