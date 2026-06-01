@@ -7,6 +7,7 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Remote configuration fetched from a hosted config.json file.
@@ -283,7 +284,7 @@ public class RemoteConfig {
             "Apple",
             "iPhone16,2",
             "5",
-            "MOBILE",
+            "SMALL_FORM_FACTOR",
             buildIosUserAgent(),
             true
         ));
@@ -298,7 +299,7 @@ public class RemoteConfig {
             "",
             "",
             "85",
-            "TV",
+            "LARGE_FORM_FACTOR",
             buildTvUserAgent(),
             true
         ));
@@ -313,7 +314,7 @@ public class RemoteConfig {
             "",
             "",
             "56",
-            "WEB",
+            "LARGE_FORM_FACTOR",
             buildDefaultUserAgent(),
             true
         ));
@@ -328,7 +329,7 @@ public class RemoteConfig {
             "",
             "",
             "1",
-            "WEB",
+            "LARGE_FORM_FACTOR",
             buildDefaultUserAgent(),
             true
         ));
@@ -343,7 +344,7 @@ public class RemoteConfig {
             "Google",
             "Pixel 8 Pro",
             "3",
-            "MOBILE",
+            "SMALL_FORM_FACTOR",
             buildAndroidUserAgent(),
             true
         ));
@@ -555,7 +556,7 @@ public class RemoteConfig {
             this.deviceMake = "Apple";
             this.deviceModel = "iPhone16,2";
             this.clientId = "5";
-            this.clientFormFactor = "MOBILE";
+            this.clientFormFactor = "SMALL_FORM_FACTOR";
             this.userAgent = buildIosUserAgent();
             this.enabled = true;
         }
@@ -608,7 +609,7 @@ public class RemoteConfig {
             this.deviceMake = nullToEmpty(deviceMake);
             this.deviceModel = nullToEmpty(deviceModel);
             this.clientId = nullToEmpty(clientId);
-            this.clientFormFactor = nullToEmpty(clientFormFactor);
+            this.clientFormFactor = normalizeClientFormFactor(clientFormFactor, clientName);
             this.userAgent = nullToEmpty(userAgent);
             this.enabled = enabled;
         }
@@ -718,19 +719,15 @@ public class RemoteConfig {
         }
 
         private static String inferClientFormFactor(String clientName) {
-            if (isTvClient(clientName)) {
-                return "TV";
-            }
-
             if (isAndroidClient(clientName) || isIosClient(clientName)) {
-                return "MOBILE";
+                return "SMALL_FORM_FACTOR";
             }
 
-            if (isWebClient(clientName)) {
-                return "WEB";
+            if (isTvClient(clientName) || isWebClient(clientName)) {
+                return "LARGE_FORM_FACTOR";
             }
 
-            return "";
+            return "UNKNOWN_FORM_FACTOR";
         }
 
         private static String inferUserAgent(String clientName) {
@@ -822,11 +819,31 @@ public class RemoteConfig {
                 client.put("deviceModel", deviceModel);
             }
 
-            if (!isBlank(clientFormFactor)) {
-                client.put("clientFormFactor", clientFormFactor);
+            // Do not send clientFormFactor to Innertube/player. YouTube rejects
+            // legacy values such as MOBILE, TV, and WEB with HTTP 400, and this
+            // optional field is not needed for manifest resolution.
+            return client;
+        }
+
+        private static String normalizeClientFormFactor(String clientFormFactor, String clientName) {
+            String normalized = nullToEmpty(clientFormFactor).trim().toUpperCase(Locale.US);
+
+            if ("UNKNOWN_FORM_FACTOR".equals(normalized)
+                || "SMALL_FORM_FACTOR".equals(normalized)
+                || "LARGE_FORM_FACTOR".equals(normalized)
+                || "AUTOMOTIVE_FORM_FACTOR".equals(normalized)) {
+                return normalized;
             }
 
-            return client;
+            if ("MOBILE".equals(normalized)) {
+                return "SMALL_FORM_FACTOR";
+            }
+
+            if ("TV".equals(normalized) || "WEB".equals(normalized)) {
+                return "LARGE_FORM_FACTOR";
+            }
+
+            return inferClientFormFactor(clientName);
         }
 
         public boolean isWebLike() {
@@ -935,7 +952,7 @@ public class RemoteConfig {
         }
 
         public void setClientFormFactor(String clientFormFactor) {
-            this.clientFormFactor = nullToEmpty(clientFormFactor);
+            this.clientFormFactor = normalizeClientFormFactor(clientFormFactor, clientName);
         }
 
         public void setUserAgent(String userAgent) {
