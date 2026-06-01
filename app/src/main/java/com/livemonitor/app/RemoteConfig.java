@@ -242,7 +242,7 @@ public class RemoteConfig {
         return ageMillis >= 0L && ageMillis <= ttlMillis;
     }
 
-    public String toSummary() {
+        public String toSummary() {
         return "RemoteConfig{"
             + "version=" + configVersion
             + ", minAppVersion=" + minAppVersion
