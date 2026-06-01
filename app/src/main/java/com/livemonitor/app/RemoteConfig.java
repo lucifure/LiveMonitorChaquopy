@@ -50,7 +50,7 @@ public class RemoteConfig {
     private long fetchedAt;
 
     public RemoteConfig() {
-        this.configVersion = 1;
+        this.configVersion = 2;
         this.minAppVersion = 1;
         this.updatedAt = "";
         this.youtubeClients = buildDefaultClients();
@@ -235,22 +235,21 @@ public class RemoteConfig {
             return false;
         }
 
-        long ttlMillis = Math.max(1, ttlMinutes) * 60_000L;
-        return System.currentTimeMillis() - fetchedAt <= ttlMillis;
+        int safeTtlMinutes = Math.max(1, ttlMinutes);
+        long ageMillis = System.currentTimeMillis() - fetchedAt;
+        long ttlMillis = safeTtlMinutes * 60_000L;
+
+        return ageMillis >= 0L && ageMillis <= ttlMillis;
     }
 
-    public void markFetchedNow() {
-        fetchedAt = System.currentTimeMillis();
-    }
-
-    public String buildDebugSummary() {
+    public String toSummary() {
         return "RemoteConfig{"
             + "version=" + configVersion
             + ", minAppVersion=" + minAppVersion
             + ", clients=" + youtubeClients.size()
             + ", apiKeys=" + apiKeys.size()
-            + ", visitorDataUrl=" + (!isBlank(visitorDataUrl))
             + ", enabled=" + enabled
+            + ", fetchedAt=" + fetchedAt
             + "}";
     }
 
@@ -258,72 +257,141 @@ public class RemoteConfig {
         List<YoutubeClient> clients = new ArrayList<>();
 
         clients.add(new YoutubeClient(
-            "ANDROID",
-            "19.09.37",
-            "Android",
-            "11",
-            "com.google.android.youtube",
-            "1537638400",
+            "IOS",
+            "19.29.1",
+            "iOS",
+            "17.5.1",
+            "",
+            "",
+            "Apple",
+            "iPhone16,2",
+            "5",
+            "MOBILE",
+            buildIosUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+            "2.0",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "85",
+            "TV",
+            buildTvUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "WEB_EMBEDDED_PLAYER",
+            "1.20240515.01.00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "56",
+            "WEB",
+            buildDefaultUserAgent(),
             true
         ));
 
         clients.add(new YoutubeClient(
             "WEB",
-            "2.20240304.00.00",
+            "2.20240515.01.00",
             "",
             "",
             "",
             "",
+            "",
+            "",
+            "1",
+            "WEB",
+            buildDefaultUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "ANDROID",
+            "19.29.37",
+            "Android",
+            "14",
+            "com.google.android.youtube",
+            "34",
+            "Google",
+            "Pixel 8 Pro",
+            "3",
+            "MOBILE",
+            buildAndroidUserAgent(),
             true
         ));
 
         return clients;
     }
 
-    private static List<YoutubeClient> sanitizeClients(List<YoutubeClient> value) {
-        List<YoutubeClient> result = new ArrayList<>();
+    private static List<YoutubeClient> sanitizeClients(List<YoutubeClient> clients) {
+        List<YoutubeClient> sanitized = new ArrayList<>();
 
-        if (value != null) {
-            for (YoutubeClient client : value) {
+        if (clients != null) {
+            for (YoutubeClient client : clients) {
                 if (client != null && client.isValid()) {
-                    result.add(client);
+                    sanitized.add(client);
                 }
             }
         }
 
-        if (result.isEmpty()) {
-            result.addAll(buildDefaultClients());
-        }
-
-        return result;
+        return sanitized.isEmpty() ? buildDefaultClients() : sanitized;
     }
 
-    private static List<String> sanitizeStringList(List<String> value) {
-        List<String> result = new ArrayList<>();
+    private static List<String> sanitizeStringList(List<String> values) {
+        List<String> sanitized = new ArrayList<>();
 
-        if (value != null) {
-            for (String item : value) {
-                if (!isBlank(item)) {
-                    result.add(item.trim());
-                }
+        if (values == null) {
+            return sanitized;
+        }
+
+        for (String value : values) {
+            if (!isBlank(value)) {
+                sanitized.add(value.trim());
             }
         }
 
-        return result;
+        return sanitized;
     }
 
     private static String buildDefaultUserAgent() {
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) "
-            + "Chrome/124.0.0.0 Safari/537.36";
+            + "Chrome/125.0.0.0 Safari/537.36";
     }
 
-    private static boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
+    private static String buildAndroidUserAgent() {
+        return "com.google.android.youtube/19.29.37 "
+            + "(Linux; U; Android 14; en_US; Pixel 8 Pro) gzip";
+    }
+
+    private static String buildIosUserAgent() {
+        return "com.google.ios.youtube/19.29.1 "
+            + "(iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)";
+    }
+
+    private static String buildTvUserAgent() {
+        return "Mozilla/5.0 (ChromiumStylePlatform) "
+            + "CTV AppleWebKit/537.36 (KHTML, like Gecko) "
+            + "Chrome/125.0.0.0 Safari/537.36";
     }
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     public int getConfigVersion() {
@@ -346,10 +414,9 @@ public class RemoteConfig {
         return Collections.unmodifiableList(apiKeys);
     }
 
-    public String getVisitorDataUrl() {
+        public String getVisitorDataUrl() {
         return visitorDataUrl;
     }
-
     public String getInnertubeBaseUrl() {
         return innertubeBaseUrl;
     }
@@ -437,6 +504,11 @@ public class RemoteConfig {
         private static final String JSON_OS_VERSION = "osVersion";
         private static final String JSON_ANDROID_PACKAGE = "androidPackage";
         private static final String JSON_ANDROID_SDK_VERSION = "androidSdkVersion";
+        private static final String JSON_DEVICE_MAKE = "deviceMake";
+        private static final String JSON_DEVICE_MODEL = "deviceModel";
+        private static final String JSON_CLIENT_ID = "clientId";
+        private static final String JSON_CLIENT_FORM_FACTOR = "clientFormFactor";
+        private static final String JSON_USER_AGENT = "userAgent";
         private static final String JSON_ENABLED = "enabled";
 
         private String clientName;
@@ -445,15 +517,25 @@ public class RemoteConfig {
         private String osVersion;
         private String androidPackage;
         private String androidSdkVersion;
+        private String deviceMake;
+        private String deviceModel;
+        private String clientId;
+        private String clientFormFactor;
+        private String userAgent;
         private boolean enabled;
 
         public YoutubeClient() {
-            this.clientName = "ANDROID";
-            this.clientVersion = "19.09.37";
-            this.osName = "Android";
-            this.osVersion = "11";
-            this.androidPackage = "com.google.android.youtube";
-            this.androidSdkVersion = "1537638400";
+            this.clientName = "IOS";
+            this.clientVersion = "19.29.1";
+            this.osName = "iOS";
+            this.osVersion = "17.5.1";
+            this.androidPackage = "";
+            this.androidSdkVersion = "";
+            this.deviceMake = "Apple";
+            this.deviceModel = "iPhone16,2";
+            this.clientId = "5";
+            this.clientFormFactor = "MOBILE";
+            this.userAgent = buildIosUserAgent();
             this.enabled = true;
         }
 
@@ -466,12 +548,47 @@ public class RemoteConfig {
             String androidSdkVersion,
             boolean enabled
         ) {
+            this(
+                clientName,
+                clientVersion,
+                osName,
+                osVersion,
+                androidPackage,
+                androidSdkVersion,
+                "",
+                "",
+                "",
+                "",
+                "",
+                enabled
+            );
+        }
+
+        public YoutubeClient(
+            String clientName,
+            String clientVersion,
+            String osName,
+            String osVersion,
+            String androidPackage,
+            String androidSdkVersion,
+            String deviceMake,
+            String deviceModel,
+            String clientId,
+            String clientFormFactor,
+            String userAgent,
+            boolean enabled
+        ) {
             this.clientName = nullToEmpty(clientName);
             this.clientVersion = nullToEmpty(clientVersion);
             this.osName = nullToEmpty(osName);
             this.osVersion = nullToEmpty(osVersion);
             this.androidPackage = nullToEmpty(androidPackage);
             this.androidSdkVersion = nullToEmpty(androidSdkVersion);
+            this.deviceMake = nullToEmpty(deviceMake);
+            this.deviceModel = nullToEmpty(deviceModel);
+            this.clientId = nullToEmpty(clientId);
+            this.clientFormFactor = nullToEmpty(clientFormFactor);
+            this.userAgent = nullToEmpty(userAgent);
             this.enabled = enabled;
         }
 
@@ -489,6 +606,11 @@ public class RemoteConfig {
                 json.optString(JSON_OS_VERSION, defaults.getOsVersion()),
                 json.optString(JSON_ANDROID_PACKAGE, defaults.getAndroidPackage()),
                 json.optString(JSON_ANDROID_SDK_VERSION, defaults.getAndroidSdkVersion()),
+                json.optString(JSON_DEVICE_MAKE, defaults.getDeviceMake()),
+                json.optString(JSON_DEVICE_MODEL, defaults.getDeviceModel()),
+                json.optString(JSON_CLIENT_ID, defaults.getClientId()),
+                json.optString(JSON_CLIENT_FORM_FACTOR, defaults.getClientFormFactor()),
+                json.optString(JSON_USER_AGENT, defaults.getUserAgent()),
                 json.optBoolean(JSON_ENABLED, defaults.isEnabled())
             );
         }
@@ -502,6 +624,11 @@ public class RemoteConfig {
             json.put(JSON_OS_VERSION, osVersion);
             json.put(JSON_ANDROID_PACKAGE, androidPackage);
             json.put(JSON_ANDROID_SDK_VERSION, androidSdkVersion);
+            json.put(JSON_DEVICE_MAKE, deviceMake);
+            json.put(JSON_DEVICE_MODEL, deviceModel);
+            json.put(JSON_CLIENT_ID, clientId);
+            json.put(JSON_CLIENT_FORM_FACTOR, clientFormFactor);
+            json.put(JSON_USER_AGENT, userAgent);
             json.put(JSON_ENABLED, enabled);
 
             return json;
@@ -533,7 +660,40 @@ public class RemoteConfig {
                 client.put("androidSdkVersion", androidSdkVersion);
             }
 
+            if (!isBlank(deviceMake)) {
+                client.put("deviceMake", deviceMake);
+            }
+
+            if (!isBlank(deviceModel)) {
+                client.put("deviceModel", deviceModel);
+            }
+
+            if (!isBlank(clientFormFactor)) {
+                client.put("clientFormFactor", clientFormFactor);
+            }
+
             return client;
+        }
+
+        public boolean isWebLike() {
+            return clientName != null && clientName.toUpperCase().contains("WEB");
+        }
+
+        public boolean isEmbeddedLike() {
+            return clientName != null && clientName.toUpperCase().contains("EMBED");
+        }
+
+        public boolean isAndroidLike() {
+            return "ANDROID".equalsIgnoreCase(clientName)
+                || "ANDROID_TESTSUITE".equalsIgnoreCase(clientName);
+        }
+
+        public boolean isIosLike() {
+            return "IOS".equalsIgnoreCase(clientName);
+        }
+
+        public boolean isTvLike() {
+            return clientName != null && clientName.toUpperCase().contains("TV");
         }
 
         public String getClientName() {
@@ -558,6 +718,26 @@ public class RemoteConfig {
 
         public String getAndroidSdkVersion() {
             return androidSdkVersion;
+        }
+
+        public String getDeviceMake() {
+            return deviceMake;
+        }
+
+        public String getDeviceModel() {
+            return deviceModel;
+        }
+
+        public String getClientId() {
+            return clientId;
+        }
+
+        public String getClientFormFactor() {
+            return clientFormFactor;
+        }
+
+        public String getUserAgent() {
+            return userAgent;
         }
 
         public boolean isEnabled() {
@@ -586,6 +766,26 @@ public class RemoteConfig {
 
         public void setAndroidSdkVersion(String androidSdkVersion) {
             this.androidSdkVersion = nullToEmpty(androidSdkVersion);
+        }
+
+        public void setDeviceMake(String deviceMake) {
+            this.deviceMake = nullToEmpty(deviceMake);
+        }
+
+        public void setDeviceModel(String deviceModel) {
+            this.deviceModel = nullToEmpty(deviceModel);
+        }
+
+        public void setClientId(String clientId) {
+            this.clientId = nullToEmpty(clientId);
+        }
+
+        public void setClientFormFactor(String clientFormFactor) {
+            this.clientFormFactor = nullToEmpty(clientFormFactor);
+        }
+
+        public void setUserAgent(String userAgent) {
+            this.userAgent = nullToEmpty(userAgent);
         }
 
         public void setEnabled(boolean enabled) {
