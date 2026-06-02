@@ -28,12 +28,17 @@ import java.util.List;
  */
 public class RecordingAdapter extends BaseAdapter {
 
+    public enum Mode {
+        DOWNLOADING,
+        DOWNLOADED
+    }
+
     public interface Listener {
         void onRecordingClicked(RecordingItem recording);
 
         void onOpenFileClicked(RecordingItem recording);
 
-        void onRecoverClicked(RecordingItem recording);
+        void onPauseResumeClicked(RecordingItem recording);
 
         void onDeleteClicked(RecordingItem recording);
     }
@@ -41,10 +46,17 @@ public class RecordingAdapter extends BaseAdapter {
     private final Context context;
     private final List<RecordingItem> recordings;
     private Listener listener;
+    private Mode mode;
 
     public RecordingAdapter(Context context) {
         this.context = context;
         this.recordings = new ArrayList<>();
+        this.mode = Mode.DOWNLOADING;
+    }
+
+    public void setMode(Mode mode) {
+        this.mode = mode == null ? Mode.DOWNLOADING : mode;
+        notifyDataSetChanged();
     }
 
     public void setListener(Listener listener) {
@@ -178,9 +190,9 @@ public class RecordingAdapter extends BaseAdapter {
         openButton.setAllCaps(false);
         openButton.setText("Open");
 
-        Button recoverButton = new Button(context);
-        recoverButton.setAllCaps(false);
-        recoverButton.setText("Recover");
+        Button pauseResumeButton = new Button(context);
+        pauseResumeButton.setAllCaps(false);
+        pauseResumeButton.setText("Pause");
 
         Button deleteButton = new Button(context);
         deleteButton.setAllCaps(false);
@@ -188,12 +200,12 @@ public class RecordingAdapter extends BaseAdapter {
 
         buttonRow.addView(openButton);
 
-        LinearLayout.LayoutParams recoverParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams pauseParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        recoverParams.leftMargin = dp(8);
-        buttonRow.addView(recoverButton, recoverParams);
+        pauseParams.leftMargin = dp(8);
+        buttonRow.addView(pauseResumeButton, pauseParams);
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -216,7 +228,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.details = details;
         holder.progressBar = progressBar;
         holder.openButton = openButton;
-        holder.recoverButton = recoverButton;
+        holder.pauseResumeButton = pauseResumeButton;
         holder.deleteButton = deleteButton;
 
         return holder;
@@ -230,7 +242,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.statusBadge.setText("Unknown");
             holder.progressBar.setProgress(0);
             holder.openButton.setVisibility(View.GONE);
-            holder.recoverButton.setVisibility(View.GONE);
+            holder.pauseResumeButton.setVisibility(View.GONE);
             holder.deleteButton.setVisibility(View.GONE);
             return;
         }
@@ -242,9 +254,13 @@ public class RecordingAdapter extends BaseAdapter {
         holder.statusBadge.setBackgroundColor(statusColor(recording.getStatus()));
         holder.progressBar.setProgress(recording.getProgressPercent());
 
-        holder.openButton.setVisibility(recording.hasExistingFinalMp4File() ? View.VISIBLE : View.GONE);
-        holder.recoverButton.setVisibility(recording.isRecoverable() ? View.VISIBLE : View.GONE);
-        holder.deleteButton.setVisibility(View.VISIBLE);
+        boolean downloadedMode = mode == Mode.DOWNLOADED;
+        boolean activeDownload = !downloadedMode && recording.isActive();
+
+        holder.openButton.setVisibility(recording.getBestPlayablePath().trim().isEmpty() ? View.GONE : View.VISIBLE);
+        holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
+        holder.pauseResumeButton.setText(recording.isPausedByUser() ? "Resume" : "Pause");
+        holder.deleteButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
@@ -258,9 +274,9 @@ public class RecordingAdapter extends BaseAdapter {
             }
         });
 
-        holder.recoverButton.setOnClickListener(v -> {
+        holder.pauseResumeButton.setOnClickListener(v -> {
             if (listener != null) {
-                listener.onRecoverClicked(recording);
+                listener.onPauseResumeClicked(recording);
             }
         });
 
@@ -306,6 +322,10 @@ public class RecordingAdapter extends BaseAdapter {
             return "Network";
         }
 
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(status)) {
+            return "Paused";
+        }
+
         if (RecordingItem.STATUS_CONVERTING.equals(status)) {
             return "Converting";
         }
@@ -338,6 +358,10 @@ public class RecordingAdapter extends BaseAdapter {
             return Color.rgb(255, 128, 0);
         }
 
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(status)) {
+            return Color.rgb(80, 120, 220);
+        }
+
         if (RecordingItem.STATUS_COMPLETED.equals(status)) {
             return Color.rgb(0, 168, 132);
         }
@@ -366,7 +390,7 @@ public class RecordingAdapter extends BaseAdapter {
         TextView details;
         ProgressBar progressBar;
         Button openButton;
-        Button recoverButton;
+        Button pauseResumeButton;
         Button deleteButton;
     }
 }

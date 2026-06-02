@@ -11,7 +11,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 
@@ -21,7 +20,7 @@ import java.util.List;
 /**
  * Downloaded files screen from 3-dot menu.
  *
- * Shows completed and recoverable recordings.
+ * Shows completed playable recordings only.
  */
 public class DownloadedFilesActivity extends AppCompatActivity {
 
@@ -36,6 +35,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
         storage = new AppStorage(this);
         adapter = new RecordingAdapter(this);
+        adapter.setMode(RecordingAdapter.Mode.DOWNLOADED);
         adapter.setListener(new RecordingAdapter.Listener() {
             @Override
             public void onRecordingClicked(RecordingItem recording) {
@@ -48,13 +48,13 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onRecoverClicked(RecordingItem recording) {
-                recoverRecording(recording);
+            public void onPauseResumeClicked(RecordingItem recording) {
+                // Downloaded files are read-only from this screen.
             }
 
             @Override
             public void onDeleteClicked(RecordingItem recording) {
-                confirmStopDownload(recording);
+                // Downloaded files are read-only from this screen.
             }
         });
 
@@ -133,8 +133,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     }
 
     private void refreshFiles() {
-        RecordingFileManager fileManager = new RecordingFileManager(this);
-        fileManager.registerRecoverableTsFilesInStorage();
+        storage.removeEmptyOrUnplayableFinishedRecordings();
 
         List<RecordingItem> completed = storage.loadCompletedRecordings();
         adapter.setRecordings(completed);
@@ -180,69 +179,6 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         }
     }
 
-
-    private void confirmStopDownload(RecordingItem recording) {
-        if (recording == null) {
-            return;
-        }
-
-        new AlertDialog.Builder(this)
-            .setTitle("Stop download?")
-            .setMessage("Stop further downloading and keep the file saved so far?")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Stop", (dialog, which) -> stopDownload(recording))
-            .show();
-    }
-
-    private void stopDownload(RecordingItem recording) {
-        if (recording == null) {
-            return;
-        }
-
-        Intent intent = new Intent(this, MonitorService.class);
-        intent.setAction(LiveMonitorActions.ACTION_STOP_RECORDING);
-        intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
-        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
-
-        recording.markStoppedByUser();
-        storage.upsertRecording(recording);
-
-        if (recording.getChannelId() != null && !recording.getChannelId().trim().isEmpty()) {
-            storage.removeChannel(recording.getChannelId());
-        }
-
-        refreshFiles();
-        Toast.makeText(this, "Download stopped. Saved file kept.", Toast.LENGTH_SHORT).show();
-    }
-
-    private void recoverRecording(RecordingItem recording) {
-        if (recording == null) {
-            return;
-        }
-
-        /*
-         * Actual TS -> MP4 conversion will be wired to FFmpegRunner later.
-         * For now this screen marks that the file was selected for recovery.
-         */
-        storage.appendLog(LogItem.recording(
-            LogItem.LEVEL_INFO,
-            LogItem.SOURCE_UI,
-            recording,
-            "Recover selected for TS file."
-        ));
-
-        Toast.makeText(
-            this,
-            "Recovery will be handled by recorder integration.",
-            Toast.LENGTH_SHORT
-        ).show();
-    }
 
     private int dp(int value) {
         float density = getResources().getDisplayMetrics().density;
