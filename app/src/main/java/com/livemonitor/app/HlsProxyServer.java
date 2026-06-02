@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -37,6 +38,8 @@ public class HlsProxyServer {
     private static final String TAG = "HlsProxyServer";
     private static final String HOST = "127.0.0.1";
     private static final int LIVE_SEGMENTS_TO_KEEP = 8;
+    private static final int MAX_UPSTREAM_ATTEMPTS = 3;
+    private static final long INITIAL_UPSTREAM_RETRY_DELAY_MS = 750L;
 
     private static final Pattern URI_ATTR_PATTERN = Pattern.compile("URI=\"([^\"]+)\"");
     private static final Pattern BANDWIDTH_PATTERN = Pattern.compile("BANDWIDTH=(\\d+)");
@@ -61,6 +64,9 @@ public class HlsProxyServer {
 
         client = new OkHttpClient.Builder()
             .dns(HlsProxyServer::lookupIpv4First)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .callTimeout(120, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
@@ -238,90 +244,157 @@ public class HlsProxyServer {
             || remoteUrl.contains("/hls_playlist/")
             || remoteUrl.contains("/hls_variant/");
 
-        Request.Builder builder = new Request.Builder()
-            .url(remoteUrl)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36")
-            .header("Accept", "*/*")
-            .header("Accept-Encoding", "identity")
-            .header("Connection", "close");
+        IOException lastIoException = null;
+        int maxAttempts = isSegmentUrl || isPlaylistUrl ? MAX_UPSTREAM_ATTEMPTS : 1;
 
-        if (isPlaylistUrl) {
-            builder.header("Referer", "https://www.youtube.com/");
-            builder.header("Origin", "https://www.youtube.com");
-        }
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            Request.Builder builder = new Request.Builder()
+                .url(remoteUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36")
+                .header("Accept", "*/*")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close");
 
-        if (rangeHeader != null && !rangeHeader.isEmpty()) {
-            builder.header("Range", rangeHeader);
-        }
+            if (isPlaylistUrl) {
+                builder.header("Referer", "https://www.youtube.com/");
+                builder.header("Origin", "https://www.youtube.com");
+            }
 
-        try (Response response = client.newCall(builder.build()).execute()) {
-            ResponseBody body = response.body();
-            String contentType = response.header("Content-Type", "");
-            long contentLength = body != null ? body.contentLength() : -1;
+            if (rangeHeader != null && !rangeHeader.isEmpty()) {
+                builder.header("Range", rangeHeader);
+            }
 
-            if (isSegmentUrl || !response.isSuccessful()) {
+            try (Response response = client.newCall(builder.build()).execute()) {
+                ResponseBody body = response.body();
+                String contentType = response.header("Content-Type", "");
+                long contentLength = body != null ? body.contentLength() : -1;
+
+                if (isSegmentUrl || !response.isSuccessful() || attempt > 1) {
+                    proxyLog(
+                        "upstream "
+                            + response.code()
+                            + " attempt="
+                            + attempt
+                            + "/"
+                            + maxAttempts
+                            + " type="
+                            + contentType
+                            + " len="
+                            + contentLength
+                            + " url="
+                            + shortRemoteUrl(remoteUrl)
+                    );
+                }
+
+                if (!response.isSuccessful() || body == null) {
+                    String errorText = readBodyForLog(body);
+
+                    if (!errorText.isEmpty()) {
+                        proxyLog("upstream error body: " + shorten(errorText, 220));
+                    }
+
+                    if (shouldRetryUpstream(response.code(), attempt, maxAttempts)) {
+                        sleepBeforeRetry(attempt);
+                        continue;
+                    }
+
+                    writeTextResponse(
+                        socket,
+                        response.code(),
+                        "Upstream Error",
+                        "Upstream error: " + response.code()
+                    );
+                    return;
+                }
+
+                boolean isPlaylist =
+                    !isSegmentUrl
+                    && (remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
+                        || contentType.toLowerCase(Locale.US).contains("mpegurl")
+                        || contentType.toLowerCase(Locale.US).contains("application/vnd.apple.mpegurl"));
+
+                if (isPlaylist) {
+                    String playlist = body.string();
+                    String rewritten = rewritePlaylist(remoteUrl, playlist);
+                    writeTextResponse(socket, 200, "OK", rewritten, "application/vnd.apple.mpegurl");
+                    return;
+                }
+
+                if (isSegmentUrl && looksLikeTextResponse(contentType)) {
+                    String text = body.string();
+                    proxyLog("segment returned text instead of media: " + shorten(text, 220));
+
+                    if (attempt < maxAttempts) {
+                        sleepBeforeRetry(attempt);
+                        continue;
+                    }
+
+                    writeTextResponse(
+                        socket,
+                        502,
+                        "Bad Gateway",
+                        "Segment returned text instead of media"
+                    );
+                    return;
+                }
+
+                writeStreamResponse(socket, response, body, isSegmentUrl);
+                return;
+            } catch (IOException e) {
+                lastIoException = e;
                 proxyLog(
-                    "upstream "
-                        + response.code()
-                        + " type="
-                        + contentType
-                        + " len="
-                        + contentLength
+                    "upstream IO error attempt="
+                        + attempt
+                        + "/"
+                        + maxAttempts
+                        + " error="
+                        + shorten(e.getMessage(), 180)
                         + " url="
                         + shortRemoteUrl(remoteUrl)
                 );
-            }
 
-            if (!response.isSuccessful() || body == null) {
-                String errorText = "";
-
-                if (body != null) {
-                    try {
-                        errorText = body.string();
-                    } catch (Exception ignored) {
-                    }
+                if (attempt < maxAttempts) {
+                    sleepBeforeRetry(attempt);
+                    continue;
                 }
-
-                if (!errorText.isEmpty()) {
-                    proxyLog("upstream error body: " + shorten(errorText, 220));
-                }
-
-                writeTextResponse(
-                    socket,
-                    response.code(),
-                    "Upstream Error",
-                    "Upstream error: " + response.code()
-                );
-                return;
             }
+        }
 
-            boolean isPlaylist =
-                !isSegmentUrl
-                && (remoteUrl.toLowerCase(Locale.US).contains(".m3u8")
-                    || contentType.toLowerCase(Locale.US).contains("mpegurl")
-                    || contentType.toLowerCase(Locale.US).contains("application/vnd.apple.mpegurl"));
+        if (lastIoException != null) {
+            writeTextResponse(socket, 504, "Gateway Timeout", "Upstream timeout or network error");
+        }
+    }
 
-            if (isPlaylist) {
-                String playlist = body.string();
-                String rewritten = rewritePlaylist(remoteUrl, playlist);
-                writeTextResponse(socket, 200, "OK", rewritten, "application/vnd.apple.mpegurl");
-                return;
-            }
+    private String readBodyForLog(ResponseBody body) {
+        if (body == null) {
+            return "";
+        }
 
-            if (isSegmentUrl && looksLikeTextResponse(contentType)) {
-                String text = body.string();
-                proxyLog("segment returned text instead of media: " + shorten(text, 220));
+        try {
+            return body.string();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
 
-                writeTextResponse(
-                    socket,
-                    502,
-                    "Bad Gateway",
-                    "Segment returned text instead of media"
-                );
-                return;
-            }
+    private boolean shouldRetryUpstream(int responseCode, int attempt, int maxAttempts) {
+        if (attempt >= maxAttempts) {
+            return false;
+        }
 
-            writeStreamResponse(socket, response, body, isSegmentUrl);
+        return responseCode == 408
+            || responseCode == 429
+            || responseCode == 500
+            || responseCode == 502
+            || responseCode == 503
+            || responseCode == 504;
+    }
+
+    private void sleepBeforeRetry(int attempt) {
+        try {
+            Thread.sleep(Math.min(5_000L, INITIAL_UPSTREAM_RETRY_DELAY_MS * Math.max(1, attempt)));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

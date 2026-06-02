@@ -43,6 +43,8 @@
                 android:textColor="#FFFFFF"
                 android:textSize="21sp"
                 android:textStyle="bold"
+                android:singleLine="true"
+                android:ellipsize="end"
                 android:paddingStart="10dp" />
 
             <TextView
@@ -52,6 +54,9 @@
                 android:text="Ready"
                 android:textColor="#E7FFFA"
                 android:textSize="12sp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:maxWidth="150dp"
                 android:paddingEnd="10dp" />
 
             <Button
@@ -154,7 +159,7 @@
 
         </LinearLayout>
 
-        <!-- Downloads tab -->
+        <!-- Downloading tab -->
         <LinearLayout
             android:id="@+id/downloadsPanel"
             android:layout_width="match_parent"
@@ -167,7 +172,7 @@
                 android:id="@+id/downloadsHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Downloads"
+                android:text="Downloading"
                 android:textColor="#111B21"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -177,7 +182,7 @@
                 android:id="@+id/emptyDownloadsText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="No recordings yet."
+                android:text="No active downloads. Completed files are available from the menu."
                 android:textColor="#667781"
                 android:textSize="14sp"
                 android:gravity="center"
@@ -259,7 +264,7 @@
                 android:id="@+id/navDownloadsText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Downloads"
+                android:text="Downloading"
                 android:textColor="#667781"
                 android:textSize="12sp" />
 
