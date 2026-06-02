@@ -604,6 +604,148 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+    private void recoverStalledRecording(String recordingId) {
+        if (isBlank(recordingId)) {
+            return;
+        }
+
+        RecordingItem stalledRecording = storage.findRecordingById(recordingId);
+
+        if (stalledRecording == null || !stalledRecording.isActive()) {
+            return;
+        }
+
+        if (!RecordingItem.STATUS_RECORDING.equals(stalledRecording.getStatus())) {
+            return;
+        }
+
+        String channelId = stalledRecording.getChannelId();
+
+        if (isBlank(channelId)) {
+            stalledRecording.markRecoverable("Recorder stalled and cannot restart because the channel is unknown.");
+            storage.upsertRecording(stalledRecording);
+            activeRecordings.remove(stalledRecording.getId());
+            progressTracker.untrack(stalledRecording);
+            broadcastRecordingUpdated("Recording is recoverable after a stall.");
+            return;
+        }
+
+        ChannelItem channel = storage.findChannelById(channelId);
+
+        if (channel == null || !channel.shouldMonitor()) {
+            stalledRecording.markRecoverable("Recorder stalled and cannot restart because monitoring is no longer active.");
+            storage.upsertRecording(stalledRecording);
+            activeRecordings.remove(stalledRecording.getId());
+            activeRecordings.remove(channelId);
+            progressTracker.untrack(stalledRecording);
+            broadcastRecordingUpdated("Recording is recoverable after a stall.");
+            return;
+        }
+
+        if (!restartingRecordings.add(recordingId)) {
+            return;
+        }
+
+        boolean cancelRequested = false;
+
+        try {
+            String resolvedChannelId = resolveChannelId(channel.getUrl());
+            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+
+            if (liveInfo == null) {
+                activeRecordings.remove(stalledRecording.getId());
+                activeRecordings.remove(channelId);
+                progressTracker.untrack(stalledRecording);
+                cancelRequested = cancelActiveRecording(stalledRecording);
+                saveStoppedRecordingForDownloads(stalledRecording);
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+                broadcastRecordingUpdated("Stalled recording saved; waiting for live.");
+                return;
+            }
+
+            if (!isBlank(stalledRecording.getVideoId())
+                && !stalledRecording.matchesVideo(liveInfo.videoId)) {
+                activeRecordings.remove(stalledRecording.getId());
+                activeRecordings.remove(channelId);
+                progressTracker.untrack(stalledRecording);
+                cancelRequested = cancelActiveRecording(stalledRecording);
+                saveStoppedRecordingForDownloads(stalledRecording);
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+                broadcastRecordingUpdated("Stalled recording saved; live video changed.");
+                return;
+            }
+
+            stalledRecording.setDiagnosticMessage("Recorder stalled; saved partial file and starting a new recording segment.");
+            storage.upsertRecording(stalledRecording);
+            broadcastRecordingUpdated("Recovering stalled recording.");
+
+            activeRecordings.remove(stalledRecording.getId());
+            activeRecordings.remove(channelId);
+            progressTracker.untrack(stalledRecording);
+            saveStoppedRecordingForDownloads(stalledRecording);
+            cancelRequested = cancelActiveRecording(stalledRecording);
+
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recording stalled; restarting recorder.",
+                stalledRecording.getBestPlayablePath()
+            );
+
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            startRecording(channel, liveInfo);
+        } catch (Exception e) {
+            String errorMessage = normalizeErrorMessage(e);
+
+            stalledRecording.markRecoverable("Recorder stalled and restart failed. " + errorMessage);
+            storage.upsertRecording(stalledRecording);
+            activeRecordings.remove(stalledRecording.getId());
+            activeRecordings.remove(channelId);
+            progressTracker.untrack(stalledRecording);
+
+            log(
+                LogItem.LEVEL_ERROR,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Stalled recording recovery failed.",
+                errorMessage
+            );
+            broadcastRecordingUpdated("Recording is recoverable after a stall.");
+        } finally {
+            if (!cancelRequested) {
+                restartingRecordings.remove(recordingId);
+            }
+        }
+    }
+
+    private boolean cancelActiveRecording(RecordingItem recording) {
+        if (recording == null) {
+            return false;
+        }
+
+        boolean cancelled = FFmpegRunner.cancel(recording.getId());
+
+        if (cancelled) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Active recording cancellation requested.",
+                recording.getDisplayTitle()
+            );
+        }
+
+        return cancelled;
+    }
+
     private boolean ensureRecordingStorageAvailable(ChannelItem channel, long minimumBytes) {
         long safeMinimumBytes = Math.max(MIN_FREE_BYTES_BEFORE_CONVERSION, minimumBytes);
 
