@@ -306,8 +306,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = storage.findRecordingById(recordingId);
 
         if (recording != null) {
-            recording.markStoppedByUser();
-            storage.upsertRecording(recording);
             activeRecordings.remove(recording.getId());
             activeRecordings.remove(recording.getChannelId());
             progressTracker.untrack(recording);
@@ -317,11 +315,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 && !recording.getChannelId().trim().isEmpty()) {
                 channelId = recording.getChannelId();
             }
-        }
 
-        if (recording != null) {
-            recording.hideFromDownloading();
-            storage.upsertRecording(recording);
+            saveStoppedRecordingForDownloads(recording);
         }
 
         if (channelId != null && !channelId.trim().isEmpty()) {
@@ -337,7 +332,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         FFmpegRunner.cancel();
         FFmpegKit.cancel();
-        broadcastRecordingUpdated("Download stopped.");
+        broadcastRecordingUpdated("Download stopped and saved.");
+    }
+
+    private void saveStoppedRecordingForDownloads(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        if (recording.isCompleted()) {
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            return;
+        }
+
+        if (recording.hasExistingFinalMp4File()) {
+            recording.markCompleted(recording.getFinalMp4Path());
+        } else if (recording.hasExistingTempTsFile()) {
+            recording.markCompleted(recording.getTempTsPath());
+        } else {
+            recording.markStoppedByUser();
+        }
+
+        recording.hideFromDownloading();
+        storage.upsertRecording(recording);
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
@@ -686,8 +704,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ReturnCode.isSuccess(lastCode)) {
                 convertRecording(recording, null);
             } else if (ReturnCode.isCancel(lastCode)) {
-                recording.markStoppedByUser();
-                storage.upsertRecording(recording);
+                saveStoppedRecordingForDownloads(recording);
             } else if (recording.hasExistingTempTsFile()) {
                 recording.markRecoverable("Direct download stopped after retries. " + describeReturnCode(lastCode));
                 storage.upsertRecording(recording);
@@ -723,9 +740,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } else if (returnCode == 0) {
             convertRecording(recording, channel);
         } else if (returnCode == 255 || returnCode == -1) {
-            recording.markStoppedByUser();
-            recording.hideFromDownloading();
-            storage.upsertRecording(recording);
+            saveStoppedRecordingForDownloads(recording);
         } else {
             recording.markRecoverable("Recorder exited with code " + returnCode);
             storage.upsertRecording(recording);
