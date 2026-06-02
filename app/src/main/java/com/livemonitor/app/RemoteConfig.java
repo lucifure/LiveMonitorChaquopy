@@ -7,6 +7,7 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Remote configuration fetched from a hosted config.json file.
@@ -273,54 +274,13 @@ public class RemoteConfig {
     private static List<YoutubeClient> buildDefaultClients() {
         List<YoutubeClient> clients = new ArrayList<>();
 
-        clients.add(new YoutubeClient(
-            "IOS",
-            "19.29.1",
-            "iOS",
-            "17.5.1",
-            "",
-            "",
-            "Apple",
-            "iPhone16,2",
-            "5",
-            "MOBILE",
-            buildIosUserAgent(),
-            true
-        ));
-
-        clients.add(new YoutubeClient(
-            "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-            "2.0",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "85",
-            "TV",
-            buildTvUserAgent(),
-            true
-        ));
-
-        clients.add(new YoutubeClient(
-            "WEB_EMBEDDED_PLAYER",
-            "1.20240515.01.00",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "56",
-            "WEB",
-            buildDefaultUserAgent(),
-            true
-        ));
-
+        // Prefer current web-style clients for HLS. Mobile app clients are kept
+        // later in the list because YouTube increasingly expects attestation for
+        // IOS/ANDROID player requests, which can otherwise fail with HTTP 400
+        // "Precondition check failed" before a manifest is returned.
         clients.add(new YoutubeClient(
             "WEB",
-            "2.20240515.01.00",
+            "2.20260114.08.00",
             "",
             "",
             "",
@@ -328,23 +288,113 @@ public class RemoteConfig {
             "",
             "",
             "1",
+            "LARGE_FORM_FACTOR",
+            buildSafariUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "MWEB",
+            "2.20260115.01.00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "2",
+            "SMALL_FORM_FACTOR",
+            buildMobileWebUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
             "WEB",
+            "2.20260114.08.00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "1",
+            "LARGE_FORM_FACTOR",
             buildDefaultUserAgent(),
             true
         ));
 
         clients.add(new YoutubeClient(
-            "ANDROID",
-            "19.29.37",
+            "WEB_EMBEDDED_PLAYER",
+            "1.20260115.01.00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "56",
+            "LARGE_FORM_FACTOR",
+            buildDefaultUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "TVHTML5",
+            "7.20260114.12.00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "7",
+            "LARGE_FORM_FACTOR",
+            buildTvUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "ANDROID_VR",
+            "1.65.10",
             "Android",
-            "14",
+            "12L",
+            "",
+            "32",
+            "Oculus",
+            "Quest 3",
+            "28",
+            "SMALL_FORM_FACTOR",
+            buildAndroidVrUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "ANDROID",
+            "21.02.35",
+            "Android",
+            "11",
             "com.google.android.youtube",
-            "34",
+            "30",
             "Google",
             "Pixel 8 Pro",
             "3",
-            "MOBILE",
+            "SMALL_FORM_FACTOR",
             buildAndroidUserAgent(),
+            true
+        ));
+
+        clients.add(new YoutubeClient(
+            "IOS",
+            "21.02.3",
+            "iPhone",
+            "18.3.2.22D82",
+            "",
+            "",
+            "Apple",
+            "iPhone16,2",
+            "5",
+            "SMALL_FORM_FACTOR",
+            buildIosUserAgent(),
             true
         ));
 
@@ -387,20 +437,36 @@ public class RemoteConfig {
             + "Chrome/125.0.0.0 Safari/537.36";
     }
 
+    private static String buildSafariUserAgent() {
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            + "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            + "Version/15.5 Safari/605.1.15,gzip(gfe)";
+    }
+
+    private static String buildMobileWebUserAgent() {
+        return "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) "
+            + "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            + "Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)";
+    }
+
     private static String buildAndroidUserAgent() {
-        return "com.google.android.youtube/19.29.37 "
-            + "(Linux; U; Android 14; en_US; Pixel 8 Pro) gzip";
+        return "com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip";
+    }
+
+    private static String buildAndroidVrUserAgent() {
+        return "com.google.android.apps.youtube.vr.oculus/1.65.10 "
+            + "(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip";
     }
 
     private static String buildIosUserAgent() {
-        return "com.google.ios.youtube/19.29.1 "
-            + "(iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)";
+        return "com.google.ios.youtube/21.02.3 "
+            + "(iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)";
     }
 
     private static String buildTvUserAgent() {
         return "Mozilla/5.0 (ChromiumStylePlatform) "
-            + "CTV AppleWebKit/537.36 (KHTML, like Gecko) "
-            + "Chrome/125.0.0.0 Safari/537.36";
+            + "Cobalt/25.lts.30.1034943-gold (unlike Gecko), "
+            + "Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
     }
 
     private static String nullToEmpty(String value) {
@@ -547,15 +613,15 @@ public class RemoteConfig {
 
         public YoutubeClient() {
             this.clientName = "IOS";
-            this.clientVersion = "19.29.1";
-            this.osName = "iOS";
-            this.osVersion = "17.5.1";
+            this.clientVersion = "21.02.3";
+            this.osName = "iPhone";
+            this.osVersion = "18.3.2.22D82";
             this.androidPackage = "";
             this.androidSdkVersion = "";
             this.deviceMake = "Apple";
             this.deviceModel = "iPhone16,2";
             this.clientId = "5";
-            this.clientFormFactor = "MOBILE";
+            this.clientFormFactor = "SMALL_FORM_FACTOR";
             this.userAgent = buildIosUserAgent();
             this.enabled = true;
         }
@@ -608,7 +674,7 @@ public class RemoteConfig {
             this.deviceMake = nullToEmpty(deviceMake);
             this.deviceModel = nullToEmpty(deviceModel);
             this.clientId = nullToEmpty(clientId);
-            this.clientFormFactor = nullToEmpty(clientFormFactor);
+            this.clientFormFactor = normalizeClientFormFactor(clientFormFactor, clientName);
             this.userAgent = nullToEmpty(userAgent);
             this.enabled = enabled;
         }
@@ -651,11 +717,11 @@ public class RemoteConfig {
 
         private static String inferOsVersion(String clientName) {
             if (isAndroidClient(clientName)) {
-                return "14";
+                return "11";
             }
 
             if (isIosClient(clientName)) {
-                return "17.5.1";
+                return "18.3.2.22D82";
             }
 
             return "";
@@ -666,7 +732,7 @@ public class RemoteConfig {
         }
 
         private static String inferAndroidSdkVersion(String clientName) {
-            return isAndroidClient(clientName) ? "34" : "";
+            return isAndroidClient(clientName) ? "30" : "";
         }
 
         private static String inferDeviceMake(String clientName) {
@@ -702,8 +768,12 @@ public class RemoteConfig {
                 return "3";
             }
 
+            if (isMobileWebClient(clientName)) {
+                return "2";
+            }
+
             if (isTvClient(clientName)) {
-                return "85";
+                return "7";
             }
 
             if (isWebEmbeddedClient(clientName)) {
@@ -718,19 +788,15 @@ public class RemoteConfig {
         }
 
         private static String inferClientFormFactor(String clientName) {
-            if (isTvClient(clientName)) {
-                return "TV";
-            }
-
             if (isAndroidClient(clientName) || isIosClient(clientName)) {
-                return "MOBILE";
+                return "SMALL_FORM_FACTOR";
             }
 
-            if (isWebClient(clientName)) {
-                return "WEB";
+            if (isTvClient(clientName) || isWebClient(clientName)) {
+                return "LARGE_FORM_FACTOR";
             }
 
-            return "";
+            return "UNKNOWN_FORM_FACTOR";
         }
 
         private static String inferUserAgent(String clientName) {
@@ -746,6 +812,10 @@ public class RemoteConfig {
                 return buildTvUserAgent();
             }
 
+            if (isMobileWebClient(clientName)) {
+                return buildMobileWebUserAgent();
+            }
+
             return buildDefaultUserAgent();
         }
 
@@ -759,6 +829,10 @@ public class RemoteConfig {
 
         private static boolean isTvClient(String clientName) {
             return nullToEmpty(clientName).toUpperCase().contains("TV");
+        }
+
+        private static boolean isMobileWebClient(String clientName) {
+            return "MWEB".equalsIgnoreCase(nullToEmpty(clientName));
         }
 
         private static boolean isWebEmbeddedClient(String clientName) {
@@ -822,11 +896,39 @@ public class RemoteConfig {
                 client.put("deviceModel", deviceModel);
             }
 
-            if (!isBlank(clientFormFactor)) {
-                client.put("clientFormFactor", clientFormFactor);
+            if (!isBlank(userAgent)) {
+                client.put("userAgent", userAgent);
             }
 
+            client.put("hl", "en");
+            client.put("timeZone", "UTC");
+            client.put("utcOffsetMinutes", 0);
+
+            // Do not send clientFormFactor to Innertube/player. YouTube rejects
+            // legacy values such as MOBILE, TV, and WEB with HTTP 400, and this
+            // optional field is not needed for manifest resolution.
             return client;
+        }
+
+        private static String normalizeClientFormFactor(String clientFormFactor, String clientName) {
+            String normalized = nullToEmpty(clientFormFactor).trim().toUpperCase(Locale.US);
+
+            if ("UNKNOWN_FORM_FACTOR".equals(normalized)
+                || "SMALL_FORM_FACTOR".equals(normalized)
+                || "LARGE_FORM_FACTOR".equals(normalized)
+                || "AUTOMOTIVE_FORM_FACTOR".equals(normalized)) {
+                return normalized;
+            }
+
+            if ("MOBILE".equals(normalized)) {
+                return "SMALL_FORM_FACTOR";
+            }
+
+            if ("TV".equals(normalized) || "WEB".equals(normalized)) {
+                return "LARGE_FORM_FACTOR";
+            }
+
+            return inferClientFormFactor(clientName);
         }
 
         public boolean isWebLike() {
@@ -935,7 +1037,7 @@ public class RemoteConfig {
         }
 
         public void setClientFormFactor(String clientFormFactor) {
-            this.clientFormFactor = nullToEmpty(clientFormFactor);
+            this.clientFormFactor = normalizeClientFormFactor(clientFormFactor, clientName);
         }
 
         public void setUserAgent(String userAgent) {

@@ -259,7 +259,7 @@ public class HlsProxyServer {
             String contentType = response.header("Content-Type", "");
             long contentLength = body != null ? body.contentLength() : -1;
 
-            if (isSegmentUrl || !response.isSuccessful()) {
+            if (!response.isSuccessful()) {
                 proxyLog(
                     "upstream "
                         + response.code()
@@ -403,12 +403,7 @@ public class HlsProxyServer {
 
         Variant chosen = chooseBestVariant(variants);
 
-        proxyLog(
-            "selected HLS variant "
-                + describeVariant(chosen.streamInfo)
-                + " url="
-                + shortRemoteUrl(chosen.remoteUrl)
-        );
+        proxyLog("selected HLS variant " + describeVariant(chosen.streamInfo));
 
         StringBuilder out = new StringBuilder();
 
@@ -779,7 +774,7 @@ public class HlsProxyServer {
 
         int count = proxyLogCount.incrementAndGet();
 
-        if (count <= 50
+        if (count <= 10
             || message.contains("error")
             || message.contains("403")
             || message.contains("404")

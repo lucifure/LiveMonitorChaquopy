@@ -40,6 +40,15 @@ public class AppSettings {
     private static final String JSON_RECOVER_ORPHAN_TS_FILES = "recoverOrphanTsFiles";
     private static final String JSON_LOG_RETENTION_LINES = "logRetentionLines";
     private static final String JSON_LOG_RETENTION_BYTES = "logRetentionBytes";
+    private static final String JSON_LOG_UI_ENABLED = "logUiEnabled";
+    private static final String JSON_LOG_SERVICE_ENABLED = "logServiceEnabled";
+    private static final String JSON_LOG_RECORDER_ENABLED = "logRecorderEnabled";
+    private static final String JSON_LOG_FFMPEG_ENABLED = "logFfmpegEnabled";
+    private static final String JSON_LOG_NETWORK_ENABLED = "logNetworkEnabled";
+    private static final String JSON_LOG_REMOTE_CONFIG_ENABLED = "logRemoteConfigEnabled";
+    private static final String JSON_LOG_BOOT_ENABLED = "logBootEnabled";
+    private static final String JSON_LOG_APP_ENABLED = "logAppEnabled";
+    private static final String JSON_LOG_DEBUG_ENABLED = "logDebugEnabled";
     private static final String JSON_CREATED_AT = "createdAt";
     private static final String JSON_UPDATED_AT = "updatedAt";
 
@@ -77,6 +86,15 @@ public class AppSettings {
 
     private int logRetentionLines;
     private int logRetentionBytes;
+    private boolean logUiEnabled;
+    private boolean logServiceEnabled;
+    private boolean logRecorderEnabled;
+    private boolean logFfmpegEnabled;
+    private boolean logNetworkEnabled;
+    private boolean logRemoteConfigEnabled;
+    private boolean logBootEnabled;
+    private boolean logAppEnabled;
+    private boolean logDebugEnabled;
 
     private long createdAt;
     private long updatedAt;
@@ -112,6 +130,15 @@ public class AppSettings {
 
         this.logRetentionLines = 2_000;
         this.logRetentionBytes = 2 * 1024 * 1024;
+        this.logUiEnabled = true;
+        this.logServiceEnabled = true;
+        this.logRecorderEnabled = true;
+        this.logFfmpegEnabled = false;
+        this.logNetworkEnabled = true;
+        this.logRemoteConfigEnabled = true;
+        this.logBootEnabled = true;
+        this.logAppEnabled = true;
+        this.logDebugEnabled = false;
 
         this.createdAt = now;
         this.updatedAt = now;
@@ -140,6 +167,15 @@ public class AppSettings {
         boolean recoverOrphanTsFiles,
         int logRetentionLines,
         int logRetentionBytes,
+        boolean logUiEnabled,
+        boolean logServiceEnabled,
+        boolean logRecorderEnabled,
+        boolean logFfmpegEnabled,
+        boolean logNetworkEnabled,
+        boolean logRemoteConfigEnabled,
+        boolean logBootEnabled,
+        boolean logAppEnabled,
+        boolean logDebugEnabled,
         long createdAt,
         long updatedAt
     ) {
@@ -173,6 +209,15 @@ public class AppSettings {
 
         this.logRetentionLines = Math.max(100, logRetentionLines);
         this.logRetentionBytes = Math.max(64 * 1024, logRetentionBytes);
+        this.logUiEnabled = logUiEnabled;
+        this.logServiceEnabled = logServiceEnabled;
+        this.logRecorderEnabled = logRecorderEnabled;
+        this.logFfmpegEnabled = logFfmpegEnabled;
+        this.logNetworkEnabled = logNetworkEnabled;
+        this.logRemoteConfigEnabled = logRemoteConfigEnabled;
+        this.logBootEnabled = logBootEnabled;
+        this.logAppEnabled = logAppEnabled;
+        this.logDebugEnabled = logDebugEnabled;
 
         this.createdAt = createdAt <= 0L ? System.currentTimeMillis() : createdAt;
         this.updatedAt = updatedAt <= 0L ? System.currentTimeMillis() : updatedAt;
@@ -226,6 +271,15 @@ public class AppSettings {
             json.optBoolean(JSON_RECOVER_ORPHAN_TS_FILES, defaults.isRecoverOrphanTsFiles()),
             json.optInt(JSON_LOG_RETENTION_LINES, defaults.getLogRetentionLines()),
             json.optInt(JSON_LOG_RETENTION_BYTES, defaults.getLogRetentionBytes()),
+            json.optBoolean(JSON_LOG_UI_ENABLED, defaults.isLogUiEnabled()),
+            json.optBoolean(JSON_LOG_SERVICE_ENABLED, defaults.isLogServiceEnabled()),
+            json.optBoolean(JSON_LOG_RECORDER_ENABLED, defaults.isLogRecorderEnabled()),
+            json.optBoolean(JSON_LOG_FFMPEG_ENABLED, defaults.isLogFfmpegEnabled()),
+            json.optBoolean(JSON_LOG_NETWORK_ENABLED, defaults.isLogNetworkEnabled()),
+            json.optBoolean(JSON_LOG_REMOTE_CONFIG_ENABLED, defaults.isLogRemoteConfigEnabled()),
+            json.optBoolean(JSON_LOG_BOOT_ENABLED, defaults.isLogBootEnabled()),
+            json.optBoolean(JSON_LOG_APP_ENABLED, defaults.isLogAppEnabled()),
+            json.optBoolean(JSON_LOG_DEBUG_ENABLED, defaults.isLogDebugEnabled()),
             json.optLong(JSON_CREATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_UPDATED_AT, System.currentTimeMillis())
         );
@@ -262,6 +316,15 @@ public class AppSettings {
         json.put(JSON_RECOVER_ORPHAN_TS_FILES, recoverOrphanTsFiles);
         json.put(JSON_LOG_RETENTION_LINES, logRetentionLines);
         json.put(JSON_LOG_RETENTION_BYTES, logRetentionBytes);
+        json.put(JSON_LOG_UI_ENABLED, logUiEnabled);
+        json.put(JSON_LOG_SERVICE_ENABLED, logServiceEnabled);
+        json.put(JSON_LOG_RECORDER_ENABLED, logRecorderEnabled);
+        json.put(JSON_LOG_FFMPEG_ENABLED, logFfmpegEnabled);
+        json.put(JSON_LOG_NETWORK_ENABLED, logNetworkEnabled);
+        json.put(JSON_LOG_REMOTE_CONFIG_ENABLED, logRemoteConfigEnabled);
+        json.put(JSON_LOG_BOOT_ENABLED, logBootEnabled);
+        json.put(JSON_LOG_APP_ENABLED, logAppEnabled);
+        json.put(JSON_LOG_DEBUG_ENABLED, logDebugEnabled);
         json.put(JSON_CREATED_AT, createdAt);
         json.put(JSON_UPDATED_AT, updatedAt);
 
@@ -356,6 +419,52 @@ public class AppSettings {
             + ", waitForVideo=" + waitForVideoEnabled
             + ", liveFromStart=" + liveFromStartEnabled
             + ", skipUnavailableFragments=" + skipUnavailableFragmentsEnabled;
+    }
+
+    public boolean isLogItemEnabled(LogItem log) {
+        if (log == null) {
+            return false;
+        }
+
+        if (LogItem.LEVEL_DEBUG.equals(log.getLevel()) && !logDebugEnabled) {
+            return false;
+        }
+
+        String source = log.getSource();
+
+        if (LogItem.SOURCE_UI.equals(source)) {
+            return logUiEnabled;
+        }
+
+        if (LogItem.SOURCE_SERVICE.equals(source)) {
+            return logServiceEnabled;
+        }
+
+        if (LogItem.SOURCE_RECORDER.equals(source)) {
+            return logRecorderEnabled;
+        }
+
+        if (LogItem.SOURCE_FFMPEG.equals(source)) {
+            return logFfmpegEnabled;
+        }
+
+        if (LogItem.SOURCE_NETWORK.equals(source)) {
+            return logNetworkEnabled;
+        }
+
+        if (LogItem.SOURCE_REMOTE_CONFIG.equals(source)) {
+            return logRemoteConfigEnabled;
+        }
+
+        if (LogItem.SOURCE_BOOT.equals(source)) {
+            return logBootEnabled;
+        }
+
+        if (LogItem.SOURCE_APP.equals(source)) {
+            return logAppEnabled;
+        }
+
+        return true;
     }
 
     private void touch() {
@@ -559,6 +668,42 @@ public class AppSettings {
         return logRetentionBytes;
     }
 
+    public boolean isLogUiEnabled() {
+        return logUiEnabled;
+    }
+
+    public boolean isLogServiceEnabled() {
+        return logServiceEnabled;
+    }
+
+    public boolean isLogRecorderEnabled() {
+        return logRecorderEnabled;
+    }
+
+    public boolean isLogFfmpegEnabled() {
+        return logFfmpegEnabled;
+    }
+
+    public boolean isLogNetworkEnabled() {
+        return logNetworkEnabled;
+    }
+
+    public boolean isLogRemoteConfigEnabled() {
+        return logRemoteConfigEnabled;
+    }
+
+    public boolean isLogBootEnabled() {
+        return logBootEnabled;
+    }
+
+    public boolean isLogAppEnabled() {
+        return logAppEnabled;
+    }
+
+    public boolean isLogDebugEnabled() {
+        return logDebugEnabled;
+    }
+
     public long getCreatedAt() {
         return createdAt;
     }
@@ -670,6 +815,51 @@ public class AppSettings {
 
     public void setLogRetentionBytes(int logRetentionBytes) {
         this.logRetentionBytes = Math.max(64 * 1024, logRetentionBytes);
+        touch();
+    }
+
+    public void setLogUiEnabled(boolean logUiEnabled) {
+        this.logUiEnabled = logUiEnabled;
+        touch();
+    }
+
+    public void setLogServiceEnabled(boolean logServiceEnabled) {
+        this.logServiceEnabled = logServiceEnabled;
+        touch();
+    }
+
+    public void setLogRecorderEnabled(boolean logRecorderEnabled) {
+        this.logRecorderEnabled = logRecorderEnabled;
+        touch();
+    }
+
+    public void setLogFfmpegEnabled(boolean logFfmpegEnabled) {
+        this.logFfmpegEnabled = logFfmpegEnabled;
+        touch();
+    }
+
+    public void setLogNetworkEnabled(boolean logNetworkEnabled) {
+        this.logNetworkEnabled = logNetworkEnabled;
+        touch();
+    }
+
+    public void setLogRemoteConfigEnabled(boolean logRemoteConfigEnabled) {
+        this.logRemoteConfigEnabled = logRemoteConfigEnabled;
+        touch();
+    }
+
+    public void setLogBootEnabled(boolean logBootEnabled) {
+        this.logBootEnabled = logBootEnabled;
+        touch();
+    }
+
+    public void setLogAppEnabled(boolean logAppEnabled) {
+        this.logAppEnabled = logAppEnabled;
+        touch();
+    }
+
+    public void setLogDebugEnabled(boolean logDebugEnabled) {
+        this.logDebugEnabled = logDebugEnabled;
         touch();
     }
 }

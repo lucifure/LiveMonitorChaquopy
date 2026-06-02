@@ -787,7 +787,180 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
+        String watchPageManifestUrl = getHlsManifestUrlFromWatchPage(videoId, channel, lastFailure);
+
+        if (watchPageManifestUrl != null && !watchPageManifestUrl.trim().isEmpty()) {
+            return watchPageManifestUrl;
+        }
+
         throw new IllegalStateException("Could not get HLS manifest URL. " + lastFailure);
+    }
+
+    private String getHlsManifestUrlFromWatchPage(
+        String videoId,
+        ChannelItem channel,
+        String previousFailure
+    ) {
+        String watchUrl = remoteConfig.getWebPlayerBaseUrl()
+            + "/watch?v="
+            + urlEncodeForQuery(videoId);
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Trying watch page HLS fallback.",
+            "videoId=" + videoId + ", previousFailure=" + shortenForLog(previousFailure, 300)
+        );
+
+        try {
+            String html = httpGet(watchUrl);
+            JSONObject playerResponse = extractInitialPlayerResponse(html);
+
+            if (playerResponse == null) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Watch page HLS fallback failed.",
+                    "ytInitialPlayerResponse not found. videoId=" + videoId
+                );
+
+                return "";
+            }
+
+            JSONObject streamingData = playerResponse.optJSONObject("streamingData");
+
+            if (streamingData == null) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Watch page HLS fallback failed.",
+                    "No streamingData. videoId="
+                        + videoId
+                        + ", response="
+                        + summarizeInnertubeResponseForLog(playerResponse)
+                );
+
+                return "";
+            }
+
+            String hlsManifestUrl = streamingData.optString("hlsManifestUrl", "");
+
+            if (hlsManifestUrl == null || hlsManifestUrl.trim().isEmpty()) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Watch page HLS fallback failed.",
+                    "No hlsManifestUrl. videoId="
+                        + videoId
+                        + ", streamingDataKeys="
+                        + streamingData.names()
+                );
+
+                return "";
+            }
+
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Watch page HLS fallback succeeded.",
+                "videoId=" + videoId + ", manifest=" + describeUrlForLog(hlsManifestUrl)
+            );
+
+            return hlsManifestUrl;
+        } catch (Exception e) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Watch page HLS fallback error.",
+                "videoId=" + videoId + ", error=" + normalizeErrorMessage(e)
+            );
+
+            Log.w(TAG, "getHlsManifestUrlFromWatchPage failed", e);
+            return "";
+        }
+    }
+
+    private JSONObject extractInitialPlayerResponse(String html) throws Exception {
+        if (html == null || html.isEmpty()) {
+            return null;
+        }
+
+        String marker = "ytInitialPlayerResponse";
+        int markerIndex = html.indexOf(marker);
+
+        while (markerIndex >= 0) {
+            int equalsIndex = html.indexOf('=', markerIndex + marker.length());
+
+            if (equalsIndex < 0) {
+                return null;
+            }
+
+            int objectStart = html.indexOf('{', equalsIndex + 1);
+
+            if (objectStart < 0) {
+                return null;
+            }
+
+            int objectEnd = findJsonObjectEnd(html, objectStart);
+
+            if (objectEnd > objectStart) {
+                return new JSONObject(html.substring(objectStart, objectEnd + 1));
+            }
+
+            markerIndex = html.indexOf(marker, objectStart + 1);
+        }
+
+        return null;
+    }
+
+    private int findJsonObjectEnd(String text, int objectStart) {
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+
+        for (int i = objectStart; i < text.length(); i++) {
+            char ch = text.charAt(i);
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"') {
+                inString = true;
+            } else if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private String urlEncodeForQuery(String value) {
+        try {
+            return URLEncoder.encode(value == null ? "" : value, "UTF-8");
+        } catch (Exception e) {
+            return value == null ? "" : value;
+        }
     }
 
 
@@ -1030,7 +1203,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         return nullToEmpty(client.getClientName()).toUpperCase()
             + "/"
-            + nullToEmpty(client.getClientVersion());
+            + nullToEmpty(client.getClientVersion())
+            + "/"
+            + nullToEmpty(client.getUserAgent());
     }
 
     private static String getClientHeaderName(RemoteConfig.YoutubeClient client) {
