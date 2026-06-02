@@ -31,6 +31,7 @@ public class RecordingItem {
     public static final String STATUS_WAITING_FOR_LIVE = "WAITING_FOR_LIVE";
     public static final String STATUS_RECORDING = "RECORDING";
     public static final String STATUS_PAUSED_NETWORK = "PAUSED_NETWORK";
+    public static final String STATUS_PAUSED_BY_USER = "PAUSED_BY_USER";
     public static final String STATUS_CONVERTING = "CONVERTING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";
@@ -245,6 +246,12 @@ public class RecordingItem {
         touch();
     }
 
+    public void markPausedByUser() {
+        status = STATUS_PAUSED_BY_USER;
+        errorMessage = "Paused by user.";
+        touch();
+    }
+
     public void markConverting() {
         status = STATUS_CONVERTING;
         progressPercent = 95;
@@ -307,6 +314,7 @@ public class RecordingItem {
         return STATUS_WAITING_FOR_LIVE.equals(status)
             || STATUS_RECORDING.equals(status)
             || STATUS_PAUSED_NETWORK.equals(status)
+            || STATUS_PAUSED_BY_USER.equals(status)
             || STATUS_CONVERTING.equals(status);
     }
 
@@ -319,6 +327,14 @@ public class RecordingItem {
 
     public boolean isCompleted() {
         return STATUS_COMPLETED.equals(status);
+    }
+
+    public boolean isPausedByUser() {
+        return STATUS_PAUSED_BY_USER.equals(status);
+    }
+
+    public boolean isPlayableCompletedFile() {
+        return isCompleted() && (hasExistingFinalMp4File() || hasExistingTempTsFile());
     }
 
     public boolean isRecoverable() {

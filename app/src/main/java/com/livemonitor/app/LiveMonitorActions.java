@@ -41,6 +41,12 @@ public final class LiveMonitorActions {
     public static final String ACTION_STOP_RECORDING =
         PACKAGE + ".action.STOP_RECORDING";
 
+    public static final String ACTION_PAUSE_RECORDING =
+        PACKAGE + ".action.PAUSE_RECORDING";
+
+    public static final String ACTION_RESUME_RECORDING =
+        PACKAGE + ".action.RESUME_RECORDING";
+
     public static final String ACTION_NETWORK_AVAILABLE =
         PACKAGE + ".action.NETWORK_AVAILABLE";
 

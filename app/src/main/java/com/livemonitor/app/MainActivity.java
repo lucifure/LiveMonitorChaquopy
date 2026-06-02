@@ -103,6 +103,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         recordingAdapter = new RecordingAdapter(this);
+        recordingAdapter.setMode(RecordingAdapter.Mode.DOWNLOADING);
         recordingAdapter.setListener(new RecordingAdapter.Listener() {
             @Override
             public void onRecordingClicked(RecordingItem recording) {
@@ -120,18 +121,8 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onRecoverClicked(RecordingItem recording) {
-                storage.appendLog(LogItem.recording(
-                    LogItem.LEVEL_INFO,
-                    LogItem.SOURCE_UI,
-                    recording,
-                    "Recover selected from Downloads tab."
-                ));
-                Toast.makeText(
-                    MainActivity.this,
-                    "Recovery will run after recorder integration.",
-                    Toast.LENGTH_SHORT
-                ).show();
+            public void onPauseResumeClicked(RecordingItem recording) {
+                toggleRecordingPaused(recording);
             }
 
             @Override
@@ -359,11 +350,38 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-            .setTitle("Remove from Downloading?")
-            .setMessage("Stop this active download and remove it from the Downloading section? The saved file remains available from Downloaded Files.")
+            .setTitle("Delete active download?")
+            .setMessage("Stop this recording, remove it from Downloading, and keep monitoring the channel for the next live stream?")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete", (dialog, which) -> stopDownload(recording))
             .show();
+    }
+
+    private void toggleRecordingPaused(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        Intent intent = new Intent(this, MonitorService.class);
+        intent.setAction(
+            recording.isPausedByUser()
+                ? LiveMonitorActions.ACTION_RESUME_RECORDING
+                : LiveMonitorActions.ACTION_PAUSE_RECORDING
+        );
+        intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
+        intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
+        startServiceCompat(intent);
+
+        if (recording.isPausedByUser()) {
+            recording.markRecording();
+            Toast.makeText(this, "Recording resumed.", Toast.LENGTH_SHORT).show();
+        } else {
+            recording.markPausedByUser();
+            Toast.makeText(this, "Recording paused.", Toast.LENGTH_SHORT).show();
+        }
+
+        storage.upsertRecording(recording);
+        refreshAll();
     }
 
     private void stopDownload(RecordingItem recording) {
@@ -381,12 +399,8 @@ public class MainActivity extends AppCompatActivity {
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
 
-        if (recording.getChannelId() != null && !recording.getChannelId().trim().isEmpty()) {
-            storage.removeChannel(recording.getChannelId());
-        }
-
         refreshAll();
-        Toast.makeText(this, "Removed from Downloading. Saved file kept.", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Deleted from Downloading. Monitoring will continue.", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {
@@ -536,7 +550,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void refreshAll() {
-        List<ChannelItem> channels = storage.loadChannels();
+        List<ChannelItem> channels = loadVisibleMonitoringChannels();
         channelAdapter.setChannels(channels);
 
         List<RecordingItem> recordings = loadVisibleDownloadingItems();
@@ -565,6 +579,18 @@ public class MainActivity extends AppCompatActivity {
                 recordings.isEmpty() ? View.VISIBLE : View.GONE
             );
         }
+    }
+
+    private List<ChannelItem> loadVisibleMonitoringChannels() {
+        List<ChannelItem> result = new ArrayList<>();
+
+        for (ChannelItem channel : storage.loadChannels()) {
+            if (channel != null && !channel.isRecording()) {
+                result.add(channel);
+            }
+        }
+
+        return result;
     }
 
     private List<RecordingItem> loadVisibleDownloadingItems() {

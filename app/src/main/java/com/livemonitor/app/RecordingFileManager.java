@@ -163,11 +163,12 @@ public class RecordingFileManager {
             return;
         }
 
-        for (RecordingItem item : recoverableItems) {
-            RecordingItem existing = storage.findActiveRecordingForVideo(item.getVideoId());
+        List<RecordingItem> existingRecordings = storage.loadRecordings();
 
-            if (existing == null) {
+        for (RecordingItem item : recoverableItems) {
+            if (!hasExistingRecordingForFile(existingRecordings, item)) {
                 storage.upsertRecording(item);
+                existingRecordings.add(item);
             }
         }
 
@@ -181,6 +182,32 @@ public class RecordingFileManager {
             "Recoverable TS scan completed.",
             "recoverableCount=" + recoverableItems.size()
         ));
+    }
+
+
+    private boolean hasExistingRecordingForFile(List<RecordingItem> existingRecordings, RecordingItem candidate) {
+        if (candidate == null || existingRecordings == null) {
+            return false;
+        }
+
+        String candidateTempPath = candidate.getTempTsPath();
+        String candidateVideoId = candidate.getVideoId();
+
+        for (RecordingItem existing : existingRecordings) {
+            if (existing == null) {
+                continue;
+            }
+
+            if (!isBlank(candidateTempPath) && candidateTempPath.equals(existing.getTempTsPath())) {
+                return true;
+            }
+
+            if (!isBlank(candidateVideoId) && candidate.matchesVideo(existing.getVideoId())) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public boolean moveTempToRecoverable(RecordingItem recording) {

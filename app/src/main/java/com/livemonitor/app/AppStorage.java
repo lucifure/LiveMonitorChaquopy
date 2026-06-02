@@ -260,6 +260,25 @@ public class AppStorage {
         saveRecordings(recordings);
     }
 
+    public synchronized void removeRecording(String recordingId) {
+        if (isBlank(recordingId)) {
+            return;
+        }
+
+        List<RecordingItem> recordings = loadRecordings();
+        Iterator<RecordingItem> iterator = recordings.iterator();
+
+        while (iterator.hasNext()) {
+            RecordingItem recording = iterator.next();
+
+            if (recording != null && recordingId.equals(recording.getId())) {
+                iterator.remove();
+            }
+        }
+
+        saveRecordings(recordings);
+    }
+
     public synchronized RecordingItem findRecordingById(String recordingId) {
         if (isBlank(recordingId)) {
             return null;
@@ -308,12 +327,37 @@ public class AppStorage {
         List<RecordingItem> result = new ArrayList<>();
 
         for (RecordingItem recording : loadRecordings()) {
-            if (recording != null && recording.isFinished()) {
+            if (recording != null && recording.isPlayableCompletedFile()) {
                 result.add(recording);
             }
         }
 
         return result;
+    }
+
+    public synchronized void removeEmptyOrUnplayableFinishedRecordings() {
+        List<RecordingItem> recordings = loadRecordings();
+        boolean changed = false;
+        Iterator<RecordingItem> iterator = recordings.iterator();
+
+        while (iterator.hasNext()) {
+            RecordingItem recording = iterator.next();
+
+            if (recording == null) {
+                iterator.remove();
+                changed = true;
+                continue;
+            }
+
+            if (recording.isFinished() && !recording.isPlayableCompletedFile()) {
+                iterator.remove();
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            saveRecordings(recordings);
+        }
     }
 
     public synchronized List<RecordingItem> loadRecoverableRecordings() {
