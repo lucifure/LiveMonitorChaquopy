@@ -19,10 +19,12 @@ public class RecordingProgressTracker {
 
     public interface Listener {
         void onRecordingProgressUpdated(RecordingItem recording);
+        void onRecordingStalled(RecordingItem recording);
     }
 
     private static final long DEFAULT_UPDATE_INTERVAL_MS = 2_000L;
     private static final long STALL_WARNING_AFTER_MS = 90_000L;
+    private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 120_000L;
 
     private final AppStorage storage;
     private final Map<String, TrackedRecording> trackedRecordings;
@@ -143,6 +145,7 @@ public class RecordingProgressTracker {
         long bytesRecorded = calculateBytesRecorded(recording);
         long durationSeconds = calculateDurationSeconds(tracked);
         long now = System.currentTimeMillis();
+        boolean stalled = false;
 
         if (bytesRecorded > tracked.lastBytesRecorded) {
             tracked.lastBytesRecorded = bytesRecorded;
@@ -155,10 +158,11 @@ public class RecordingProgressTracker {
         } else if (RecordingItem.STATUS_RECORDING.equals(recording.getStatus())
             && durationSeconds > 60L
             && now - tracked.lastGrowthAtMillis > STALL_WARNING_AFTER_MS) {
+            stalled = true;
             recording.setDiagnosticMessage(
                 "No file growth for "
                     + formatDuration((now - tracked.lastGrowthAtMillis) / 1_000L)
-                    + "; FFmpeg may be reconnecting."
+                    + "; restarting recorder if the stream is still live."
             );
         }
 
@@ -173,6 +177,11 @@ public class RecordingProgressTracker {
 
         if (currentListener != null) {
             currentListener.onRecordingProgressUpdated(recording);
+
+            if (stalled && now - tracked.lastStallNotificationAtMillis > STALL_RECOVERY_NOTIFY_INTERVAL_MS) {
+                tracked.lastStallNotificationAtMillis = now;
+                currentListener.onRecordingStalled(recording);
+            }
         }
     }
 
@@ -273,12 +282,14 @@ public class RecordingProgressTracker {
         private final long startTimeMillis;
         private long lastBytesRecorded;
         private long lastGrowthAtMillis;
+        private long lastStallNotificationAtMillis;
 
         private TrackedRecording(RecordingItem recording, long startTimeMillis) {
             this.recording = recording;
             this.startTimeMillis = startTimeMillis;
             this.lastBytesRecorded = Math.max(0L, recording.getBytesRecorded());
             this.lastGrowthAtMillis = System.currentTimeMillis();
+            this.lastStallNotificationAtMillis = 0L;
         }
     }
 }
