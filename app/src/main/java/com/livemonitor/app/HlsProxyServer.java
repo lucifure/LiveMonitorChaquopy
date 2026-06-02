@@ -298,18 +298,19 @@ public class HlsProxyServer {
                         continue;
                     }
 
-            if (!response.isSuccessful()) {
-                proxyLog(
-                    "upstream "
-                        + response.code()
-                        + " type="
-                        + contentType
-                        + " len="
-                        + contentLength
-                        + " url="
-                        + shortRemoteUrl(remoteUrl)
-                );
-            }
+                    int errorCode = response.isSuccessful() ? 502 : response.code();
+                    String errorStatus = response.isSuccessful() ? "Bad Gateway" : response.message();
+                    String errorMessage = response.isSuccessful()
+                        ? "Upstream returned an empty response body"
+                        : "Upstream returned " + response.code() + " " + response.message();
+
+                    if (!errorText.isEmpty()) {
+                        errorMessage += "\n" + errorText;
+                    }
+
+                    writeTextResponse(socket, errorCode, errorStatus, errorMessage);
+                    return;
+                }
 
                 boolean isPlaylist =
                     !isSegmentUrl
