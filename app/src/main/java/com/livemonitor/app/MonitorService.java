@@ -32,6 +32,10 @@ import java.util.concurrent.Executors;
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+    private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
+    private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
+    private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
+    private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
 
     private AppStorage storage;
     private AppSettings settings;
@@ -198,6 +202,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
         recording.setTitle("Direct download - " + videoId);
         recording.markRecording();
+        recording.setDiagnosticMessage("Direct download journal opened.");
         storage.upsertRecording(recording);
         activeRecordings.put(recording.getId(), recording);
         progressTracker.track(recording);
@@ -354,6 +359,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        if (!ensureRecordingStorageAvailable(channel, MIN_FREE_BYTES_BEFORE_RECORDING)) {
+            return;
+        }
+
         RecordingItem recording = fileManager.createRecordingItem(
             channel,
             liveInfo.videoId,
@@ -363,6 +372,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         fileManager.cleanupTempFolderBeforeRecording();
         recording.markRecording();
+        recording.setDiagnosticMessage("Recording journal opened; waiting for manifest.");
         storage.upsertRecording(recording);
         activeRecordings.put(channel.getId(), recording);
         progressTracker.track(recording);
@@ -401,6 +411,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 );
             }
 
+            recording.setDiagnosticMessage("Manifest resolved; starting FFmpeg recorder.");
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Manifest resolved.");
+
             log(
                 LogItem.LEVEL_SUCCESS,
                 LogItem.SOURCE_RECORDER,
@@ -418,6 +432,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             );
 
             final ChannelItem logChannel = channel;
+
+            recording.setDiagnosticMessage("FFmpeg recorder is running.");
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording started.");
 
             FFmpegRunner.executeAsync(
                 manifestUrl,
@@ -459,37 +477,131 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+    private boolean ensureRecordingStorageAvailable(ChannelItem channel, long minimumBytes) {
+        long safeMinimumBytes = Math.max(MIN_FREE_BYTES_BEFORE_CONVERSION, minimumBytes);
+
+        if (fileManager.hasEnoughUsableSpace(safeMinimumBytes)) {
+            return true;
+        }
+
+        String details = "requiredBytes="
+            + safeMinimumBytes
+            + ", "
+            + fileManager.getStorageSummary();
+
+        log(
+            LogItem.LEVEL_ERROR,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Not enough free storage for recording.",
+            details
+        );
+        broadcastRecordingUpdated("Storage is too low for recording.");
+        return false;
+    }
+
+    private long estimateConversionRequiredBytes(RecordingItem recording) {
+        long tempBytes = 0L;
+
+        if (recording != null && !isBlank(recording.getTempTsPath())) {
+            try {
+                File tempFile = new File(recording.getTempTsPath());
+
+                if (tempFile.exists()) {
+                    tempBytes = Math.max(0L, tempFile.length());
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        return Math.max(MIN_FREE_BYTES_BEFORE_CONVERSION, tempBytes + MIN_FREE_BYTES_BEFORE_CONVERSION);
+    }
+
 
     private void runDirectVideoDownload(RecordingItem recording) {
         if (recording == null) return;
 
         try {
-            String videoId = recording.getVideoId();
-            String inputUrl = getDirectDownloadInputUrl(videoId, null);
-
-            if (inputUrl == null || inputUrl.trim().isEmpty()) {
-                throw new IllegalStateException("Could not get playable URL for ended live/video.");
+            if (!ensureRecordingStorageAvailable(null, MIN_FREE_BYTES_BEFORE_RECORDING)) {
+                activeRecordings.remove(recording.getId());
+                progressTracker.untrack(recording);
+                recording.markFailed("Not enough free storage for direct download. " + fileManager.getStorageSummary());
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated("Direct download failed; storage is low.");
+                return;
             }
 
-            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video URL found.", describeUrlForLog(inputUrl));
+            String videoId = recording.getVideoId();
+            Exception lastError = null;
+            ReturnCode lastCode = null;
 
-            String command = "-y -hide_banner -loglevel info"
-                + " -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1"
-                + " -i " + quote(inputUrl)
-                + " -c copy -f mpegts "
-                + quote(recording.getTempTsPath());
+            for (int attempt = 1; attempt <= DIRECT_DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+                recording.setDiagnosticMessage("Direct download attempt " + attempt + " of " + DIRECT_DOWNLOAD_MAX_ATTEMPTS + ".");
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated("Direct download attempt " + attempt + ".");
 
-            ReturnCode code = FFmpegKit.execute(command).getReturnCode();
+                try {
+                    String inputUrl = getDirectDownloadInputUrl(videoId, null);
+
+                    if (inputUrl == null || inputUrl.trim().isEmpty()) {
+                        throw new IllegalStateException("Could not get playable URL for ended live/video.");
+                    }
+
+                    log(
+                        LogItem.LEVEL_SUCCESS,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Direct video URL found.",
+                        "attempt=" + attempt + ", input=" + describeUrlForLog(inputUrl)
+                    );
+
+                    String command = "-y -hide_banner -loglevel info"
+                        + " -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1"
+                        + " -reconnect_delay_max 5 -rw_timeout 90000000"
+                        + " -i " + quote(inputUrl)
+                        + " -c copy -f mpegts "
+                        + quote(recording.getTempTsPath());
+
+                    lastCode = FFmpegKit.execute(command).getReturnCode();
+
+                    if (ReturnCode.isSuccess(lastCode) || ReturnCode.isCancel(lastCode)) {
+                        break;
+                    }
+
+                    if (attempt < DIRECT_DOWNLOAD_MAX_ATTEMPTS) {
+                        sleep(getAttemptBackoffMillis(attempt));
+                    }
+                } catch (Exception e) {
+                    lastError = e;
+                    log(
+                        LogItem.LEVEL_WARNING,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Direct download attempt failed.",
+                        "attempt=" + attempt + ", error=" + normalizeErrorMessage(e)
+                    );
+                    if (attempt < DIRECT_DOWNLOAD_MAX_ATTEMPTS) {
+                        sleep(getAttemptBackoffMillis(attempt));
+                    }
+                }
+            }
+
             activeRecordings.remove(recording.getId());
             progressTracker.untrack(recording);
 
-            if (ReturnCode.isSuccess(code)) {
+            if (ReturnCode.isSuccess(lastCode)) {
                 convertRecording(recording, null);
-            } else if (ReturnCode.isCancel(code)) {
+            } else if (ReturnCode.isCancel(lastCode)) {
                 recording.markStoppedByUser();
                 storage.upsertRecording(recording);
+            } else if (recording.hasExistingTempTsFile()) {
+                recording.markRecoverable("Direct download stopped after retries. " + describeReturnCode(lastCode));
+                storage.upsertRecording(recording);
+            } else if (lastError != null) {
+                recording.markFailed(normalizeErrorMessage(lastError));
+                storage.upsertRecording(recording);
             } else {
-                recording.markRecoverable("Direct download exited with code " + (code == null ? -1 : code.getValue()));
+                recording.markFailed("Direct download failed. " + describeReturnCode(lastCode));
                 storage.upsertRecording(recording);
             }
         } catch (Exception e) {
@@ -536,6 +648,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!settings.isConvertTsToMp4()) {
             recording.markCompleted(recording.getTempTsPath());
             storage.upsertRecording(recording);
+            return;
+        }
+
+        long requiredBytes = estimateConversionRequiredBytes(recording);
+
+        if (!ensureRecordingStorageAvailable(channel, requiredBytes)) {
+            recording.markRecoverable("Not enough free storage to convert safely. " + fileManager.getStorageSummary());
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording is recoverable; storage is low.");
             return;
         }
 
@@ -705,7 +826,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                             .put("contentPlaybackContext", new JSONObject()
                                 .put("html5Preference", "HTML5_PREF_WANTS")));
 
-                    String response = httpPost(apiUrl, body.toString(), client);
+                    String response = httpPostWithRetry(apiUrl, body.toString(), client);
                     JSONObject json = new JSONObject(response);
 
                     JSONObject playabilityStatus = json.optJSONObject("playabilityStatus");
@@ -1000,7 +1121,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         .put("videoId", videoId)
                         .put("contentCheckOk", true)
                         .put("racyCheckOk", true);
-                    JSONObject json = new JSONObject(httpPost(apiUrl, body.toString(), client));
+                    JSONObject json = new JSONObject(httpPostWithRetry(apiUrl, body.toString(), client));
                     JSONObject streamingData = json.optJSONObject("streamingData");
 
                     if (streamingData == null) {
@@ -1068,6 +1189,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return readResponse(connection);
     }
 
+    private String httpPostWithRetry(
+        String urlString,
+        String body,
+        RemoteConfig.YoutubeClient client
+    ) throws Exception {
+        Exception lastError = null;
+
+        for (int attempt = 1; attempt <= INNERTUBE_HTTP_MAX_ATTEMPTS; attempt++) {
+            try {
+                return httpPost(urlString, body, client);
+            } catch (Exception e) {
+                lastError = e;
+
+                if (!isRetryableInnertubeError(e) || attempt >= INNERTUBE_HTTP_MAX_ATTEMPTS) {
+                    throw e;
+                }
+
+                sleep(getAttemptBackoffMillis(attempt));
+            }
+        }
+
+        throw lastError == null ? new IllegalStateException("Innertube request failed.") : lastError;
+    }
+
     private String httpPost(
         String urlString,
         String body,
@@ -1081,11 +1226,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+        connection.setRequestProperty("Accept", "application/json");
+        connection.setRequestProperty("Accept-Encoding", "identity");
         connection.setRequestProperty("User-Agent", getUserAgentForClient(client));
-        connection.setRequestProperty("Origin", remoteConfig.getWebPlayerBaseUrl());
-        connection.setRequestProperty("Referer", remoteConfig.getWebPlayerBaseUrl() + "/");
-        connection.setRequestProperty("X-Youtube-Client-Name", getClientHeaderName(client));
-        connection.setRequestProperty("X-Youtube-Client-Version", client.getClientVersion());
+
+        if (isWebInnertubeClient(client)) {
+            connection.setRequestProperty("Origin", remoteConfig.getWebPlayerBaseUrl());
+            connection.setRequestProperty("Referer", remoteConfig.getWebPlayerBaseUrl() + "/");
+        }
+
+        String clientHeaderName = getClientHeaderName(client);
+
+        if (!isBlank(clientHeaderName)) {
+            connection.setRequestProperty("X-Youtube-Client-Name", clientHeaderName);
+        }
+
+        if (client != null && !isBlank(client.getClientVersion())) {
+            connection.setRequestProperty("X-Youtube-Client-Version", client.getClientVersion());
+        }
+
         connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
         connection.getOutputStream().write(bodyBytes);
 
@@ -1132,6 +1291,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             connection.disconnect();
         }
+    }
+
+    private boolean isRetryableInnertubeError(Exception e) {
+        String message = normalizeErrorMessage(e).toLowerCase();
+        return message.contains("timeout")
+            || message.contains("connection")
+            || message.contains("http 408")
+            || message.contains("http 429")
+            || message.contains("http 500")
+            || message.contains("http 502")
+            || message.contains("http 503")
+            || message.contains("http 504");
+    }
+
+    private long getAttemptBackoffMillis(int attempt) {
+        int safeAttempt = Math.max(1, attempt);
+        return Math.min(20_000L, safeAttempt * safeAttempt * 1_500L);
+    }
+
+    private static String describeReturnCode(ReturnCode code) {
+        if (code == null) {
+            return "returnCode=unknown";
+        }
+
+        return "returnCode=" + code.getValue();
     }
 
     private String getApiKey() {
@@ -1209,11 +1393,56 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private static String getClientHeaderName(RemoteConfig.YoutubeClient client) {
-        if (client == null || isBlank(client.getClientId())) {
-            return client == null ? "" : client.getClientName();
+        if (client == null) {
+            return "";
         }
 
-        return client.getClientId();
+        if (!isBlank(client.getClientId())) {
+            return client.getClientId().trim();
+        }
+
+        String clientName = nullToEmpty(client.getClientName()).toUpperCase();
+
+        if (clientName.contains("WEB_EMBEDDED")) {
+            return "56";
+        }
+
+        if ("WEB".equals(clientName)) {
+            return "1";
+        }
+
+        if ("MWEB".equals(clientName)) {
+            return "2";
+        }
+
+        if (clientName.contains("ANDROID_VR")) {
+            return "28";
+        }
+
+        if ("ANDROID".equals(clientName)) {
+            return "3";
+        }
+
+        if ("IOS".equals(clientName)) {
+            return "5";
+        }
+
+        if (clientName.contains("TV")) {
+            return "7";
+        }
+
+        return "";
+    }
+
+    private static boolean isWebInnertubeClient(RemoteConfig.YoutubeClient client) {
+        if (client == null) {
+            return true;
+        }
+
+        String clientName = nullToEmpty(client.getClientName()).toUpperCase();
+        return clientName.startsWith("WEB")
+            || "MWEB".equals(clientName)
+            || clientName.contains("TV");
     }
 
     private String getUserAgentForClient(RemoteConfig.YoutubeClient client) {
@@ -1344,6 +1573,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channel.markPausedByNetwork("Network unavailable.");
                 storage.upsertChannel(channel);
                 notificationHelper.showChannelMonitoringNotification(channel);
+            }
+        }
+
+        for (RecordingItem recording : activeRecordings.values()) {
+            if (recording != null && recording.isActive()) {
+                recording.setDiagnosticMessage("Network unavailable; FFmpeg reconnect is waiting for segments.");
+                storage.upsertRecording(recording);
             }
         }
 

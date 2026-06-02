@@ -57,6 +57,7 @@ public class RecordingItem {
     private static final String JSON_UPDATED_AT = "updatedAt";
     private static final String JSON_FINISHED_AT = "finishedAt";
     private static final String JSON_CONVERTED_AT = "convertedAt";
+    private static final String JSON_HIDDEN_FROM_DOWNLOADING = "hiddenFromDownloading";
 
     private String id;
     private String channelId;
@@ -78,6 +79,7 @@ public class RecordingItem {
     private long updatedAt;
     private long finishedAt;
     private long convertedAt;
+    private boolean hiddenFromDownloading;
 
     public RecordingItem(
         String channelId,
@@ -112,6 +114,7 @@ public class RecordingItem {
         this.updatedAt = now;
         this.finishedAt = 0L;
         this.convertedAt = 0L;
+        this.hiddenFromDownloading = false;
     }
 
     public RecordingItem(
@@ -134,7 +137,8 @@ public class RecordingItem {
         long startedAt,
         long updatedAt,
         long finishedAt,
-        long convertedAt
+        long convertedAt,
+        boolean hiddenFromDownloading
     ) {
         this.id = isBlank(id) ? UUID.randomUUID().toString() : id;
         this.channelId = nullToEmpty(channelId);
@@ -156,6 +160,7 @@ public class RecordingItem {
         this.updatedAt = updatedAt <= 0 ? System.currentTimeMillis() : updatedAt;
         this.finishedAt = Math.max(0L, finishedAt);
         this.convertedAt = Math.max(0L, convertedAt);
+        this.hiddenFromDownloading = hiddenFromDownloading;
     }
 
     public static RecordingItem fromJson(JSONObject json) throws JSONException {
@@ -183,7 +188,8 @@ public class RecordingItem {
             json.optLong(JSON_STARTED_AT, 0L),
             json.optLong(JSON_UPDATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_FINISHED_AT, 0L),
-            json.optLong(JSON_CONVERTED_AT, 0L)
+            json.optLong(JSON_CONVERTED_AT, 0L),
+            json.optBoolean(JSON_HIDDEN_FROM_DOWNLOADING, false)
         );
     }
 
@@ -210,6 +216,7 @@ public class RecordingItem {
         json.put(JSON_UPDATED_AT, updatedAt);
         json.put(JSON_FINISHED_AT, finishedAt);
         json.put(JSON_CONVERTED_AT, convertedAt);
+        json.put(JSON_HIDDEN_FROM_DOWNLOADING, hiddenFromDownloading);
 
         return json;
     }
@@ -529,6 +536,20 @@ public class RecordingItem {
         return convertedAt;
     }
 
+    public boolean isHiddenFromDownloading() {
+        return hiddenFromDownloading;
+    }
+
+    public void hideFromDownloading() {
+        hiddenFromDownloading = true;
+        touch();
+    }
+
+    public void showInDownloading() {
+        hiddenFromDownloading = false;
+        touch();
+    }
+
     public void setChannelTitle(String channelTitle) {
         this.channelTitle = nullToEmpty(channelTitle);
         touch();
@@ -574,7 +595,17 @@ public class RecordingItem {
         touch();
     }
 
-        public void setQuality(String quality) {
+    public void setDiagnosticMessage(String diagnosticMessage) {
+        this.errorMessage = nullToEmpty(diagnosticMessage);
+        touch();
+    }
+
+    public void clearDiagnosticMessage() {
+        this.errorMessage = "";
+        touch();
+    }
+
+    public void setQuality(String quality) {
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         touch();
     }
