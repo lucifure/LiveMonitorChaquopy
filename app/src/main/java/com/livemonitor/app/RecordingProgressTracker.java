@@ -22,6 +22,7 @@ public class RecordingProgressTracker {
     }
 
     private static final long DEFAULT_UPDATE_INTERVAL_MS = 2_000L;
+    private static final long STALL_WARNING_AFTER_MS = 90_000L;
 
     private final AppStorage storage;
     private final Map<String, TrackedRecording> trackedRecordings;
@@ -141,6 +142,25 @@ public class RecordingProgressTracker {
 
         long bytesRecorded = calculateBytesRecorded(recording);
         long durationSeconds = calculateDurationSeconds(tracked);
+        long now = System.currentTimeMillis();
+
+        if (bytesRecorded > tracked.lastBytesRecorded) {
+            tracked.lastBytesRecorded = bytesRecorded;
+            tracked.lastGrowthAtMillis = now;
+
+            if (recording.getErrorMessage() != null
+                && recording.getErrorMessage().startsWith("No file growth")) {
+                recording.clearDiagnosticMessage();
+            }
+        } else if (RecordingItem.STATUS_RECORDING.equals(recording.getStatus())
+            && durationSeconds > 60L
+            && now - tracked.lastGrowthAtMillis > STALL_WARNING_AFTER_MS) {
+            recording.setDiagnosticMessage(
+                "No file growth for "
+                    + formatDuration((now - tracked.lastGrowthAtMillis) / 1_000L)
+                    + "; FFmpeg may be reconnecting."
+            );
+        }
 
         recording.updateProgress(bytesRecorded, durationSeconds);
         storage.upsertRecording(recording);
@@ -251,10 +271,14 @@ public class RecordingProgressTracker {
 
         private final RecordingItem recording;
         private final long startTimeMillis;
+        private long lastBytesRecorded;
+        private long lastGrowthAtMillis;
 
         private TrackedRecording(RecordingItem recording, long startTimeMillis) {
             this.recording = recording;
             this.startTimeMillis = startTimeMillis;
+            this.lastBytesRecorded = Math.max(0L, recording.getBytesRecorded());
+            this.lastGrowthAtMillis = System.currentTimeMillis();
         }
     }
 }

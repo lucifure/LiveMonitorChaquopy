@@ -29,7 +29,7 @@ import java.util.List;
  * Layout:
  * - fixed top URL input + Add Channel button
  * - Monitoring tab
- * - Downloads tab
+ * - Downloading tab for active downloads/recordings
  * - 3-dot menu for logs, downloaded files, settings
  */
 public class MainActivity extends AppCompatActivity {
@@ -166,10 +166,11 @@ public class MainActivity extends AppCompatActivity {
 
                 refreshAll();
 
+                String action = intent.getAction();
                 String message = intent.getStringExtra(LiveMonitorActions.EXTRA_MESSAGE);
 
-                if (message != null && !message.trim().isEmpty()) {
-                    binding.statusText.setText(message);
+                if (shouldShowHeaderStatus(action, message)) {
+                    binding.statusText.setText(formatHeaderStatus(message));
                 }
             }
         };
@@ -358,10 +359,10 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-            .setTitle("Stop download?")
-            .setMessage("Stop further downloading and keep the file saved so far?")
+            .setTitle("Remove from Downloading?")
+            .setMessage("Stop this active download and remove it from the Downloading section? The saved file remains available from Downloaded Files.")
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Stop", (dialog, which) -> stopDownload(recording))
+            .setPositiveButton("Delete", (dialog, which) -> stopDownload(recording))
             .show();
     }
 
@@ -377,6 +378,7 @@ public class MainActivity extends AppCompatActivity {
         startServiceCompat(intent);
 
         recording.markStoppedByUser();
+        recording.hideFromDownloading();
         storage.upsertRecording(recording);
 
         if (recording.getChannelId() != null && !recording.getChannelId().trim().isEmpty()) {
@@ -384,7 +386,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         refreshAll();
-        Toast.makeText(this, "Download stopped. Saved file kept.", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Removed from Downloading. Saved file kept.", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {
@@ -513,9 +515,7 @@ public class MainActivity extends AppCompatActivity {
         List<ChannelItem> channels = storage.loadChannels();
         channelAdapter.setChannels(channels);
 
-        List<RecordingItem> recordings = new ArrayList<>();
-        recordings.addAll(storage.loadActiveRecordings());
-        recordings.addAll(storage.loadCompletedRecordings());
+        List<RecordingItem> recordings = loadVisibleDownloadingItems();
         recordingAdapter.setRecordings(recordings);
 
         int monitoringCount = 0;
@@ -541,6 +541,40 @@ public class MainActivity extends AppCompatActivity {
                 recordings.isEmpty() ? View.VISIBLE : View.GONE
             );
         }
+    }
+
+    private List<RecordingItem> loadVisibleDownloadingItems() {
+        List<RecordingItem> result = new ArrayList<>();
+
+        for (RecordingItem recording : storage.loadActiveRecordings()) {
+            if (recording != null && !recording.isHiddenFromDownloading()) {
+                result.add(recording);
+            }
+        }
+
+        return result;
+    }
+
+    private boolean shouldShowHeaderStatus(String action, String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return false;
+        }
+
+        if (LiveMonitorActions.ACTION_LOG_UPDATED.equals(action) || "MONITOR_LOG".equals(action)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private String formatHeaderStatus(String message) {
+        String trimmed = message == null ? "" : message.trim();
+
+        if (trimmed.length() <= 24) {
+            return trimmed;
+        }
+
+        return trimmed.substring(0, 21) + "...";
     }
 
     private void fetchRemoteConfigOnStart() {
