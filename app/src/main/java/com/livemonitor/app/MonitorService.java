@@ -25,6 +25,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -49,6 +50,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private final Map<String, Boolean> activeLoops = new ConcurrentHashMap<>();
     private final Map<String, RecordingItem> activeRecordings = new ConcurrentHashMap<>();
+    private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
@@ -65,6 +67,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         networkMonitor = new NetworkMonitor(this);
         progressTracker = new RecordingProgressTracker(storage);
         executor = Executors.newCachedThreadPool();
+        progressTracker.setListener(new RecordingProgressTracker.Listener() {
+            @Override
+            public void onRecordingProgressUpdated(RecordingItem recording) {
+                // The UI refreshes via existing broadcasts; avoid broadcasting every tick.
+            }
+
+            @Override
+            public void onRecordingStalled(RecordingItem recording) {
+                if (recording != null) {
+                    executor.execute(() -> recoverStalledRecording(recording.getId()));
+                }
+            }
+        });
 
         notificationHelper.createNotificationChannels();
         networkMonitor.setListener(this);
@@ -248,8 +263,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        FFmpegRunner.cancel();
-        FFmpegKit.cancel();
+        cancelActiveRecording(recording);
         broadcastRecordingUpdated("Recording paused.");
     }
 
@@ -306,8 +320,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = storage.findRecordingById(recordingId);
 
         if (recording != null) {
-            recording.markStoppedByUser();
-            storage.upsertRecording(recording);
             activeRecordings.remove(recording.getId());
             activeRecordings.remove(recording.getChannelId());
             progressTracker.untrack(recording);
@@ -317,11 +329,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 && !recording.getChannelId().trim().isEmpty()) {
                 channelId = recording.getChannelId();
             }
-        }
 
-        if (recording != null) {
-            recording.hideFromDownloading();
-            storage.upsertRecording(recording);
+            saveStoppedRecordingForDownloads(recording);
         }
 
         if (channelId != null && !channelId.trim().isEmpty()) {
@@ -335,9 +344,98 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        FFmpegRunner.cancel();
-        FFmpegKit.cancel();
-        broadcastRecordingUpdated("Download stopped.");
+        cancelActiveRecording(recording);
+        broadcastRecordingUpdated("Download stopped and saved.");
+    }
+
+    private void saveStoppedRecordingForDownloads(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        if (recording.isCompleted()) {
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            return;
+        }
+
+        if (recording.hasExistingFinalMp4File()) {
+            recording.markCompleted(recording.getFinalMp4Path());
+        } else if (recording.hasExistingTempTsFile()) {
+            recording.markCompleted(recording.getTempTsPath());
+        } else {
+            recording.markStoppedByUser();
+        }
+
+        recording.hideFromDownloading();
+        storage.upsertRecording(recording);
+    }
+
+    private void cancelActiveRecording(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        boolean cancelled = FFmpegRunner.cancel(recording.getId());
+
+        if (!cancelled && isBlank(recording.getChannelId()) && !FFmpegRunner.isRunning()) {
+            /*
+             * Direct video downloads still use a synchronous FFmpegKit path.
+             * Use the broader cancel only when no per-recording live sessions
+             * are running, so stopping one item does not kill active streams.
+             */
+            FFmpegKit.cancel();
+        }
+    }
+
+    private void recoverStalledRecording(String recordingId) {
+        if (isBlank(recordingId) || restartingRecordings.contains(recordingId)) {
+            return;
+        }
+
+        RecordingItem recording = storage.findRecordingById(recordingId);
+
+        if (recording == null || !RecordingItem.STATUS_RECORDING.equals(recording.getStatus())) {
+            return;
+        }
+
+        String channelId = recording.getChannelId();
+        ChannelItem channel = storage.findChannelById(channelId);
+
+        if (channel == null || !channel.shouldMonitor()) {
+            return;
+        }
+
+        restartingRecordings.add(recordingId);
+        recording.setDiagnosticMessage("No file growth detected; refreshing manifest and restarting this recorder.");
+        storage.upsertRecording(recording);
+        broadcastRecordingUpdated("Recovering stalled recording.");
+        log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "Recording stalled; restarting recorder.", recording.getVideoId());
+
+        FFmpegRunner.cancel(recordingId);
+        sleep(1_000L);
+
+        RecordingItem latestRecording = storage.findRecordingById(recordingId);
+
+        if (latestRecording == null || !latestRecording.isActive()) {
+            restartingRecordings.remove(recordingId);
+            return;
+        }
+
+        latestRecording.markRecording();
+        latestRecording.showInDownloading();
+        latestRecording.setDiagnosticMessage("Recorder restarted after stalled file growth; waiting for fresh manifest.");
+        storage.upsertRecording(latestRecording);
+        activeRecordings.put(channelId, latestRecording);
+        progressTracker.track(latestRecording);
+
+        LiveInfo liveInfo = new LiveInfo(
+            latestRecording.getVideoId(),
+            latestRecording.getTitle(),
+            latestRecording.getVideoUrl()
+        );
+
+        runRecording(channelId, latestRecording, liveInfo);
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
@@ -532,6 +630,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             broadcastRecordingUpdated("Recording started.");
 
             FFmpegRunner.executeAsync(
+                recording.getId(),
                 manifestUrl,
                 recording.getTempTsPath(),
                 returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
@@ -546,6 +645,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
 
+            restartingRecordings.remove(recording.getId());
             recording.markFailed(errorMessage);
             storage.upsertRecording(recording);
             activeRecordings.remove(channelId);
@@ -686,8 +786,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ReturnCode.isSuccess(lastCode)) {
                 convertRecording(recording, null);
             } else if (ReturnCode.isCancel(lastCode)) {
-                recording.markStoppedByUser();
-                storage.upsertRecording(recording);
+                saveStoppedRecordingForDownloads(recording);
             } else if (recording.hasExistingTempTsFile()) {
                 recording.markRecoverable("Direct download stopped after retries. " + describeReturnCode(lastCode));
                 storage.upsertRecording(recording);
@@ -715,7 +814,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (recording == null) return;
 
+        boolean restartingAfterStall = restartingRecordings.contains(recordingId);
+
+        if (restartingAfterStall && (returnCode == 255 || returnCode == -1)) {
+            restartingRecordings.remove(recordingId);
+            broadcastRecordingUpdated("Recorder is restarting after a stall.");
+            return;
+        }
+
+        restartingRecordings.remove(recordingId);
         activeRecordings.remove(channelId);
+        activeRecordings.remove(recordingId);
         progressTracker.untrack(recording);
 
         if (recording.isPausedByUser()) {
@@ -723,9 +832,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } else if (returnCode == 0) {
             convertRecording(recording, channel);
         } else if (returnCode == 255 || returnCode == -1) {
-            recording.markStoppedByUser();
-            recording.hideFromDownloading();
-            storage.upsertRecording(recording);
+            saveStoppedRecordingForDownloads(recording);
         } else {
             recording.markRecoverable("Recorder exited with code " + returnCode);
             storage.upsertRecording(recording);
@@ -824,7 +931,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     .replaceAll("[/?#].*", "");
             }
 
-            if (handle == null || handle.trim().isEmpty()) return null;            String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
+            if (handle == null || handle.trim().isEmpty()) return null;
+
+            String apiUrl = "https://www.googleapis.com/youtube/v3/channels"
                 + "?part=id&forHandle=" + URLEncoder.encode(handle, "UTF-8")
                 + "&key=" + getApiKey();
 
@@ -849,15 +958,67 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             JSONObject json = new JSONObject(httpGet(apiUrl));
             JSONArray items = json.optJSONArray("items");
 
-            if (items == null || items.length() == 0) return null;
+            if (items != null && items.length() > 0) {
+                JSONObject item = items.getJSONObject(0);
+                String videoId = item.getJSONObject("id").getString("videoId");
+                String title = item.getJSONObject("snippet").getString("title");
 
-            JSONObject item = items.getJSONObject(0);
-            String videoId = item.getJSONObject("id").getString("videoId");
-            String title = item.getJSONObject("snippet").getString("title");
+                return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "YouTube Data API live check failed; trying channel /live fallback", e);
+        }
+
+        return checkLiveFromChannelLivePage(channelId);
+    }
+
+    private LiveInfo checkLiveFromChannelLivePage(String channelId) {
+        if (isBlank(channelId)) {
+            return null;
+        }
+
+        String liveUrl = remoteConfig.getWebPlayerBaseUrl()
+            + "/channel/"
+            + urlEncodeForQuery(channelId)
+            + "/live";
+
+        try {
+            String html = httpGet(liveUrl);
+            JSONObject playerResponse = extractInitialPlayerResponse(html);
+
+            if (playerResponse == null) {
+                return null;
+            }
+
+            JSONObject videoDetails = playerResponse.optJSONObject("videoDetails");
+            JSONObject streamingData = playerResponse.optJSONObject("streamingData");
+
+            if (videoDetails == null) {
+                return null;
+            }
+
+            String videoId = videoDetails.optString("videoId", "");
+            String title = videoDetails.optString("title", "");
+            boolean liveContent = videoDetails.optBoolean("isLiveContent", false);
+            String hlsManifestUrl = streamingData == null
+                ? ""
+                : streamingData.optString("hlsManifestUrl", "");
+
+            if (isBlank(videoId) || (!liveContent && isBlank(hlsManifestUrl))) {
+                return null;
+            }
+
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_SERVICE,
+                null,
+                "Channel /live fallback found a live video.",
+                "channelId=" + channelId + ", videoId=" + videoId
+            );
 
             return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);
         } catch (Exception e) {
-            Log.w(TAG, "checkLive failed", e);
+            Log.w(TAG, "channel /live fallback failed", e);
             return null;
         }
     }
@@ -1734,7 +1895,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         activeRecordings.clear();
+        restartingRecordings.clear();
         FFmpegRunner.cancel();
+        FFmpegKit.cancel();
 
         if (progressTracker != null) progressTracker.stop();
         if (networkMonitor != null) networkMonitor.stop();

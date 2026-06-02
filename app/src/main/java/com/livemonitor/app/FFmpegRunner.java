@@ -8,6 +8,10 @@ import com.arthenica.ffmpegkit.FFmpegSession;
 import com.arthenica.ffmpegkit.ReturnCode;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * FFmpeg wrapper used by MonitorService.
@@ -17,37 +21,43 @@ import java.io.File;
  * - keeps local HLS proxy support
  * - does not convert to MP4 here
  * - MP4 conversion is handled after recording finishes by MonitorService
+ * - keeps one FFmpeg/proxy session per recording so multiple streams do not
+ *   cancel or replace one another
  */
 public class FFmpegRunner {
 
     private static final String TAG = "FFmpegRunner";
 
-    private static FFmpegSession currentSession = null;
-    private static HlsProxyServer proxyServer = null;
+    private static final Map<String, RecorderSession> sessions = new ConcurrentHashMap<>();
 
     public static boolean setup(Context context) {
-        Log.d(TAG, "Using FFmpegKit dependency with local HLS proxy.");
+        Log.d(TAG, "Using FFmpegKit dependency with per-recording local HLS proxies.");
         return true;
     }
 
-    public static synchronized void executeAsync(
+    public static void executeAsync(
+        String recordingId,
         String manifestUrl,
         String outPath,
         OnCompleteCallback callback,
         OnLogCallback logCallback
     ) {
-        try {
-            stopProxy();
+        String safeRecordingId = normalizeRecordingId(recordingId, outPath);
 
+        try {
+            cancel(safeRecordingId);
             ensureParentDirectory(outPath);
 
-            proxyServer = new HlsProxyServer(logCallback);
+            HlsProxyServer proxyServer = new HlsProxyServer(logCallback);
             proxyServer.start();
+
+            RecorderSession recorderSession = new RecorderSession(safeRecordingId, proxyServer);
+            sessions.put(safeRecordingId, recorderSession);
 
             String proxyManifestUrl = proxyServer.createProxyUrl(manifestUrl);
 
             if (logCallback != null) {
-                logCallback.onLog("Local HLS proxy started.");
+                logCallback.onLog("Local HLS proxy started for recording " + safeRecordingId + ".");
                 logCallback.onLog("Proxy input: " + stripQuery(proxyManifestUrl));
                 logCallback.onLog("Recording output: " + outPath);
             }
@@ -58,46 +68,9 @@ public class FFmpegRunner {
                 logCallback.onLog("FFmpegKit TS recording command started.");
             }
 
-            currentSession = FFmpegKit.executeAsync(
+            FFmpegSession ffmpegSession = FFmpegKit.executeAsync(
                 command,
-                session -> {
-                    synchronized (FFmpegRunner.class) {
-                        currentSession = null;
-                    }
-
-                    ReturnCode returnCode = session.getReturnCode();
-                    stopProxy();
-
-                    if (ReturnCode.isSuccess(returnCode)) {
-                        if (callback != null) {
-                            callback.onComplete(0);
-                        }
-                        return;
-                    }
-
-                    if (ReturnCode.isCancel(returnCode)) {
-                        if (callback != null) {
-                            callback.onComplete(255);
-                        }
-                        return;
-                    }
-
-                    String failStackTrace = session.getFailStackTrace();
-
-                    if (failStackTrace != null && !failStackTrace.isEmpty()) {
-                        Log.e(TAG, failStackTrace);
-
-                        if (logCallback != null) {
-                            logCallback.onLog("FFmpegKit failure: " + failStackTrace);
-                        }
-                    }
-
-                    int code = returnCode != null ? returnCode.getValue() : -1;
-
-                    if (callback != null) {
-                        callback.onComplete(code);
-                    }
-                },
+                session -> finishSession(safeRecordingId, recorderSession, session, callback, logCallback),
                 log -> {
                     if (logCallback == null || log == null || log.getMessage() == null) {
                         return;
@@ -116,9 +89,15 @@ public class FFmpegRunner {
                      */
                 }
             );
+
+            recorderSession.setSession(ffmpegSession);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start FFmpeg with local proxy", e);
-            stopProxy();
+            RecorderSession removed = sessions.remove(safeRecordingId);
+
+            if (removed != null) {
+                removed.stopProxy();
+            }
 
             if (logCallback != null) {
                 logCallback.onLog("Local HLS proxy error: " + e.getMessage());
@@ -130,18 +109,89 @@ public class FFmpegRunner {
         }
     }
 
-    public static synchronized void cancel() {
-        if (currentSession != null) {
-            currentSession.cancel();
-            currentSession = null;
-        }
-
-        FFmpegKit.cancel();
-        stopProxy();
+    public static void executeAsync(
+        String manifestUrl,
+        String outPath,
+        OnCompleteCallback callback,
+        OnLogCallback logCallback
+    ) {
+        executeAsync(outPath, manifestUrl, outPath, callback, logCallback);
     }
 
-    public static synchronized boolean isRunning() {
-        return currentSession != null;
+    public static boolean cancel(String recordingId) {
+        String safeRecordingId = normalizeRecordingId(recordingId, "");
+        RecorderSession recorderSession = sessions.remove(safeRecordingId);
+
+        if (recorderSession == null) {
+            return false;
+        }
+
+        recorderSession.cancel();
+        return true;
+    }
+
+    public static synchronized void cancel() {
+        List<String> recordingIds = new ArrayList<>(sessions.keySet());
+
+        for (String recordingId : recordingIds) {
+            cancel(recordingId);
+        }
+    }
+
+    public static boolean isRunning(String recordingId) {
+        return sessions.containsKey(normalizeRecordingId(recordingId, ""));
+    }
+
+    public static boolean isRunning() {
+        return !sessions.isEmpty();
+    }
+
+    private static void finishSession(
+        String recordingId,
+        RecorderSession expectedSession,
+        FFmpegSession completedSession,
+        OnCompleteCallback callback,
+        OnLogCallback logCallback
+    ) {
+        RecorderSession currentSession = sessions.get(recordingId);
+
+        if (currentSession == expectedSession) {
+            sessions.remove(recordingId);
+        }
+
+        expectedSession.stopProxy();
+
+        ReturnCode returnCode = completedSession == null ? null : completedSession.getReturnCode();
+
+        if (ReturnCode.isSuccess(returnCode)) {
+            if (callback != null) {
+                callback.onComplete(0);
+            }
+            return;
+        }
+
+        if (ReturnCode.isCancel(returnCode)) {
+            if (callback != null) {
+                callback.onComplete(255);
+            }
+            return;
+        }
+
+        String failStackTrace = completedSession == null ? "" : completedSession.getFailStackTrace();
+
+        if (failStackTrace != null && !failStackTrace.isEmpty()) {
+            Log.e(TAG, failStackTrace);
+
+            if (logCallback != null) {
+                logCallback.onLog("FFmpegKit failure: " + failStackTrace);
+            }
+        }
+
+        int code = returnCode != null ? returnCode.getValue() : -1;
+
+        if (callback != null) {
+            callback.onComplete(code);
+        }
     }
 
     private static String buildRecordTsCommand(String proxyManifestUrl, String outPath) {
@@ -175,18 +225,16 @@ public class FFmpegRunner {
         }
     }
 
-    private static synchronized void stopProxy() {
-        if (proxyServer == null) {
-            return;
+    private static String normalizeRecordingId(String recordingId, String fallback) {
+        if (recordingId != null && !recordingId.trim().isEmpty()) {
+            return recordingId.trim();
         }
 
-        try {
-            proxyServer.stop();
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to stop HLS proxy", e);
+        if (fallback != null && !fallback.trim().isEmpty()) {
+            return fallback.trim();
         }
 
-        proxyServer = null;
+        return "default";
     }
 
     private static String stripQuery(String url) {
@@ -195,44 +243,39 @@ public class FFmpegRunner {
         }
 
         int queryIndex = url.indexOf('?');
-
         return queryIndex >= 0 ? url.substring(0, queryIndex) : url;
     }
 
     private static String normalizeFfmpegLog(String message) {
-        if (message == null) {
-            return "";
-        }
-
-        return message.replace('\n', ' ').replace('\r', ' ').trim();
+        return message == null ? "" : message.trim();
     }
 
     private static boolean isImportantFfmpegLog(String message) {
-        if (message == null || message.isEmpty()) {
+        if (message == null || message.trim().isEmpty()) {
             return false;
         }
 
-        String lower = message.toLowerCase();
+        String lower = message.toLowerCase(java.util.Locale.US);
 
         return lower.contains("error")
             || lower.contains("failed")
-            || lower.contains("invalid")
-            || lower.contains("timed out")
             || lower.contains("timeout")
-            || lower.contains("403")
-            || lower.contains("404")
-            || lower.contains("http status")
+            || lower.contains("reconnect")
+            || lower.contains("http")
+            || lower.contains("opening")
+            || lower.contains("server returned")
+            || lower.contains("invalid")
+            || lower.contains("end of file")
             || lower.contains("no such file")
-            || lower.contains("connection refused")
-            || lower.contains("connection reset");
+            || lower.contains("non-monotonous")
+            || lower.contains("corrupt")
+            || lower.contains("hls")
+            || lower.contains("segment")
+            || lower.contains("ts recording");
     }
 
     private static String quote(String value) {
-        if (value == null) {
-            return "''";
-        }
-
-        return "'" + value.replace("'", "'\\''") + "'";
+        return value == null ? "''" : "'" + value.replace("'", "'\\''") + "'";
     }
 
     public interface OnCompleteCallback {
@@ -241,5 +284,49 @@ public class FFmpegRunner {
 
     public interface OnLogCallback {
         void onLog(String message);
+    }
+
+    private static class RecorderSession {
+        private final String recordingId;
+        private final HlsProxyServer proxyServer;
+        private FFmpegSession session;
+        private boolean cancelled;
+
+        private RecorderSession(String recordingId, HlsProxyServer proxyServer) {
+            this.recordingId = recordingId;
+            this.proxyServer = proxyServer;
+        }
+
+        private synchronized void setSession(FFmpegSession session) {
+            if (cancelled && session != null) {
+                session.cancel();
+                return;
+            }
+
+            this.session = session;
+        }
+
+        private synchronized void cancel() {
+            cancelled = true;
+
+            if (session != null) {
+                session.cancel();
+                session = null;
+            }
+
+            stopProxy();
+        }
+
+        private void stopProxy() {
+            if (proxyServer == null) {
+                return;
+            }
+
+            try {
+                proxyServer.stop();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to stop HLS proxy for recording " + recordingId, e);
+            }
+        }
     }
 }
