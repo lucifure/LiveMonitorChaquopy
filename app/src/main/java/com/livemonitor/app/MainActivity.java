@@ -350,10 +350,10 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-            .setTitle("Delete active download?")
-            .setMessage("Stop this recording, remove it from Downloading, and keep monitoring the channel for the next live stream?")
+            .setTitle("Stop and save recording?")
+            .setMessage("Stop this recording now, remove it from Downloading, save the recorded file in Downloaded Files, and keep monitoring the channel for the next live stream?")
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete", (dialog, which) -> stopDownload(recording))
+            .setPositiveButton("Stop & Save", (dialog, which) -> stopDownload(recording))
             .show();
     }
 
@@ -395,12 +395,17 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
         startServiceCompat(intent);
 
-        recording.markStoppedByUser();
+        if (recording.hasExistingFinalMp4File()) {
+            recording.markCompleted(recording.getFinalMp4Path());
+        } else if (recording.hasExistingTempTsFile()) {
+            recording.markCompleted(recording.getTempTsPath());
+        }
+
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
 
         refreshAll();
-        Toast.makeText(this, "Deleted from Downloading. Monitoring will continue.", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Recording stopped and saved to Downloaded Files.", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {
