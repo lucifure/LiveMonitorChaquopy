@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
@@ -77,6 +78,13 @@ public class LogActivity extends AppCompatActivity {
         clearButton.setText("Clear Log");
         clearButton.setOnClickListener(v -> clearLog());
 
+        Button settingsButton = new Button(this);
+        settingsButton.setAllCaps(false);
+        settingsButton.setText("Log Settings");
+        settingsButton.setOnClickListener(v -> {
+            startActivity(new Intent(this, LogSettingsActivity.class));
+        });
+
         buttonRow.addView(copyButton);
 
         LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
@@ -85,6 +93,13 @@ public class LogActivity extends AppCompatActivity {
         );
         clearParams.leftMargin = dp(8);
         buttonRow.addView(clearButton, clearParams);
+
+        LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        settingsParams.leftMargin = dp(8);
+        buttonRow.addView(settingsButton, settingsParams);
 
         root.addView(
             buttonRow,
