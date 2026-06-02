@@ -70,6 +70,12 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Log category toggles. -->
+        <activity
+            android:name=".LogSettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Per-channel log screen. -->
         <activity
             android:name=".ChannelLogActivity"

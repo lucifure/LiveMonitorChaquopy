@@ -437,7 +437,7 @@ public class AppStorage {
     }
 
     public synchronized void appendLog(LogItem log) {
-        if (log == null) {
+        if (log == null || !shouldStoreLog(log)) {
             return;
         }
 
@@ -454,12 +454,16 @@ public class AppStorage {
         List<LogItem> logs = loadLogs();
 
         for (LogItem log : newLogs) {
-            if (log != null) {
+            if (log != null && shouldStoreLog(log)) {
                 logs.add(log);
             }
         }
 
         saveLogs(logs);
+    }
+
+    private boolean shouldStoreLog(LogItem log) {
+        return loadSettings().isLogItemEnabled(log);
     }
 
     public synchronized List<LogItem> loadLogsForChannel(String channelId) {

@@ -48,7 +48,7 @@ public class FFmpegRunner {
 
             if (logCallback != null) {
                 logCallback.onLog("Local HLS proxy started.");
-                logCallback.onLog("Proxy input: " + proxyManifestUrl);
+                logCallback.onLog("Proxy input: " + stripQuery(proxyManifestUrl));
                 logCallback.onLog("Recording output: " + outPath);
             }
 
@@ -103,9 +103,9 @@ public class FFmpegRunner {
                         return;
                     }
 
-                    String message = log.getMessage().trim();
+                    String message = normalizeFfmpegLog(log.getMessage());
 
-                    if (!message.isEmpty()) {
+                    if (isImportantFfmpegLog(message)) {
                         logCallback.onLog(message);
                     }
                 },
@@ -147,7 +147,7 @@ public class FFmpegRunner {
     private static String buildRecordTsCommand(String proxyManifestUrl, String outPath) {
         return "-y"
             + " -hide_banner"
-            + " -loglevel info"
+            + " -loglevel warning"
             + " -reconnect 1"
             + " -reconnect_streamed 1"
             + " -reconnect_on_network_error 1"
@@ -187,6 +187,44 @@ public class FFmpegRunner {
         }
 
         proxyServer = null;
+    }
+
+    private static String stripQuery(String url) {
+        if (url == null) {
+            return "";
+        }
+
+        int queryIndex = url.indexOf('?');
+
+        return queryIndex >= 0 ? url.substring(0, queryIndex) : url;
+    }
+
+    private static String normalizeFfmpegLog(String message) {
+        if (message == null) {
+            return "";
+        }
+
+        return message.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private static boolean isImportantFfmpegLog(String message) {
+        if (message == null || message.isEmpty()) {
+            return false;
+        }
+
+        String lower = message.toLowerCase();
+
+        return lower.contains("error")
+            || lower.contains("failed")
+            || lower.contains("invalid")
+            || lower.contains("timed out")
+            || lower.contains("timeout")
+            || lower.contains("403")
+            || lower.contains("404")
+            || lower.contains("http status")
+            || lower.contains("no such file")
+            || lower.contains("connection refused")
+            || lower.contains("connection reset");
     }
 
     private static String quote(String value) {

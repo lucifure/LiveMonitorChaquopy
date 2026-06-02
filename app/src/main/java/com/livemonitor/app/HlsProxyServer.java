@@ -298,14 +298,18 @@ public class HlsProxyServer {
                         continue;
                     }
 
-                    writeTextResponse(
-                        socket,
-                        response.code(),
-                        "Upstream Error",
-                        "Upstream error: " + response.code()
-                    );
-                    return;
-                }
+            if (!response.isSuccessful()) {
+                proxyLog(
+                    "upstream "
+                        + response.code()
+                        + " type="
+                        + contentType
+                        + " len="
+                        + contentLength
+                        + " url="
+                        + shortRemoteUrl(remoteUrl)
+                );
+            }
 
                 boolean isPlaylist =
                     !isSegmentUrl
@@ -476,12 +480,7 @@ public class HlsProxyServer {
 
         Variant chosen = chooseBestVariant(variants);
 
-        proxyLog(
-            "selected HLS variant "
-                + describeVariant(chosen.streamInfo)
-                + " url="
-                + shortRemoteUrl(chosen.remoteUrl)
-        );
+        proxyLog("selected HLS variant " + describeVariant(chosen.streamInfo));
 
         StringBuilder out = new StringBuilder();
 
@@ -852,7 +851,7 @@ public class HlsProxyServer {
 
         int count = proxyLogCount.incrementAndGet();
 
-        if (count <= 50
+        if (count <= 10
             || message.contains("error")
             || message.contains("403")
             || message.contains("404")

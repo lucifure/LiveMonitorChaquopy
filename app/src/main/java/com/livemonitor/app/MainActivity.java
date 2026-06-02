@@ -426,7 +426,7 @@ public class MainActivity extends AppCompatActivity {
             String title = String.valueOf(item.getTitle());
 
             if ("Log".equals(title)) {
-                startActivity(new Intent(this, LogActivity.class));
+                showLogMenu();
                 return true;
             }
 
@@ -442,6 +442,30 @@ public class MainActivity extends AppCompatActivity {
 
             if ("Stop All".equals(title)) {
                 stopAllMonitoring();
+                return true;
+            }
+
+            return false;
+        });
+
+        menu.show();
+    }
+
+    private void showLogMenu() {
+        PopupMenu menu = new PopupMenu(this, binding.btnMenu);
+        menu.getMenu().add("View Logs");
+        menu.getMenu().add("Log Settings");
+
+        menu.setOnMenuItemClickListener(item -> {
+            String title = String.valueOf(item.getTitle());
+
+            if ("View Logs".equals(title)) {
+                startActivity(new Intent(this, LogActivity.class));
+                return true;
+            }
+
+            if ("Log Settings".equals(title)) {
+                startActivity(new Intent(this, LogSettingsActivity.class));
                 return true;
             }
 
