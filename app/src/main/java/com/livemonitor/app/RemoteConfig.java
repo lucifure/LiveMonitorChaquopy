@@ -30,6 +30,12 @@ public class RemoteConfig {
     private static final String JSON_YOUTUBE_CLIENTS = "youtubeClients";
     private static final String JSON_API_KEYS = "apiKeys";
     private static final String JSON_VISITOR_DATA_URL = "visitorDataUrl";
+    private static final String JSON_YOUTUBE_EXTRACTOR_MODE = "youtubeExtractorMode";
+    private static final String JSON_YTDLP_EXECUTABLE = "ytDlpExecutable";
+    private static final String JSON_YTDLP_EXTRACTOR_ARGS = "ytDlpExtractorArgs";
+    private static final String JSON_YTDLP_EXTRA_ARGS = "ytDlpExtraArgs";
+    private static final String JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS = "ytDlpResolveTimeoutSeconds";
+    private static final String JSON_JAVA_HLS_FALLBACK_ENABLED = "javaHlsFallbackEnabled";
     private static final String JSON_INNERTUBE_BASE_URL = "innertubeBaseUrl";
     private static final String JSON_WEB_PLAYER_BASE_URL = "webPlayerBaseUrl";
     private static final String JSON_USER_AGENT = "userAgent";
@@ -43,6 +49,12 @@ public class RemoteConfig {
     private List<YoutubeClient> youtubeClients;
     private List<String> apiKeys;
     private String visitorDataUrl;
+    private String youtubeExtractorMode;
+    private String ytDlpExecutable;
+    private String ytDlpExtractorArgs;
+    private List<String> ytDlpExtraArgs;
+    private int ytDlpResolveTimeoutSeconds;
+    private boolean javaHlsFallbackEnabled;
     private String innertubeBaseUrl;
     private String webPlayerBaseUrl;
     private String userAgent;
@@ -57,6 +69,12 @@ public class RemoteConfig {
         this.youtubeClients = buildDefaultClients();
         this.apiKeys = new ArrayList<>();
         this.visitorDataUrl = "";
+        this.youtubeExtractorMode = "yt-dlp-first";
+        this.ytDlpExecutable = "yt-dlp";
+        this.ytDlpExtractorArgs = "";
+        this.ytDlpExtraArgs = new ArrayList<>();
+        this.ytDlpResolveTimeoutSeconds = 45;
+        this.javaHlsFallbackEnabled = true;
         this.innertubeBaseUrl = "https://www.youtube.com/youtubei/v1";
         this.webPlayerBaseUrl = "https://www.youtube.com";
         this.userAgent = buildDefaultUserAgent();
@@ -72,6 +90,12 @@ public class RemoteConfig {
         List<YoutubeClient> youtubeClients,
         List<String> apiKeys,
         String visitorDataUrl,
+        String youtubeExtractorMode,
+        String ytDlpExecutable,
+        String ytDlpExtractorArgs,
+        List<String> ytDlpExtraArgs,
+        int ytDlpResolveTimeoutSeconds,
+        boolean javaHlsFallbackEnabled,
         String innertubeBaseUrl,
         String webPlayerBaseUrl,
         String userAgent,
@@ -85,6 +109,12 @@ public class RemoteConfig {
         this.youtubeClients = sanitizeClients(youtubeClients);
         this.apiKeys = sanitizeStringList(apiKeys);
         this.visitorDataUrl = nullToEmpty(visitorDataUrl);
+        this.youtubeExtractorMode = normalizeExtractorMode(youtubeExtractorMode);
+        this.ytDlpExecutable = isBlank(ytDlpExecutable) ? "yt-dlp" : ytDlpExecutable.trim();
+        this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
+        this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+        this.ytDlpResolveTimeoutSeconds = clamp(ytDlpResolveTimeoutSeconds, 10, 300);
+        this.javaHlsFallbackEnabled = javaHlsFallbackEnabled;
         this.innertubeBaseUrl = isBlank(innertubeBaseUrl)
             ? "https://www.youtube.com/youtubei/v1"
             : innertubeBaseUrl.trim();
@@ -132,6 +162,19 @@ public class RemoteConfig {
             }
         }
 
+        List<String> ytDlpExtraArgs = new ArrayList<>();
+        JSONArray ytDlpExtraArgsArray = json.optJSONArray(JSON_YTDLP_EXTRA_ARGS);
+
+        if (ytDlpExtraArgsArray != null) {
+            for (int i = 0; i < ytDlpExtraArgsArray.length(); i++) {
+                String arg = ytDlpExtraArgsArray.optString(i, "").trim();
+
+                if (!arg.isEmpty()) {
+                    ytDlpExtraArgs.add(arg);
+                }
+            }
+        }
+
         RemoteConfig defaults = new RemoteConfig();
 
         return new RemoteConfig(
@@ -141,6 +184,12 @@ public class RemoteConfig {
             clients.isEmpty() ? defaults.getYoutubeClients() : clients,
             apiKeys,
             json.optString(JSON_VISITOR_DATA_URL, defaults.getVisitorDataUrl()),
+            json.optString(JSON_YOUTUBE_EXTRACTOR_MODE, defaults.getYoutubeExtractorMode()),
+            json.optString(JSON_YTDLP_EXECUTABLE, defaults.getYtDlpExecutable()),
+            json.optString(JSON_YTDLP_EXTRACTOR_ARGS, defaults.getYtDlpExtractorArgs()),
+            ytDlpExtraArgs.isEmpty() ? defaults.getYtDlpExtraArgs() : ytDlpExtraArgs,
+            json.optInt(JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS, defaults.getYtDlpResolveTimeoutSeconds()),
+            json.optBoolean(JSON_JAVA_HLS_FALLBACK_ENABLED, defaults.isJavaHlsFallbackEnabled()),
             json.optString(JSON_INNERTUBE_BASE_URL, defaults.getInnertubeBaseUrl()),
             json.optString(JSON_WEB_PLAYER_BASE_URL, defaults.getWebPlayerBaseUrl()),
             json.optString(JSON_USER_AGENT, defaults.getUserAgent()),
@@ -173,6 +222,19 @@ public class RemoteConfig {
 
         json.put(JSON_API_KEYS, apiKeysArray);
         json.put(JSON_VISITOR_DATA_URL, visitorDataUrl);
+        json.put(JSON_YOUTUBE_EXTRACTOR_MODE, youtubeExtractorMode);
+        json.put(JSON_YTDLP_EXECUTABLE, ytDlpExecutable);
+        json.put(JSON_YTDLP_EXTRACTOR_ARGS, ytDlpExtractorArgs);
+
+        JSONArray ytDlpExtraArgsArray = new JSONArray();
+
+        for (String arg : ytDlpExtraArgs) {
+            ytDlpExtraArgsArray.put(arg);
+        }
+
+        json.put(JSON_YTDLP_EXTRA_ARGS, ytDlpExtraArgsArray);
+        json.put(JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS, ytDlpResolveTimeoutSeconds);
+        json.put(JSON_JAVA_HLS_FALLBACK_ENABLED, javaHlsFallbackEnabled);
         json.put(JSON_INNERTUBE_BASE_URL, innertubeBaseUrl);
         json.put(JSON_WEB_PLAYER_BASE_URL, webPlayerBaseUrl);
         json.put(JSON_USER_AGENT, userAgent);
@@ -258,6 +320,10 @@ public class RemoteConfig {
         return toSummary()
             + ", updatedAt=" + updatedAt
             + ", visitorDataUrl=" + describeOptionalUrl(visitorDataUrl)
+            + ", extractorMode=" + youtubeExtractorMode
+            + ", ytDlpExecutable=" + ytDlpExecutable
+            + ", ytDlpExtraArgs=" + ytDlpExtraArgs.size()
+            + ", javaHlsFallback=" + javaHlsFallbackEnabled
             + ", innertubeBaseUrl=" + innertubeBaseUrl
             + ", webPlayerBaseUrl=" + webPlayerBaseUrl
             + ", notes=" + notes;
@@ -469,6 +535,23 @@ public class RemoteConfig {
             + "Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
     }
 
+    private static String normalizeExtractorMode(String mode) {
+        String normalized = nullToEmpty(mode).trim().toLowerCase(Locale.US);
+
+        if ("java-first".equals(normalized)
+            || "java-only".equals(normalized)
+            || "yt-dlp-only".equals(normalized)
+            || "yt-dlp-first".equals(normalized)) {
+            return normalized;
+        }
+
+        return "yt-dlp-first";
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
     }
@@ -501,9 +584,46 @@ public class RemoteConfig {
         return Collections.unmodifiableList(apiKeys);
     }
 
-        public String getVisitorDataUrl() {
+    public String getVisitorDataUrl() {
         return visitorDataUrl;
     }
+
+    public String getYoutubeExtractorMode() {
+        return youtubeExtractorMode;
+    }
+
+    public String getYtDlpExecutable() {
+        return ytDlpExecutable;
+    }
+
+    public String getYtDlpExtractorArgs() {
+        return ytDlpExtractorArgs;
+    }
+
+    public List<String> getYtDlpExtraArgs() {
+        return Collections.unmodifiableList(ytDlpExtraArgs);
+    }
+
+    public int getYtDlpResolveTimeoutSeconds() {
+        return ytDlpResolveTimeoutSeconds;
+    }
+
+    public boolean isJavaHlsFallbackEnabled() {
+        return javaHlsFallbackEnabled;
+    }
+
+    public boolean isYtDlpEnabled() {
+        return !"java-only".equals(youtubeExtractorMode);
+    }
+
+    public boolean isYtDlpFirst() {
+        return "yt-dlp-first".equals(youtubeExtractorMode) || "yt-dlp-only".equals(youtubeExtractorMode);
+    }
+
+    public boolean isJavaHlsEnabled() {
+        return !"yt-dlp-only".equals(youtubeExtractorMode) && javaHlsFallbackEnabled;
+    }
+
     public String getInnertubeBaseUrl() {
         return innertubeBaseUrl;
     }
@@ -550,6 +670,30 @@ public class RemoteConfig {
 
     public void setVisitorDataUrl(String visitorDataUrl) {
         this.visitorDataUrl = nullToEmpty(visitorDataUrl);
+    }
+
+    public void setYoutubeExtractorMode(String youtubeExtractorMode) {
+        this.youtubeExtractorMode = normalizeExtractorMode(youtubeExtractorMode);
+    }
+
+    public void setYtDlpExecutable(String ytDlpExecutable) {
+        this.ytDlpExecutable = isBlank(ytDlpExecutable) ? "yt-dlp" : ytDlpExecutable.trim();
+    }
+
+    public void setYtDlpExtractorArgs(String ytDlpExtractorArgs) {
+        this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
+    }
+
+    public void setYtDlpExtraArgs(List<String> ytDlpExtraArgs) {
+        this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+    }
+
+    public void setYtDlpResolveTimeoutSeconds(int ytDlpResolveTimeoutSeconds) {
+        this.ytDlpResolveTimeoutSeconds = clamp(ytDlpResolveTimeoutSeconds, 10, 300);
+    }
+
+    public void setJavaHlsFallbackEnabled(boolean javaHlsFallbackEnabled) {
+        this.javaHlsFallbackEnabled = javaHlsFallbackEnabled;
     }
 
     public void setInnertubeBaseUrl(String innertubeBaseUrl) {

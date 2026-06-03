@@ -41,7 +41,7 @@ public class RecorderCommandBuilder {
 
         List<String> args = new ArrayList<>();
 
-        args.add("yt-dlp");
+        args.add(remoteConfig.getYtDlpExecutable());
         args.add("--js-runtime");
         args.add("quickjs");
         args.add("--force-ipv4");
@@ -117,6 +117,53 @@ public class RecorderCommandBuilder {
         return Collections.unmodifiableList(args);
     }
 
+
+    /**
+     * Builds yt-dlp arguments for resolving one playable media URL.
+     * MonitorService feeds the resolved URL into FFmpegRunner so the existing
+     * recording/progress/recovery pipeline stays unchanged.
+     */
+    public List<String> buildYtDlpResolveArgs(
+        String videoUrl,
+        AppSettings settings,
+        RemoteConfig remoteConfig
+    ) {
+        if (settings == null) {
+            settings = new AppSettings();
+        }
+
+        if (remoteConfig == null) {
+            remoteConfig = new RemoteConfig();
+        }
+
+        List<String> args = new ArrayList<>();
+
+        args.add(remoteConfig.getYtDlpExecutable());
+        args.add("--no-playlist");
+        args.add("--no-warnings");
+        args.add("--force-ipv4");
+        args.add("--no-check-certificates");
+        args.add("--socket-timeout");
+        args.add("10");
+        args.add("-f");
+        args.add(settings.buildYtDlpFormatSelector());
+
+        if (settings.isLiveFromStartEnabled()) {
+            args.add("--live-from-start");
+        }
+
+        if (settings.isSkipUnavailableFragmentsEnabled()) {
+            args.add("--skip-unavailable-fragments");
+        }
+
+        addRemoteConfigArgs(args, remoteConfig);
+
+        args.add("--get-url");
+        args.add(videoUrl);
+
+        return Collections.unmodifiableList(args);
+    }
+
     /**
      * Builds a command using FFmpeg to remux TS to MP4 without re-encoding.
      */
@@ -186,16 +233,29 @@ public class RecorderCommandBuilder {
             args.add(userAgent);
         }
 
-        RemoteConfig.YoutubeClient client = remoteConfig.getPrimaryClient();
+        String extractorArgs = remoteConfig.getYtDlpExtractorArgs();
 
-        if (client != null && client.isValid()) {
-            /*
-             * yt-dlp supports extractor args for YouTube clients.
-             * The exact supported client names can change over time, which is why
-             * RemoteConfig keeps this configurable.
-             */
+        if (!isBlank(extractorArgs)) {
             args.add("--extractor-args");
-            args.add("youtube:player_client=" + client.getClientName().toLowerCase());
+            args.add(extractorArgs);
+        } else {
+            RemoteConfig.YoutubeClient client = remoteConfig.getPrimaryClient();
+
+            if (client != null && client.isValid()) {
+                /*
+                 * yt-dlp supports extractor args for YouTube clients.
+                 * The exact supported client names can change over time, which is why
+                 * RemoteConfig keeps this configurable.
+                 */
+                args.add("--extractor-args");
+                args.add("youtube:player_client=" + client.getClientName().toLowerCase());
+            }
+        }
+
+        for (String extraArg : remoteConfig.getYtDlpExtraArgs()) {
+            if (!isBlank(extraArg)) {
+                args.add(extraArg.trim());
+            }
         }
 
         String apiKey = remoteConfig.getPrimaryApiKey();
