@@ -519,33 +519,48 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Getting HLS manifest.",
+                "Resolving playable stream URL.",
                 "videoId="
                     + videoId
+                    + ", extractorMode="
+                    + remoteConfig.getYoutubeExtractorMode()
                     + ", clients="
                     + getConfiguredClientCountForLog()
                     + ", apiKeys="
                     + getConfiguredApiKeyCountForLog()
             );
 
-            String manifestUrl = getHlsManifestUrl(videoId, channel);
+            ResolvedInput resolvedInput = resolveRecordingInputUrl(videoId, channel, liveInfo, true);
+            String manifestUrl = resolvedInput.url;
 
             if (manifestUrl == null || manifestUrl.trim().isEmpty()) {
                 throw new IllegalStateException(
-                    "Could not get HLS manifest URL. Manifest resolver returned empty URL."
+                    "Could not get playable stream URL. Resolver returned empty URL."
                 );
             }
 
-            recording.setDiagnosticMessage("Manifest resolved; starting FFmpeg recorder.");
+            if (!isBlank(resolvedInput.videoId) && !resolvedInput.videoId.equals(videoId)) {
+                videoId = resolvedInput.videoId;
+                recording.setVideoId(videoId);
+                recording.setVideoUrl(YouTubeUrlUtils.buildWatchUrl(videoId));
+                storage.upsertRecording(recording);
+            }
+
+            recording.setDiagnosticMessage("Playable URL resolved by " + resolvedInput.source + "; starting FFmpeg recorder.");
             storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Manifest resolved.");
+            broadcastRecordingUpdated("Playable URL resolved.");
 
             log(
                 LogItem.LEVEL_SUCCESS,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "HLS manifest found.",
-                "videoId=" + videoId + ", manifest=" + describeUrlForLog(manifestUrl)
+                "Playable stream URL found.",
+                "videoId="
+                    + videoId
+                    + ", source="
+                    + resolvedInput.source
+                    + ", input="
+                    + describeUrlForLog(manifestUrl)
             );
 
             log(
@@ -1186,6 +1201,223 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+
+    private ResolvedInput resolveRecordingInputUrl(
+        String videoId,
+        ChannelItem channel,
+        LiveInfo liveInfo,
+        boolean allowLiveIdRetry
+    ) throws Exception {
+        String safeVideoId = normalizeVideoIdForLookup(videoId);
+        String videoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
+            ? liveInfo.videoUrl
+            : YouTubeUrlUtils.buildWatchUrl(safeVideoId);
+        Exception ytDlpError = null;
+        Exception javaError = null;
+
+        if (remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
+            try {
+                return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+            } catch (Exception e) {
+                ytDlpError = e;
+                logExtractorFallback(
+                    channel,
+                    remoteConfig.isJavaHlsEnabled()
+                        ? "yt-dlp extractor failed; trying Java HLS fallback."
+                        : "yt-dlp extractor failed and Java HLS fallback is disabled.",
+                    e
+                );
+            }
+        }
+
+        if (remoteConfig.isJavaHlsEnabled()) {
+            try {
+                return new ResolvedInput(getHlsManifestUrl(safeVideoId, channel), safeVideoId, "java-hls");
+            } catch (Exception e) {
+                javaError = e;
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Java HLS resolver failed.",
+                    normalizeErrorMessage(e)
+                );
+            }
+        }
+
+        if (!remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
+            try {
+                return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+            } catch (Exception e) {
+                ytDlpError = e;
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "yt-dlp extractor failed after Java fallback.",
+                    normalizeErrorMessage(e)
+                );
+            }
+        }
+
+        if (allowLiveIdRetry && channel != null && shouldRetryWithFreshLiveId(ytDlpError, javaError)) {
+            LiveInfo freshLiveInfo = resolveFreshLiveInfo(channel, safeVideoId);
+
+            if (freshLiveInfo != null && !safeVideoId.equals(freshLiveInfo.videoId)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Live video ID changed; retrying resolver with fresh ID.",
+                    "oldVideoId=" + safeVideoId + ", newVideoId=" + freshLiveInfo.videoId
+                );
+
+                channel.markRecording(freshLiveInfo.videoId, freshLiveInfo.videoUrl);
+                storage.upsertChannel(channel);
+                return resolveRecordingInputUrl(freshLiveInfo.videoId, channel, freshLiveInfo, false);
+            }
+
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Live video ID retry did not find a newer playable event.",
+                "videoId=" + safeVideoId
+            );
+        }
+
+        String message = buildResolverFailureMessage(ytDlpError, javaError);
+        throw new IllegalStateException(message);
+    }
+
+    private ResolvedInput resolveWithYtDlp(
+        String videoUrl,
+        String videoId,
+        ChannelItem channel
+    ) throws Exception {
+        if (isBlank(videoUrl)) {
+            throw new IllegalArgumentException("video URL is empty.");
+        }
+
+        RecorderCommandBuilder builder = new RecorderCommandBuilder();
+        List<String> args = builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig);
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Trying yt-dlp stream resolver.",
+            "videoId="
+                + videoId
+                + ", timeoutSeconds="
+                + remoteConfig.getYtDlpResolveTimeoutSeconds()
+                + ", command="
+                + shortenForLog(builder.toLogString(args), 500)
+        );
+
+        String url = YtDlpRunner.resolvePlayableUrl(
+            args,
+            remoteConfig.getYtDlpResolveTimeoutSeconds(),
+            message -> log(
+                LogItem.LEVEL_DEBUG,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "yt-dlp output.",
+                shortenForLog(message, 500)
+            )
+        );
+
+        if (isBlank(url)) {
+            throw new IllegalStateException("yt-dlp returned an empty stream URL.");
+        }
+
+        log(
+            LogItem.LEVEL_SUCCESS,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "yt-dlp stream resolver succeeded.",
+            "videoId=" + videoId + ", input=" + describeUrlForLog(url)
+        );
+
+        return new ResolvedInput(url, videoId, "yt-dlp");
+    }
+
+    private void logExtractorFallback(ChannelItem channel, String title, Exception error) {
+        String level = remoteConfig.isJavaHlsEnabled()
+            ? LogItem.LEVEL_WARNING
+            : LogItem.LEVEL_ERROR;
+
+        log(level, LogItem.SOURCE_RECORDER, channel, title, normalizeErrorMessage(error));
+    }
+
+    private LiveInfo resolveFreshLiveInfo(ChannelItem channel, String currentVideoId) {
+        try {
+            String resolvedChannelId = resolveChannelId(channel.getUrl());
+            LiveInfo freshLiveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+
+            if (freshLiveInfo == null || isBlank(freshLiveInfo.videoId)) {
+                return null;
+            }
+
+            if (currentVideoId != null && currentVideoId.equals(freshLiveInfo.videoId)) {
+                return null;
+            }
+
+            return freshLiveInfo;
+        } catch (Exception e) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Fresh live video ID lookup failed.",
+                normalizeErrorMessage(e)
+            );
+            return null;
+        }
+    }
+
+    private boolean shouldRetryWithFreshLiveId(Exception ytDlpError, Exception javaError) {
+        String combined = (ytDlpError == null ? "" : normalizeErrorMessage(ytDlpError))
+            + " "
+            + (javaError == null ? "" : normalizeErrorMessage(javaError));
+        String lower = combined.toLowerCase();
+
+        return lower.contains("unavailable")
+            || lower.contains("no streamingdata")
+            || lower.contains("no hlsmanifesturl")
+            || lower.contains("not active")
+            || lower.contains("premiere")
+            || lower.contains("private")
+            || lower.contains("members")
+            || lower.contains("sign in")
+            || lower.contains("reload")
+            || lower.contains("empty stream url")
+            || lower.contains("resolver returned empty");
+    }
+
+    private String buildResolverFailureMessage(Exception ytDlpError, Exception javaError) {
+        StringBuilder builder = new StringBuilder("Could not resolve playable YouTube stream URL.");
+
+        if (ytDlpError != null) {
+            builder.append(" yt-dlp: ").append(normalizeErrorMessage(ytDlpError));
+        }
+
+        if (javaError != null) {
+            builder.append(" Java HLS: ").append(normalizeErrorMessage(javaError));
+        }
+
+        if (ytDlpError == null && javaError == null) {
+            builder.append(" No resolver was enabled by remote config.");
+        }
+
+        return builder.toString();
+    }
+
+    private static String normalizeVideoIdForLookup(String videoId) {
+        String normalized = YouTubeUrlUtils.extractVideoId(videoId);
+        return isBlank(normalized) ? nullToEmpty(videoId).trim() : normalized;
+    }
+
     private String getHlsManifestUrl(String videoId, ChannelItem channel) {
         if (videoId == null || videoId.trim().isEmpty()) {
             throw new IllegalStateException("Could not get HLS manifest URL. videoId is empty.");
@@ -1509,13 +1741,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
 
     private String getDirectDownloadInputUrl(String videoId, ChannelItem channel) {
+        String safeVideoId = normalizeVideoIdForLookup(videoId);
+        LiveInfo liveInfo = new LiveInfo(
+            safeVideoId,
+            "",
+            YouTubeUrlUtils.buildWatchUrl(safeVideoId)
+        );
+
         try {
-            return getHlsManifestUrl(videoId, channel);
+            return resolveRecordingInputUrl(safeVideoId, channel, liveInfo, false).url;
         } catch (Exception e) {
-            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "HLS unavailable for direct download.", normalizeErrorMessage(e));
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Primary resolver unavailable for direct download; trying progressive fallback.",
+                normalizeErrorMessage(e)
+            );
         }
 
-        return getProgressiveVideoUrl(videoId, channel);
+        return getProgressiveVideoUrl(safeVideoId, channel);
     }
 
     private String getProgressiveVideoUrl(String videoId, ChannelItem channel) {
@@ -2149,6 +2394,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         super.onDestroy();
+    }
+
+    private static class ResolvedInput {
+        final String url;
+        final String videoId;
+        final String source;
+
+        ResolvedInput(String url, String videoId, String source) {
+            this.url = nullToEmpty(url).trim();
+            this.videoId = nullToEmpty(videoId).trim();
+            this.source = isBlank(source) ? "unknown" : source.trim();
+        }
     }
 
     private static class LiveInfo {
