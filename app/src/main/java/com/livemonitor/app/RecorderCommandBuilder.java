@@ -42,6 +42,10 @@ public class RecorderCommandBuilder {
         List<String> args = new ArrayList<>();
 
         args.add("yt-dlp");
+        args.add("--js-runtime");
+        args.add("quickjs");
+        args.add("--force-ipv4");
+        args.add("--no-check-certificates");
 
         /*
          * Prefer one complete/muxed stream.
@@ -61,7 +65,7 @@ public class RecorderCommandBuilder {
         if (settings.isSkipUnavailableFragmentsEnabled()) {
             args.add("--skip-unavailable-fragments");
             args.add("--fragment-retries");
-            args.add("10");
+            args.add("infinite");
         }
 
         /*
@@ -69,7 +73,7 @@ public class RecorderCommandBuilder {
          */
         if (settings.isWaitForVideoEnabled()) {
             args.add("--wait-for-video");
-            args.add("5");
+            args.add("60");
         }
 
         /*
@@ -80,14 +84,20 @@ public class RecorderCommandBuilder {
         }
 
         /*
-         * Keep retries controlled by service-level retry loop.
-         * yt-dlp still gets a few retries for fragment/network hiccups.
+         * Match the proven Termux recorder behavior: keep retrying live
+         * fragments and extractors instead of ending a long recording early.
          */
         args.add("--retries");
-        args.add("3");
+        args.add("infinite");
+        args.add("--extractor-retries");
+        args.add("infinite");
+        args.add("--file-access-retries");
+        args.add("infinite");
+        args.add("--retry-sleep");
+        args.add("5");
 
         args.add("--socket-timeout");
-        args.add("30");
+        args.add("10");
 
         args.add("--no-part");
 

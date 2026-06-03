@@ -23,8 +23,8 @@ public class RecordingProgressTracker {
     }
 
     private static final long DEFAULT_UPDATE_INTERVAL_MS = 2_000L;
-    private static final long STALL_WARNING_AFTER_MS = 90_000L;
-    private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 120_000L;
+    private static final long STALL_WARNING_AFTER_MS = 5L * 60L * 1_000L;
+    private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 10L * 60L * 1_000L;
 
     private final AppStorage storage;
     private final Map<String, TrackedRecording> trackedRecordings;
@@ -162,7 +162,7 @@ public class RecordingProgressTracker {
             recording.setDiagnosticMessage(
                 "No file growth for "
                     + formatDuration((now - tracked.lastGrowthAtMillis) / 1_000L)
-                    + "; restarting recorder if the stream is still live."
+                    + "; keeping the active recorder alive while FFmpeg reconnects."
             );
         }
 
