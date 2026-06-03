@@ -62,6 +62,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYtDlpExecutable();
         notificationHelper = new NotificationHelper(this);
         fileManager = new RecordingFileManager(this);
         networkMonitor = new NetworkMonitor(this);
@@ -92,10 +93,34 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
 
+
+    private void prepareYtDlpExecutable() {
+        YtDlpEnvironment.Result result = YtDlpEnvironment.prepare(this, remoteConfig);
+
+        if (result == null) {
+            return;
+        }
+
+        String details = result.getMessage();
+
+        if (!isBlank(result.getExecutablePath())) {
+            details += " path=" + result.getExecutablePath();
+        }
+
+        log(
+            result.isSuccess() ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_REMOTE_CONFIG,
+            null,
+            result.isSuccess() ? "yt-dlp executable ready." : "yt-dlp executable needs setup.",
+            details
+        );
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYtDlpExecutable();
         ensureForeground();
         acquireWakeLock();
 
