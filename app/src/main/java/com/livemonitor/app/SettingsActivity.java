@@ -42,6 +42,10 @@ public class SettingsActivity extends AppCompatActivity {
     private EditText scheduleStartInput;
     private EditText scheduleEndInput;
     private CheckBox allowCurrentRecordingCheckBox;
+    private CheckBox waitForVideoCheckBox;
+    private CheckBox liveFromStartCheckBox;
+    private CheckBox skipUnavailableFragmentsCheckBox;
+    private CheckBox convertTsToMp4CheckBox;
     private CheckBox restoreBootCheckBox;
     private CheckBox batteryOptimizationCheckBox;
     private CheckBox remoteConfigCheckBox;
@@ -112,6 +116,17 @@ public class SettingsActivity extends AppCompatActivity {
             "Allow current recording to finish outside schedule"
         );
 
+        waitForVideoCheckBox = addCheckBox(root, "Wait for scheduled live video to start");
+        liveFromStartCheckBox = addCheckBox(
+            root,
+            "Record from start when YouTube DVR is available"
+        );
+        skipUnavailableFragmentsCheckBox = addCheckBox(
+            root,
+            "Skip unavailable fragments and keep retrying"
+        );
+        convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
+
         restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
         batteryOptimizationCheckBox = addCheckBox(
             root,
@@ -169,6 +184,10 @@ public class SettingsActivity extends AppCompatActivity {
         allowCurrentRecordingCheckBox.setChecked(
             settings.isAllowCurrentRecordingOutsideSchedule()
         );
+        waitForVideoCheckBox.setChecked(settings.isWaitForVideoEnabled());
+        liveFromStartCheckBox.setChecked(settings.isLiveFromStartEnabled());
+        skipUnavailableFragmentsCheckBox.setChecked(settings.isSkipUnavailableFragmentsEnabled());
+        convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
         restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
         batteryOptimizationCheckBox.setChecked(
             settings.isRequestBatteryOptimizationExemption()
@@ -195,6 +214,10 @@ public class SettingsActivity extends AppCompatActivity {
         settings.setAllowCurrentRecordingOutsideSchedule(
             allowCurrentRecordingCheckBox.isChecked()
         );
+        settings.setWaitForVideoEnabled(waitForVideoCheckBox.isChecked());
+        settings.setLiveFromStartEnabled(liveFromStartCheckBox.isChecked());
+        settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
+        settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
         settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
         settings.setRequestBatteryOptimizationExemption(
             batteryOptimizationCheckBox.isChecked()

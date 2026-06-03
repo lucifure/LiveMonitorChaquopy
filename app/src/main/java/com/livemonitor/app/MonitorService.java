@@ -579,12 +579,36 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             String errorMessage = normalizeErrorMessage(e);
 
             restartingRecordings.remove(recording.getId());
-            recording.markFailed(errorMessage);
-            storage.upsertRecording(recording);
             activeRecordings.remove(channelId);
+            activeRecordings.remove(recording.getId());
             progressTracker.untrack(recording);
 
             ChannelItem latest = storage.findChannelById(channelId);
+
+            if (isLiveNotReadyError(errorMessage)) {
+                discardUnstartedRecording(recording);
+
+                if (latest != null) {
+                    latest.markWaitingForLive();
+                    storage.upsertChannel(latest);
+                    notificationHelper.showChannelMonitoringNotification(latest);
+                }
+
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    latest,
+                    "Live event is not active yet; waiting.",
+                    errorMessage
+                );
+
+                broadcastChannelUpdated("Waiting for live.");
+                broadcastRecordingUpdated("Live event is not active yet.");
+                return;
+            }
+
+            recording.markFailed(errorMessage);
+            storage.upsertRecording(recording);
 
             if (latest != null) {
                 latest.markFailed(errorMessage);
@@ -602,6 +626,33 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             broadcastRecordingUpdated("Recording failed.");
         }
+    }
+
+    private boolean isLiveNotReadyError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+
+        return lower.contains("live_stream_offline")
+            || lower.contains("will begin")
+            || lower.contains("waiting for live")
+            || lower.contains("live event is not active")
+            || lower.contains("premiere will begin");
+    }
+
+    private void discardUnstartedRecording(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        if (recording.hasExistingFinalMp4File() || recording.hasExistingTempTsFile()) {
+            saveStoppedRecordingForDownloads(recording);
+            return;
+        }
+
+        storage.removeRecording(recording.getId());
     }
 
     private void recoverStalledRecording(String recordingId) {
@@ -649,6 +700,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean cancelRequested = false;
 
         try {
+            if (FFmpegRunner.isRunning(recordingId)) {
+                stalledRecording.setDiagnosticMessage(
+                    "No file growth detected; keeping FFmpeg alive while reconnect retries continue."
+                );
+                storage.upsertRecording(stalledRecording);
+
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Recording progress stalled; not restarting yet.",
+                    "recordingId=" + recordingId
+                );
+                broadcastRecordingUpdated("Recorder reconnect is still running.");
+                return;
+            }
+
             String resolvedChannelId = resolveChannelId(channel.getUrl());
             LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
 
@@ -1067,6 +1135,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             JSONObject videoDetails = playerResponse.optJSONObject("videoDetails");
             JSONObject streamingData = playerResponse.optJSONObject("streamingData");
+            JSONObject playabilityStatus = playerResponse.optJSONObject("playabilityStatus");
 
             if (videoDetails == null) {
                 return null;
@@ -1074,21 +1143,40 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             String videoId = videoDetails.optString("videoId", "");
             String title = videoDetails.optString("title", "");
-            boolean liveContent = videoDetails.optBoolean("isLiveContent", false);
             String hlsManifestUrl = streamingData == null
                 ? ""
                 : streamingData.optString("hlsManifestUrl", "");
 
-            if (isBlank(videoId) || (!liveContent && isBlank(hlsManifestUrl))) {
+            if (isBlank(videoId)) {
                 return null;
             }
+
+            if (isBlank(hlsManifestUrl)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_SERVICE,
+                    null,
+                    "Channel /live fallback ignored a non-active live event.",
+                    "channelId="
+                        + channelId
+                        + ", videoId="
+                        + videoId
+                        + ", response="
+                        + summarizeInnertubeResponseForLog(playerResponse)
+                );
+                return null;
+            }
+
+            String status = playabilityStatus == null
+                ? ""
+                : playabilityStatus.optString("status", "");
 
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_SERVICE,
                 null,
-                "Channel /live fallback found a live video.",
-                "channelId=" + channelId + ", videoId=" + videoId
+                "Channel /live fallback found an active live video.",
+                "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
             );
 
             return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);

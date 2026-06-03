@@ -257,10 +257,13 @@ public class RecordingAdapter extends BaseAdapter {
         boolean downloadedMode = mode == Mode.DOWNLOADED;
         boolean activeDownload = !downloadedMode && recording.isActive();
 
-        holder.openButton.setVisibility(recording.getBestPlayablePath().trim().isEmpty() ? View.GONE : View.VISIBLE);
+        boolean hasPlayableFile = !recording.getBestPlayablePath().trim().isEmpty();
+        boolean canDelete = activeDownload || (downloadedMode && hasPlayableFile);
+
+        holder.openButton.setVisibility(hasPlayableFile ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setText(recording.isPausedByUser() ? "Resume" : "Pause");
-        holder.deleteButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
+        holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {

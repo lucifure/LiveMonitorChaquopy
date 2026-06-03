@@ -131,11 +131,11 @@ public class RecordingFileManager {
             }
 
             /*
-             * Only delete obvious temporary leftovers.
-             * Do not delete non-empty .ts files here because those may be
+             * Match the external recorder script's cleanup for interrupted
+             * fragments, but keep non-empty TS files because those may be
              * recoverable after a crash.
              */
-            if (file.isFile() && file.length() == 0L) {
+            if (file.isFile() && isSafeTemporaryLeftover(file)) {
                 safeDelete(file);
             }
         }
@@ -439,6 +439,22 @@ public class RecordingFileManager {
         }
 
         return name.substring(lastUnderscore + 1);
+    }
+
+    private static boolean isSafeTemporaryLeftover(File file) {
+        if (file == null || !file.isFile()) {
+            return false;
+        }
+
+        if (file.length() == 0L) {
+            return true;
+        }
+
+        String name = file.getName().toLowerCase(Locale.US);
+
+        return name.endsWith(".part")
+            || name.endsWith(".ytdl")
+            || name.endsWith(".m4s");
     }
 
     private static File ensureDirectory(File directory) {

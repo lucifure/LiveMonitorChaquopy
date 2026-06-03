@@ -199,15 +199,20 @@ public class FFmpegRunner {
             + " -hide_banner"
             + " -loglevel warning"
             + " -reconnect 1"
+            + " -reconnect_at_eof 1"
             + " -reconnect_streamed 1"
             + " -reconnect_on_network_error 1"
+            + " -reconnect_on_http_error 4xx,5xx"
             + " -reconnect_delay_max 5"
-            + " -rw_timeout 90000000"
+            + " -rw_timeout 10000000"
+            + " -multiple_requests 1"
             + " -live_start_index 0"
+            + " -m3u8_hold_counters 1000000"
             + " -i " + quote(proxyManifestUrl)
             + " -map 0:v:0?"
             + " -map 0:a:0?"
             + " -c copy"
+            + " -mpegts_flags +resend_headers"
             + " -f mpegts"
             + " " + quote(outPath);
     }

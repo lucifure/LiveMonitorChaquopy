@@ -11,6 +11,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 
@@ -54,7 +55,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
             @Override
             public void onDeleteClicked(RecordingItem recording) {
-                // Downloaded files are read-only from this screen.
+                confirmDeleteDownloadedFile(recording);
             }
         });
 
@@ -137,6 +138,51 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
         List<RecordingItem> completed = storage.loadCompletedRecordings();
         adapter.setRecordings(completed);
+    }
+
+    private void confirmDeleteDownloadedFile(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Delete downloaded file?")
+            .setMessage("Do you want to delete this file from storage and remove it from Downloaded Files?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete", (dialog, which) -> deleteDownloadedFile(recording))
+            .show();
+    }
+
+    private void deleteDownloadedFile(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        boolean finalDeleted = deletePathIfPresent(recording.getFinalMp4Path());
+        boolean tempDeleted = deletePathIfPresent(recording.getTempTsPath());
+
+        if (!finalDeleted || !tempDeleted) {
+            Toast.makeText(this, "Could not delete one or more files.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        storage.removeRecording(recording.getId());
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Downloaded file deleted."));
+        refreshFiles();
+        Toast.makeText(this, "Downloaded file deleted.", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean deletePathIfPresent(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return true;
+        }
+
+        try {
+            File file = new File(path);
+            return !file.exists() || file.delete();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void openRecording(RecordingItem recording) {
