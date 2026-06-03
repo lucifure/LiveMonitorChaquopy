@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.List;
@@ -34,7 +35,21 @@ public class YtDlpRunner {
         ProcessBuilder builder = new ProcessBuilder(args);
         builder.redirectErrorStream(true);
 
-        Process process = builder.start();
+        Process process;
+
+        try {
+            process = builder.start();
+        } catch (IOException e) {
+            String executable = args.get(0);
+            throw new IllegalStateException(
+                "Unable to start yt-dlp. "
+                    + YtDlpEnvironment.describeExecutableProblem(executable)
+                    + " Original error: "
+                    + e.getMessage(),
+                e
+            );
+        }
+
         OutputCollector collector = new OutputCollector(process.getInputStream(), logCallback);
         Thread collectorThread = new Thread(collector, "YtDlpOutputCollector");
         collectorThread.start();
