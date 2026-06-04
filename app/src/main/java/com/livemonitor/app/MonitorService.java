@@ -1010,12 +1010,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        if (!recording.isPausedByUser()
+            && returnCode == 0
+            && RecordingItem.STATUS_RECORDING.equals(recording.getStatus())) {
+            CleanExitAction cleanExitAction = handleCleanLiveRecordingExit(channelId, recording, channel);
+
+            if (cleanExitAction == CleanExitAction.RESTARTED
+                || cleanExitAction == CleanExitAction.DEFERRED) {
+                return;
+            }
+        }
+
         restartingRecordings.remove(recordingId);
         activeRecordings.remove(channelId);
         activeRecordings.remove(recordingId);
         progressTracker.untrack(recording);
 
         if (recording.isPausedByUser()) {
+            storage.upsertRecording(recording);
+        } else if (returnCode == 0 && recording.isFinished()) {
             storage.upsertRecording(recording);
         } else if (returnCode == 0) {
             convertRecording(recording, channel);
@@ -1034,6 +1047,98 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         broadcastRecordingUpdated("Recording updated.");
+    }
+
+    private CleanExitAction handleCleanLiveRecordingExit(
+        String channelId,
+        RecordingItem recording,
+        ChannelItem channel
+    ) {
+        if (channel == null || !channel.shouldMonitor()) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recording completed; monitoring is no longer active.",
+                "recordingId=" + recording.getId()
+            );
+            return CleanExitAction.FINALIZE;
+        }
+
+        LiveInfo liveInfo;
+
+        try {
+            liveInfo = resolveCurrentLiveInfo(channel);
+        } catch (Exception e) {
+            String errorMessage = normalizeErrorMessage(e);
+
+            restartingRecordings.remove(recording.getId());
+            activeRecordings.remove(channelId);
+            activeRecordings.remove(recording.getId());
+            progressTracker.untrack(recording);
+
+            recording.markRecoverable("Recorder exited cleanly, but live status re-check failed. " + errorMessage);
+            storage.upsertRecording(recording);
+
+            if (channel != null) {
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recorder clean exit is not being finalized because live status could not be confirmed.",
+                errorMessage
+            );
+
+            broadcastRecordingUpdated("Recording is recoverable; live status check failed.");
+            return CleanExitAction.DEFERRED;
+        }
+
+        if (liveInfo != null && recording.matchesVideo(liveInfo.videoId)) {
+            recording.markRecording();
+            recording.showInDownloading();
+            recording.setDiagnosticMessage("FFmpeg exited cleanly while the same live video is still active; restarting recorder.");
+            storage.upsertRecording(recording);
+
+            String activeChannelId = isBlank(channelId) ? channel.getId() : channelId;
+            activeRecordings.put(activeChannelId, recording);
+            progressTracker.track(recording);
+
+            channel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "FFmpeg exited with code 0 while the live stream is still active; restarting recorder after transient HLS EOF.",
+                "recordingId=" + recording.getId() + ", videoId=" + liveInfo.videoId
+            );
+
+            broadcastRecordingUpdated("Recorder restarted after transient HLS EOF.");
+            String restartChannelId = isBlank(channelId) ? channel.getId() : channelId;
+            executor.execute(() -> runRecording(restartChannelId, recording, liveInfo));
+            return CleanExitAction.RESTARTED;
+        }
+
+        String completionReason = liveInfo == null
+            ? "live status check found no active stream"
+            : "live video changed to " + liveInfo.videoId;
+
+        log(
+            LogItem.LEVEL_SUCCESS,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Recording completed; live re-check confirmed final completion.",
+            "recordingId=" + recording.getId() + ", reason=" + completionReason
+        );
+
+        return CleanExitAction.FINALIZE;
     }
 
     private void convertRecording(RecordingItem recording, ChannelItem channel) {
@@ -1416,10 +1521,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         log(level, LogItem.SOURCE_RECORDER, channel, title, normalizeErrorMessage(error));
     }
 
+    private LiveInfo resolveCurrentLiveInfo(ChannelItem channel) throws Exception {
+        if (channel == null) {
+            return null;
+        }
+
+        String resolvedChannelId = resolveChannelId(channel.getUrl());
+
+        if (resolvedChannelId == null) {
+            throw new IllegalStateException("Could not resolve channel ID for live status re-check.");
+        }
+
+        return checkLive(resolvedChannelId);
+    }
+
     private LiveInfo resolveFreshLiveInfo(ChannelItem channel, String currentVideoId) {
         try {
-            String resolvedChannelId = resolveChannelId(channel.getUrl());
-            LiveInfo freshLiveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+            LiveInfo freshLiveInfo = resolveCurrentLiveInfo(channel);
 
             if (freshLiveInfo == null || isBlank(freshLiveInfo.videoId)) {
                 return null;
@@ -2460,6 +2578,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         super.onDestroy();
+    }
+
+
+    private enum CleanExitAction {
+        FINALIZE,
+        RESTARTED,
+        DEFERRED
     }
 
     private static class ResolvedInput {
