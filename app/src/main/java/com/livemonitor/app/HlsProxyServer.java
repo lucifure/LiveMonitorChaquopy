@@ -45,22 +45,36 @@ public class HlsProxyServer {
     private static final Pattern BANDWIDTH_PATTERN = Pattern.compile("BANDWIDTH=(\\d+)");
     private static final Pattern RESOLUTION_PATTERN = Pattern.compile("RESOLUTION=(\\d+)x(\\d+)");
     private static final Pattern MEDIA_SEQUENCE_PATTERN = Pattern.compile("#EXT-X-MEDIA-SEQUENCE:(\\d+)");
+    private static final Pattern KEYFORMAT_ATTR_PATTERN = Pattern.compile("KEYFORMAT=\"([^\"]+)\"|KEYFORMAT=([^,]+)");
+
+    public enum PlaylistRewriteMode {
+        LIVE_EDGE_PLAYBACK,
+        FULL_RECORDING_DVR
+    }
 
     private final OkHttpClient client;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicInteger proxyLogCount = new AtomicInteger(0);
     private final FFmpegRunner.OnLogCallback logCallback;
+    private final PlaylistRewriteMode playlistRewriteMode;
 
     private ServerSocket serverSocket;
     private Thread serverThread;
     private int port;
 
     public HlsProxyServer() {
-        this(null);
+        this(null, PlaylistRewriteMode.LIVE_EDGE_PLAYBACK);
     }
 
     public HlsProxyServer(FFmpegRunner.OnLogCallback logCallback) {
+        this(logCallback, PlaylistRewriteMode.LIVE_EDGE_PLAYBACK);
+    }
+
+    public HlsProxyServer(FFmpegRunner.OnLogCallback logCallback, PlaylistRewriteMode playlistRewriteMode) {
         this.logCallback = logCallback;
+        this.playlistRewriteMode = playlistRewriteMode == null
+            ? PlaylistRewriteMode.LIVE_EDGE_PLAYBACK
+            : playlistRewriteMode;
 
         client = new OkHttpClient.Builder()
             .dns(HlsProxyServer::lookupIpv4First)
@@ -107,6 +121,7 @@ public class HlsProxyServer {
         serverThread.start();
 
         Log.d(TAG, "HLS proxy started on http://" + HOST + ":" + port);
+        proxyLog("playlist rewrite mode: " + describePlaylistRewriteMode());
     }
 
     public synchronized void stop() {
@@ -409,7 +424,7 @@ public class HlsProxyServer {
         }
 
         if (playlist.contains("#EXTINF")) {
-            return rewriteMediaPlaylistAtLiveEdge(playlistUrl, playlist);
+            return rewriteMediaPlaylist(playlistUrl, playlist);
         }
 
         return rewriteSimplePlaylist(playlistUrl, playlist);
@@ -589,15 +604,35 @@ public class HlsProxyServer {
         return "unknown";
     }
 
+    private String rewriteMediaPlaylist(String playlistUrl, String playlist) {
+        if (playlistRewriteMode == PlaylistRewriteMode.FULL_RECORDING_DVR) {
+            return rewriteMediaPlaylistForRecordingDvr(playlistUrl, playlist);
+        }
+
+        return rewriteMediaPlaylistAtLiveEdge(playlistUrl, playlist);
+    }
+
     private String rewriteMediaPlaylistAtLiveEdge(String playlistUrl, String playlist) {
+        return rewriteMediaPlaylistWithSegmentWindow(playlistUrl, playlist, false);
+    }
+
+    private String rewriteMediaPlaylistForRecordingDvr(String playlistUrl, String playlist) {
+        return rewriteMediaPlaylistWithSegmentWindow(playlistUrl, playlist, true);
+    }
+
+    private String rewriteMediaPlaylistWithSegmentWindow(String playlistUrl,
+                                                        String playlist,
+                                                        boolean keepAllSegments) {
         String[] lines = playlist.split("\\r?\\n");
 
         List<String> headerLines = new ArrayList<>();
         List<List<String>> segmentGroups = new ArrayList<>();
-        List<String> pendingGroup = new ArrayList<>();
+        List<String> pendingSegmentTags = new ArrayList<>();
+        List<String> currentSegmentGroup = new ArrayList<>();
 
         boolean sawFirstSegment = false;
         boolean collectingSegment = false;
+        boolean hasEndList = false;
         long originalMediaSequence = parseMediaSequence(playlist);
 
         for (String line : lines) {
@@ -608,46 +643,50 @@ public class HlsProxyServer {
             }
 
             if (trimmed.equals("#EXT-X-ENDLIST")) {
+                hasEndList = true;
                 continue;
             }
 
             if (trimmed.startsWith("#EXTINF")) {
                 collectingSegment = true;
-                pendingGroup = new ArrayList<>();
-                pendingGroup.add(rewriteTagUris(playlistUrl, line));
+                currentSegmentGroup = new ArrayList<>(pendingSegmentTags);
+                pendingSegmentTags.clear();
+                currentSegmentGroup.add(rewriteTagUris(playlistUrl, line));
+                sawFirstSegment = true;
                 continue;
             }
 
             if (collectingSegment) {
                 if (trimmed.startsWith("#")) {
-                    pendingGroup.add(rewriteTagUris(playlistUrl, line));
+                    currentSegmentGroup.add(rewriteTagUris(playlistUrl, line));
                     continue;
                 }
 
                 String absolute = resolveUrl(playlistUrl, trimmed);
-                pendingGroup.add(createProxyUrl(absolute));
-                segmentGroups.add(pendingGroup);
+                currentSegmentGroup.add(createProxyUrl(absolute));
+                segmentGroups.add(currentSegmentGroup);
 
-                pendingGroup = new ArrayList<>();
+                currentSegmentGroup = new ArrayList<>();
                 collectingSegment = false;
-                sawFirstSegment = true;
                 continue;
             }
 
-            if (!sawFirstSegment) {
+            if (trimmed.startsWith("#")) {
                 if (trimmed.startsWith("#EXT-X-MEDIA-SEQUENCE")) {
                     continue;
                 }
 
-                if (trimmed.startsWith("#EXT-X-DISCONTINUITY")) {
-                    continue;
-                }
+                String rewritten = rewriteTagUris(playlistUrl, line);
 
-                headerLines.add(rewriteTagUris(playlistUrl, line));
+                if (sawFirstSegment || isSegmentScopedTag(trimmed)) {
+                    pendingSegmentTags.add(rewritten);
+                } else {
+                    headerLines.add(rewritten);
+                }
             }
         }
 
-        int from = Math.max(0, segmentGroups.size() - LIVE_SEGMENTS_TO_KEEP);
+        int from = keepAllSegments ? 0 : Math.max(0, segmentGroups.size() - LIVE_SEGMENTS_TO_KEEP);
 
         StringBuilder out = new StringBuilder();
 
@@ -689,15 +728,89 @@ public class HlsProxyServer {
             .append(originalMediaSequence + from)
             .append('\n');
 
+        SegmentState segmentState = segmentStateBefore(segmentGroups, from);
+
         for (int i = from; i < segmentGroups.size(); i++) {
             List<String> group = segmentGroups.get(i);
+
+            if (i == from && from > 0) {
+                appendMissingSegmentState(out, segmentState, group);
+            }
 
             for (String groupLine : group) {
                 out.append(groupLine).append('\n');
             }
         }
 
+        if (keepAllSegments && hasEndList) {
+            out.append("#EXT-X-ENDLIST\n");
+        }
+
         return out.toString();
+    }
+
+    private boolean isSegmentScopedTag(String trimmedLine) {
+        return trimmedLine.startsWith("#EXT-X-KEY")
+            || trimmedLine.startsWith("#EXT-X-MAP")
+            || trimmedLine.startsWith("#EXT-X-DISCONTINUITY")
+            || trimmedLine.startsWith("#EXT-X-PROGRAM-DATE-TIME")
+            || trimmedLine.startsWith("#EXT-X-DATERANGE");
+    }
+
+    private SegmentState segmentStateBefore(List<List<String>> segmentGroups, int toExclusive) {
+        SegmentState state = new SegmentState();
+
+        for (int i = 0; i < toExclusive && i < segmentGroups.size(); i++) {
+            state.update(segmentGroups.get(i));
+        }
+
+        return state;
+    }
+
+    private void appendMissingSegmentState(StringBuilder out, SegmentState state, List<String> firstKeptGroup) {
+        if (state.mapTag != null && !containsMapTag(firstKeptGroup)) {
+            out.append(state.mapTag).append('\n');
+        }
+
+        for (Map.Entry<String, String> entry : state.keyTagsByFormat.entrySet()) {
+            if (!containsKeyFormat(firstKeptGroup, entry.getKey())) {
+                out.append(entry.getValue()).append('\n');
+            }
+        }
+    }
+
+    private boolean containsMapTag(List<String> group) {
+        for (String line : group) {
+            if (line.trim().startsWith("#EXT-X-MAP")) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean containsKeyFormat(List<String> group, String keyFormat) {
+        for (String line : group) {
+            String trimmed = line.trim();
+
+            if (trimmed.startsWith("#EXT-X-KEY") && keyFormat.equals(keyFormatKey(trimmed))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private String keyFormatKey(String keyLine) {
+        Matcher matcher = KEYFORMAT_ATTR_PATTERN.matcher(keyLine);
+
+        if (matcher.find()) {
+            String quoted = matcher.group(1);
+            String unquoted = matcher.group(2);
+            return quoted != null ? quoted : unquoted;
+        }
+
+        return "identity";
     }
 
     private long parseMediaSequence(String playlist) {
@@ -843,6 +956,14 @@ public class HlsProxyServer {
             || lower.contains("xml");
     }
 
+    private String describePlaylistRewriteMode() {
+        if (playlistRewriteMode == PlaylistRewriteMode.FULL_RECORDING_DVR) {
+            return "full-recording/DVR mode (preserving all available media playlist segments)";
+        }
+
+        return "live-edge playback mode (keeping last " + LIVE_SEGMENTS_TO_KEEP + " segments)";
+    }
+
     private void proxyLog(String message) {
         Log.d(TAG, message);
 
@@ -893,6 +1014,36 @@ public class HlsProxyServer {
         }
 
         return clean.substring(0, max) + "...";
+    }
+
+    private static class SegmentState {
+        final Map<String, String> keyTagsByFormat = new HashMap<>();
+        String mapTag;
+
+        void update(List<String> group) {
+            for (String line : group) {
+                String trimmed = line.trim();
+
+                if (trimmed.startsWith("#EXT-X-KEY")) {
+                    String keyFormat = keyFormatKeyStatic(trimmed);
+                    keyTagsByFormat.put(keyFormat, line);
+                } else if (trimmed.startsWith("#EXT-X-MAP")) {
+                    mapTag = line;
+                }
+            }
+        }
+
+        private static String keyFormatKeyStatic(String keyLine) {
+            Matcher matcher = KEYFORMAT_ATTR_PATTERN.matcher(keyLine);
+
+            if (matcher.find()) {
+                String quoted = matcher.group(1);
+                String unquoted = matcher.group(2);
+                return quoted != null ? quoted : unquoted;
+            }
+
+            return "identity";
+        }
     }
 
     private static class Variant {
