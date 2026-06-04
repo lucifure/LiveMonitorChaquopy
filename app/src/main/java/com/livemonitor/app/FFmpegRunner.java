@@ -48,7 +48,10 @@ public class FFmpegRunner {
             cancel(safeRecordingId);
             ensureParentDirectory(outPath);
 
-            HlsProxyServer proxyServer = new HlsProxyServer(logCallback);
+            HlsProxyServer proxyServer = new HlsProxyServer(
+                logCallback,
+                HlsProxyServer.PlaylistRewriteMode.FULL_RECORDING_DVR
+            );
             proxyServer.start();
 
             RecorderSession recorderSession = new RecorderSession(safeRecordingId, proxyServer);
