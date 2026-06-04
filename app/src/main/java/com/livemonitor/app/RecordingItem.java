@@ -1,9 +1,13 @@
 package com.livemonitor.app;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -48,6 +52,7 @@ public class RecordingItem {
     private static final String JSON_STATUS = "status";
     private static final String JSON_TEMP_TS_PATH = "tempTsPath";
     private static final String JSON_FINAL_MP4_PATH = "finalMp4Path";
+    private static final String JSON_TEMP_CHUNK_PATHS = "tempChunkPaths";
     private static final String JSON_ERROR_MESSAGE = "errorMessage";
     private static final String JSON_QUALITY = "quality";
     private static final String JSON_BYTES_RECORDED = "bytesRecorded";
@@ -70,6 +75,7 @@ public class RecordingItem {
     private String status;
     private String tempTsPath;
     private String finalMp4Path;
+    private List<String> tempChunkPaths;
     private String errorMessage;
     private String quality;
     private long bytesRecorded;
@@ -105,6 +111,7 @@ public class RecordingItem {
         this.status = STATUS_WAITING_FOR_LIVE;
         this.tempTsPath = nullToEmpty(tempTsPath);
         this.finalMp4Path = nullToEmpty(finalMp4Path);
+        this.tempChunkPaths = new ArrayList<>();
         this.errorMessage = "";
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         this.bytesRecorded = 0L;
@@ -129,6 +136,7 @@ public class RecordingItem {
         String status,
         String tempTsPath,
         String finalMp4Path,
+        List<String> tempChunkPaths,
         String errorMessage,
         String quality,
         long bytesRecorded,
@@ -151,6 +159,7 @@ public class RecordingItem {
         this.status = isBlank(status) ? STATUS_WAITING_FOR_LIVE : status;
         this.tempTsPath = nullToEmpty(tempTsPath);
         this.finalMp4Path = nullToEmpty(finalMp4Path);
+        this.tempChunkPaths = normalizeTempChunkPaths(tempChunkPaths);
         this.errorMessage = nullToEmpty(errorMessage);
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         this.bytesRecorded = Math.max(0L, bytesRecorded);
@@ -180,6 +189,7 @@ public class RecordingItem {
             json.optString(JSON_STATUS, STATUS_WAITING_FOR_LIVE),
             json.optString(JSON_TEMP_TS_PATH, ""),
             json.optString(JSON_FINAL_MP4_PATH, ""),
+            parseTempChunkPaths(json.optJSONArray(JSON_TEMP_CHUNK_PATHS)),
             json.optString(JSON_ERROR_MESSAGE, ""),
             json.optString(JSON_QUALITY, "480p"),
             json.optLong(JSON_BYTES_RECORDED, 0L),
@@ -207,6 +217,11 @@ public class RecordingItem {
         json.put(JSON_STATUS, status);
         json.put(JSON_TEMP_TS_PATH, tempTsPath);
         json.put(JSON_FINAL_MP4_PATH, finalMp4Path);
+        JSONArray chunkArray = new JSONArray();
+        for (String chunkPath : getTempSegmentPaths()) {
+            chunkArray.put(chunkPath);
+        }
+        json.put(JSON_TEMP_CHUNK_PATHS, chunkArray);
         json.put(JSON_ERROR_MESSAGE, errorMessage);
         json.put(JSON_QUALITY, quality);
         json.put(JSON_BYTES_RECORDED, bytesRecorded);
@@ -343,12 +358,13 @@ public class RecordingItem {
     }
 
     public boolean hasExistingTempTsFile() {
-        if (isBlank(tempTsPath)) {
-            return false;
+        for (String segmentPath : getTempSegmentPaths()) {
+            if (isExistingFile(segmentPath)) {
+                return true;
+            }
         }
 
-        File file = new File(tempTsPath);
-        return file.exists() && file.isFile() && file.length() > 0L;
+        return false;
     }
 
     public boolean hasExistingFinalMp4File() {
@@ -380,6 +396,52 @@ public class RecordingItem {
         }
 
         return "";
+    }
+
+    public List<String> getTempSegmentPaths() {
+        List<String> paths = normalizeTempChunkPaths(tempChunkPaths);
+
+        if (!paths.isEmpty()) {
+            return Collections.unmodifiableList(paths);
+        }
+
+        if (isBlank(tempTsPath)) {
+            return Collections.emptyList();
+        }
+
+        List<String> singlePath = new ArrayList<>();
+        singlePath.add(tempTsPath);
+        return Collections.unmodifiableList(singlePath);
+    }
+
+    public boolean hasMultipleTempSegments() {
+        return getTempSegmentPaths().size() > 1;
+    }
+
+    public void addTempChunkPath(String chunkPath) {
+        if (isBlank(chunkPath)) {
+            return;
+        }
+
+        List<String> paths = new ArrayList<>(getTempSegmentPaths());
+        String normalizedChunkPath = chunkPath.trim();
+
+        if (!paths.contains(normalizedChunkPath)) {
+            paths.add(normalizedChunkPath);
+        }
+
+        tempChunkPaths = normalizeTempChunkPaths(paths);
+        touch();
+    }
+
+    public String getCurrentTempSegmentPath() {
+        List<String> paths = getTempSegmentPaths();
+
+        if (paths.isEmpty()) {
+            return tempTsPath;
+        }
+
+        return paths.get(paths.size() - 1);
     }
 
     public String getDisplayTitle() {
@@ -442,6 +504,53 @@ public class RecordingItem {
         }
 
         return "Untitled Recording";
+    }
+
+    private static boolean isExistingFile(String path) {
+        if (isBlank(path)) {
+            return false;
+        }
+
+        File file = new File(path);
+        return file.exists() && file.isFile() && file.length() > 0L;
+    }
+
+    private static List<String> parseTempChunkPaths(JSONArray array) {
+        List<String> paths = new ArrayList<>();
+
+        if (array == null) {
+            return paths;
+        }
+
+        for (int i = 0; i < array.length(); i++) {
+            String path = array.optString(i, "");
+
+            if (!isBlank(path)) {
+                paths.add(path.trim());
+            }
+        }
+
+        return normalizeTempChunkPaths(paths);
+    }
+
+    private static List<String> normalizeTempChunkPaths(List<String> paths) {
+        List<String> normalized = new ArrayList<>();
+
+        if (paths == null) {
+            return normalized;
+        }
+
+        for (String path : paths) {
+            if (!isBlank(path)) {
+                String trimmed = path.trim();
+
+                if (!normalized.contains(trimmed)) {
+                    normalized.add(trimmed);
+                }
+            }
+        }
+
+        return normalized;
     }
 
     private static String normalizeVideoId(String value) {

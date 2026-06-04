@@ -42,6 +42,17 @@ public class FFmpegRunner {
         OnCompleteCallback callback,
         OnLogCallback logCallback
     ) {
+        executeAsync(recordingId, manifestUrl, outPath, false, callback, logCallback);
+    }
+
+    public static void executeAsync(
+        String recordingId,
+        String manifestUrl,
+        String outPath,
+        boolean appendOutput,
+        OnCompleteCallback callback,
+        OnLogCallback logCallback
+    ) {
         String safeRecordingId = normalizeRecordingId(recordingId, outPath);
 
         try {
@@ -62,10 +73,14 @@ public class FFmpegRunner {
                 logCallback.onLog("Recording output: " + outPath);
             }
 
-            String command = buildRecordTsCommand(proxyManifestUrl, outPath);
+            String command = buildRecordTsCommand(proxyManifestUrl, outPath, appendOutput);
 
             if (logCallback != null) {
-                logCallback.onLog("FFmpegKit TS recording command started.");
+                logCallback.onLog(
+                    appendOutput
+                        ? "FFmpegKit TS recording command started in resume append mode."
+                        : "FFmpegKit TS recording command started."
+                );
             }
 
             FFmpegSession ffmpegSession = FFmpegKit.executeAsync(
@@ -194,8 +209,8 @@ public class FFmpegRunner {
         }
     }
 
-    private static String buildRecordTsCommand(String proxyManifestUrl, String outPath) {
-        return "-y"
+    private static String buildRecordTsCommand(String proxyManifestUrl, String outPath, boolean appendOutput) {
+        return (appendOutput ? "" : "-y")
             + " -hide_banner"
             + " -loglevel warning"
             + " -reconnect 1"

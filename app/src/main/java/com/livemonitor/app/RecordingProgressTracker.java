@@ -186,21 +186,29 @@ public class RecordingProgressTracker {
     }
 
     private long calculateBytesRecorded(RecordingItem recording) {
-        if (recording == null || isBlank(recording.getTempTsPath())) {
+        if (recording == null) {
             return 0L;
         }
 
-        try {
-            File file = new File(recording.getTempTsPath());
+        long totalBytes = 0L;
 
-            if (file.exists() && file.isFile()) {
-                return Math.max(0L, file.length());
+        for (String segmentPath : recording.getTempSegmentPaths()) {
+            if (isBlank(segmentPath)) {
+                continue;
             }
-        } catch (Exception ignored) {
-            return 0L;
+
+            try {
+                File file = new File(segmentPath);
+
+                if (file.exists() && file.isFile()) {
+                    totalBytes += Math.max(0L, file.length());
+                }
+            } catch (Exception ignored) {
+                // Keep progress tracking best-effort across all chunks.
+            }
         }
 
-        return 0L;
+        return Math.max(0L, totalBytes);
     }
 
     private long calculateDurationSeconds(TrackedRecording tracked) {
