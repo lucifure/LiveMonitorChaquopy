@@ -610,7 +610,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             FFmpegRunner.executeAsync(
                 recording.getId(),
                 manifestUrl,
-                recording.getTempTsPath(),
+                recording.getCurrentTempSegmentPath(),
                 returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
                 message -> {
                     if (message != null
@@ -794,27 +794,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return;
             }
 
-            stalledRecording.setDiagnosticMessage("Recorder stalled; saved partial file and starting a new recording segment.");
+            stalledRecording.markRecording();
+            stalledRecording.showInDownloading();
+            stalledRecording.setDiagnosticMessage("Recorder stalled; resuming same recording with a fresh stream URL.");
             storage.upsertRecording(stalledRecording);
+            activeRecordings.put(channelId, stalledRecording);
+            progressTracker.track(stalledRecording);
             broadcastRecordingUpdated("Recovering stalled recording.");
-
-            activeRecordings.remove(stalledRecording.getId());
-            activeRecordings.remove(channelId);
-            progressTracker.untrack(stalledRecording);
-            saveStoppedRecordingForDownloads(stalledRecording);
-            cancelRequested = cancelActiveRecording(stalledRecording);
 
             log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Recording stalled; restarting recorder.",
+                "Recording stalled; resuming same recording.",
                 stalledRecording.getBestPlayablePath()
             );
 
-            channel.markWaitingForLive();
+            channel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
             storage.upsertChannel(channel);
-            startRecording(channel, liveInfo);
+            notificationHelper.showChannelMonitoringNotification(channel);
+            executor.execute(() -> resumeRecording(channelId, stalledRecording, liveInfo));
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
 
@@ -837,6 +836,120 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 restartingRecordings.remove(recordingId);
             }
         }
+    }
+
+
+    private void resumeRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
+        ChannelItem channel = storage.findChannelById(channelId);
+
+        try {
+            String videoId = liveInfo == null ? recording.getVideoId() : liveInfo.videoId;
+
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Resolving playable stream URL for same recording resume.",
+                "recordingId=" + recording.getId() + ", videoId=" + videoId
+            );
+
+            ResolvedInput resolvedInput = resolveRecordingInputUrl(videoId, channel, liveInfo, true);
+            String manifestUrl = resolvedInput.url;
+
+            if (manifestUrl == null || manifestUrl.trim().isEmpty()) {
+                throw new IllegalStateException(
+                    "Could not get playable stream URL. Resolver returned empty URL."
+                );
+            }
+
+            if (!isBlank(resolvedInput.videoId) && !recording.matchesVideo(resolvedInput.videoId)) {
+                throw new IllegalStateException(
+                    "Resolved stream changed while resuming. expected="
+                        + recording.getVideoId()
+                        + ", resolved="
+                        + resolvedInput.videoId
+                );
+            }
+
+            String chunkPath = createResumeChunkPath(recording);
+            recording.addTempChunkPath(chunkPath);
+            recording.setDiagnosticMessage("Recording stalled; resuming same recording.");
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording stalled; resuming same recording.");
+
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Playable stream URL found for resume.",
+                "recordingId="
+                    + recording.getId()
+                    + ", source="
+                    + resolvedInput.source
+                    + ", input="
+                    + describeUrlForLog(manifestUrl)
+                    + ", chunk="
+                    + chunkPath
+            );
+
+            final ChannelItem logChannel = channel;
+
+            FFmpegRunner.executeAsync(
+                recording.getId(),
+                manifestUrl,
+                chunkPath,
+                false,
+                returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
+                message -> {
+                    if (message != null
+                        && !message.startsWith("frame=")
+                        && !message.startsWith("size=")) {
+                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
+                    }
+                }
+            );
+        } catch (Exception e) {
+            String errorMessage = normalizeErrorMessage(e);
+
+            restartingRecordings.remove(recording.getId());
+            recording.markRecoverable("Recorder stalled and resume failed. " + errorMessage);
+            storage.upsertRecording(recording);
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(channelId);
+            progressTracker.untrack(recording);
+
+            log(
+                LogItem.LEVEL_ERROR,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Stalled recording resume failed.",
+                errorMessage
+            );
+            broadcastRecordingUpdated("Recording is recoverable after a stall.");
+        }
+    }
+
+    private String createResumeChunkPath(RecordingItem recording) {
+        String tempTsPath = recording == null ? "" : recording.getTempTsPath();
+
+        if (isBlank(tempTsPath)) {
+            throw new IllegalStateException("Cannot resume recording without a temp TS path.");
+        }
+
+        File tempFile = new File(tempTsPath);
+        File parent = tempFile.getParentFile();
+        String name = tempFile.getName();
+        int extensionIndex = name.toLowerCase(java.util.Locale.US).lastIndexOf(".ts");
+        String baseName = extensionIndex > 0 ? name.substring(0, extensionIndex) : name;
+        int segmentNumber = Math.max(1, recording.getTempSegmentPaths().size()) + 1;
+        File chunkFile;
+
+        do {
+            chunkFile = new File(parent, baseName + ".part" + segmentNumber + ".ts");
+            segmentNumber++;
+        } while (chunkFile.exists());
+
+        return chunkFile.getAbsolutePath();
     }
 
     private boolean cancelActiveRecording(RecordingItem recording) {
@@ -885,14 +998,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private long estimateConversionRequiredBytes(RecordingItem recording) {
         long tempBytes = 0L;
 
-        if (recording != null && !isBlank(recording.getTempTsPath())) {
-            try {
-                File tempFile = new File(recording.getTempTsPath());
-
-                if (tempFile.exists()) {
-                    tempBytes = Math.max(0L, tempFile.length());
+        if (recording != null) {
+            for (String segmentPath : recording.getTempSegmentPaths()) {
+                if (isBlank(segmentPath)) {
+                    continue;
                 }
-            } catch (Exception ignored) {
+
+                try {
+                    File tempFile = new File(segmentPath);
+
+                    if (tempFile.exists()) {
+                        tempBytes += Math.max(0L, tempFile.length());
+                    }
+                } catch (Exception ignored) {
+                }
             }
         }
 
@@ -1162,9 +1281,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertRecording(recording);
         broadcastRecordingUpdated("Converting recording.");
 
-        String command = "-y -i " + quote(recording.getTempTsPath())
-            + " -c copy -movflags +faststart "
-            + quote(recording.getFinalMp4Path());
+        List<String> tempSegments = recording.getTempSegmentPaths();
+        String command = buildConversionCommand(recording, tempSegments);
 
         try {
             ReturnCode code = FFmpegKit.execute(command).getReturnCode();
@@ -1172,7 +1290,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ReturnCode.isSuccess(code)) {
                 recording.markCompleted(recording.getFinalMp4Path());
                 recording.hideFromDownloading();
-                safeDelete(recording.getTempTsPath());
+                for (String segmentPath : tempSegments) {
+                    safeDelete(segmentPath);
+                }
                 log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording completed.", recording.getFinalMp4Path());
             } else {
                 recording.markRecoverable("MP4 conversion failed.");
@@ -1184,6 +1304,43 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         storage.upsertRecording(recording);
+    }
+
+
+    private String buildConversionCommand(RecordingItem recording, List<String> tempSegments) {
+        if (tempSegments == null || tempSegments.isEmpty()) {
+            return "-y -i " + quote(recording.getTempTsPath())
+                + " -c copy -movflags +faststart "
+                + quote(recording.getFinalMp4Path());
+        }
+
+        if (tempSegments.size() == 1) {
+            return "-y -i " + quote(tempSegments.get(0))
+                + " -c copy -movflags +faststart "
+                + quote(recording.getFinalMp4Path());
+        }
+
+        return "-y -i " + quote("concat:" + joinConcatSegments(tempSegments))
+            + " -c copy -movflags +faststart "
+            + quote(recording.getFinalMp4Path());
+    }
+
+    private String joinConcatSegments(List<String> tempSegments) {
+        StringBuilder builder = new StringBuilder();
+
+        for (String segmentPath : tempSegments) {
+            if (isBlank(segmentPath)) {
+                continue;
+            }
+
+            if (builder.length() > 0) {
+                builder.append('|');
+            }
+
+            builder.append(segmentPath);
+        }
+
+        return builder.toString();
     }
 
     private void handleRetry(ChannelItem channel, String message) {
