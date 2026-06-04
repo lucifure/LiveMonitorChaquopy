@@ -30,8 +30,19 @@ android {
 
     buildFeatures { viewBinding true }
 
+    sourceSets {
+        main {
+            // Android extracts files named lib*.so from jniLibs into nativeLibraryDir,
+            // which is executable by com.livemonitor.app even for background services.
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
     packaging {
-        jniLibs { useLegacyPackaging true }
+        jniLibs {
+            useLegacyPackaging true
+            keepDebugSymbols += ['**/libyt-dlp.so']
+        }
         resources {
             excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
         }

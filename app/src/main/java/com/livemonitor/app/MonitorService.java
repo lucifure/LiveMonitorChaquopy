@@ -55,6 +55,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
     private volatile boolean shuttingDown = false;
+    private volatile boolean ytDlpExecutableReady = false;
+    private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
     public void onCreate() {
@@ -100,6 +102,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (result == null) {
             return;
         }
+
+        ytDlpExecutableReady = result.isSuccess();
+        ytDlpExecutableStatus = result.getMessage();
 
         String details = result.getMessage();
 
@@ -1241,16 +1246,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         Exception javaError = null;
 
         if (remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
-            try {
-                return resolveWithYtDlp(videoUrl, safeVideoId, channel);
-            } catch (Exception e) {
-                ytDlpError = e;
+            if (ytDlpExecutableReady) {
+                try {
+                    return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+                } catch (Exception e) {
+                    ytDlpError = e;
+                    logExtractorFallback(
+                        channel,
+                        remoteConfig.isJavaHlsEnabled()
+                            ? "yt-dlp extractor failed; trying Java HLS fallback."
+                            : "yt-dlp extractor failed and Java HLS fallback is disabled.",
+                        e
+                    );
+                }
+            } else {
+                ytDlpError = buildYtDlpNotReadyError();
                 logExtractorFallback(
                     channel,
                     remoteConfig.isJavaHlsEnabled()
-                        ? "yt-dlp extractor failed; trying Java HLS fallback."
-                        : "yt-dlp extractor failed and Java HLS fallback is disabled.",
-                    e
+                        ? "yt-dlp executable needs setup; trying Java HLS fallback."
+                        : "yt-dlp executable needs setup and Java HLS fallback is disabled.",
+                    ytDlpError
                 );
             }
         }
@@ -1271,16 +1287,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         if (!remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
-            try {
-                return resolveWithYtDlp(videoUrl, safeVideoId, channel);
-            } catch (Exception e) {
-                ytDlpError = e;
+            if (ytDlpExecutableReady) {
+                try {
+                    return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+                } catch (Exception e) {
+                    ytDlpError = e;
+                    log(
+                        LogItem.LEVEL_WARNING,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "yt-dlp extractor failed after Java fallback.",
+                        normalizeErrorMessage(e)
+                    );
+                }
+            } else {
+                ytDlpError = buildYtDlpNotReadyError();
                 log(
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
                     channel,
-                    "yt-dlp extractor failed after Java fallback.",
-                    normalizeErrorMessage(e)
+                    "yt-dlp executable needs setup after Java fallback.",
+                    normalizeErrorMessage(ytDlpError)
                 );
             }
         }
@@ -1313,6 +1340,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         String message = buildResolverFailureMessage(ytDlpError, javaError);
         throw new IllegalStateException(message);
+    }
+
+    private IllegalStateException buildYtDlpNotReadyError() {
+        String executable = remoteConfig == null ? "" : remoteConfig.getYtDlpExecutable();
+        String problem = isBlank(ytDlpExecutableStatus)
+            ? YtDlpEnvironment.describeExecutableProblem(executable)
+            : ytDlpExecutableStatus;
+
+        return new IllegalStateException(
+            "yt-dlp executable is not ready for this Android service. "
+                + problem
+                + " Bundle app/src/main/jniLibs/<abi>/libyt-dlp.so or configure "
+                + "ytDlpExecutable as an absolute executable path owned by com.livemonitor.app."
+        );
     }
 
     private ResolvedInput resolveWithYtDlp(
