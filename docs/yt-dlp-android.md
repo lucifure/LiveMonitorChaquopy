@@ -33,3 +33,25 @@ path in remote config:
 ```
 
 Do not point this value at Termux private files or `/storage/emulated/0`.
+
+## Service warning: `yt-dlp executable needs setup`
+
+When the monitor service logs `yt-dlp executable needs setup`, it has refused to
+launch a bare `yt-dlp` command from `PATH`. This prevents the Android background
+service from repeatedly hitting failures such as
+`Cannot run program "yt-dlp": error=13, Permission denied` when the only working
+copy is a Termux command or a file on shared storage.
+
+Fix the warning by doing one of the following before starting monitoring:
+
+1. Bundle an Android-compatible executable at
+   `app/src/main/jniLibs/<abi>/libyt-dlp.so` for every supported ABI. The app is
+   configured to extract JNI libraries, so `YtDlpEnvironment` can rewrite the
+   in-memory `ytDlpExecutable` value to the extracted app-owned path.
+2. Set `ytDlpExecutable` in remote config to an absolute path that
+   `com.livemonitor.app` owns and can execute. Do not use Termux-private paths,
+   `/storage/emulated/0`, or a plain `yt-dlp` command name.
+
+After setup, the service should log `yt-dlp executable ready.` and successful
+stream resolution should show `source=yt-dlp` in the `Playable stream URL found.`
+log entry.
