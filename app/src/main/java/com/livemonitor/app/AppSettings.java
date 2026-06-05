@@ -35,6 +35,8 @@ public class AppSettings {
     private static final String JSON_LIVE_FROM_START_ENABLED = "liveFromStartEnabled";
     private static final String JSON_SKIP_UNAVAILABLE_FRAGMENTS_ENABLED =
         "skipUnavailableFragmentsEnabled";
+    private static final String JSON_YTDLP_COOKIES_PATH = "ytDlpCookiesPath";
+    private static final String JSON_YTDLP_COOKIE_HEADER = "ytDlpCookieHeader";
     private static final String JSON_TEMP_CLEANUP_BEFORE_RECORDING = "tempCleanupBeforeRecording";
     private static final String JSON_CONVERT_TS_TO_MP4 = "convertTsToMp4";
     private static final String JSON_RECOVER_ORPHAN_TS_FILES = "recoverOrphanTsFiles";
@@ -79,6 +81,8 @@ public class AppSettings {
     private boolean waitForVideoEnabled;
     private boolean liveFromStartEnabled;
     private boolean skipUnavailableFragmentsEnabled;
+    private String ytDlpCookiesPath;
+    private String ytDlpCookieHeader;
 
     private boolean tempCleanupBeforeRecording;
     private boolean convertTsToMp4;
@@ -123,6 +127,8 @@ public class AppSettings {
         this.waitForVideoEnabled = true;
         this.liveFromStartEnabled = true;
         this.skipUnavailableFragmentsEnabled = true;
+        this.ytDlpCookiesPath = "";
+        this.ytDlpCookieHeader = "";
 
         this.tempCleanupBeforeRecording = true;
         this.convertTsToMp4 = true;
@@ -162,6 +168,8 @@ public class AppSettings {
         boolean waitForVideoEnabled,
         boolean liveFromStartEnabled,
         boolean skipUnavailableFragmentsEnabled,
+        String ytDlpCookiesPath,
+        String ytDlpCookieHeader,
         boolean tempCleanupBeforeRecording,
         boolean convertTsToMp4,
         boolean recoverOrphanTsFiles,
@@ -202,6 +210,8 @@ public class AppSettings {
         this.waitForVideoEnabled = waitForVideoEnabled;
         this.liveFromStartEnabled = liveFromStartEnabled;
         this.skipUnavailableFragmentsEnabled = skipUnavailableFragmentsEnabled;
+        this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
+        this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
 
         this.tempCleanupBeforeRecording = tempCleanupBeforeRecording;
         this.convertTsToMp4 = convertTsToMp4;
@@ -263,6 +273,8 @@ public class AppSettings {
                 JSON_SKIP_UNAVAILABLE_FRAGMENTS_ENABLED,
                 defaults.isSkipUnavailableFragmentsEnabled()
             ),
+            json.optString(JSON_YTDLP_COOKIES_PATH, defaults.getYtDlpCookiesPath()),
+            json.optString(JSON_YTDLP_COOKIE_HEADER, defaults.getYtDlpCookieHeader()),
             json.optBoolean(
                 JSON_TEMP_CLEANUP_BEFORE_RECORDING,
                 defaults.isTempCleanupBeforeRecording()
@@ -311,6 +323,8 @@ public class AppSettings {
         json.put(JSON_WAIT_FOR_VIDEO_ENABLED, waitForVideoEnabled);
         json.put(JSON_LIVE_FROM_START_ENABLED, liveFromStartEnabled);
         json.put(JSON_SKIP_UNAVAILABLE_FRAGMENTS_ENABLED, skipUnavailableFragmentsEnabled);
+        json.put(JSON_YTDLP_COOKIES_PATH, ytDlpCookiesPath);
+        json.put(JSON_YTDLP_COOKIE_HEADER, ytDlpCookieHeader);
         json.put(JSON_TEMP_CLEANUP_BEFORE_RECORDING, tempCleanupBeforeRecording);
         json.put(JSON_CONVERT_TS_TO_MP4, convertTsToMp4);
         json.put(JSON_RECOVER_ORPHAN_TS_FILES, recoverOrphanTsFiles);
@@ -648,6 +662,18 @@ public class AppSettings {
         return skipUnavailableFragmentsEnabled;
     }
 
+    public String getYtDlpCookiesPath() {
+        return ytDlpCookiesPath;
+    }
+
+    public String getYtDlpCookieHeader() {
+        return ytDlpCookieHeader;
+    }
+
+    public boolean hasYtDlpCookies() {
+        return !isBlank(ytDlpCookiesPath) || !isBlank(ytDlpCookieHeader);
+    }
+
     public boolean isTempCleanupBeforeRecording() {
         return tempCleanupBeforeRecording;
     }
@@ -790,6 +816,16 @@ public class AppSettings {
 
     public void setSkipUnavailableFragmentsEnabled(boolean skipUnavailableFragmentsEnabled) {
         this.skipUnavailableFragmentsEnabled = skipUnavailableFragmentsEnabled;
+        touch();
+    }
+
+    public void setYtDlpCookiesPath(String ytDlpCookiesPath) {
+        this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
+        touch();
+    }
+
+    public void setYtDlpCookieHeader(String ytDlpCookieHeader) {
+        this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
         touch();
     }
 

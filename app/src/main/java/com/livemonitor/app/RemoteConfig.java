@@ -34,6 +34,9 @@ public class RemoteConfig {
     private static final String JSON_YTDLP_EXECUTABLE = "ytDlpExecutable";
     private static final String JSON_YTDLP_EXTRACTOR_ARGS = "ytDlpExtractorArgs";
     private static final String JSON_YTDLP_EXTRA_ARGS = "ytDlpExtraArgs";
+    private static final String JSON_YTDLP_COOKIES_PATH = "ytDlpCookiesPath";
+    private static final String JSON_YTDLP_COOKIES_FROM_BROWSER = "ytDlpCookiesFromBrowser";
+    private static final String JSON_YTDLP_COOKIE_HEADER = "ytDlpCookieHeader";
     private static final String JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS = "ytDlpResolveTimeoutSeconds";
     private static final String JSON_JAVA_HLS_FALLBACK_ENABLED = "javaHlsFallbackEnabled";
     private static final String JSON_INNERTUBE_BASE_URL = "innertubeBaseUrl";
@@ -53,6 +56,9 @@ public class RemoteConfig {
     private String ytDlpExecutable;
     private String ytDlpExtractorArgs;
     private List<String> ytDlpExtraArgs;
+    private String ytDlpCookiesPath;
+    private String ytDlpCookiesFromBrowser;
+    private String ytDlpCookieHeader;
     private int ytDlpResolveTimeoutSeconds;
     private boolean javaHlsFallbackEnabled;
     private String innertubeBaseUrl;
@@ -73,6 +79,9 @@ public class RemoteConfig {
         this.ytDlpExecutable = "yt-dlp";
         this.ytDlpExtractorArgs = "";
         this.ytDlpExtraArgs = new ArrayList<>();
+        this.ytDlpCookiesPath = "";
+        this.ytDlpCookiesFromBrowser = "";
+        this.ytDlpCookieHeader = "";
         this.ytDlpResolveTimeoutSeconds = 45;
         this.javaHlsFallbackEnabled = true;
         this.innertubeBaseUrl = "https://www.youtube.com/youtubei/v1";
@@ -94,6 +103,9 @@ public class RemoteConfig {
         String ytDlpExecutable,
         String ytDlpExtractorArgs,
         List<String> ytDlpExtraArgs,
+        String ytDlpCookiesPath,
+        String ytDlpCookiesFromBrowser,
+        String ytDlpCookieHeader,
         int ytDlpResolveTimeoutSeconds,
         boolean javaHlsFallbackEnabled,
         String innertubeBaseUrl,
@@ -113,6 +125,9 @@ public class RemoteConfig {
         this.ytDlpExecutable = isBlank(ytDlpExecutable) ? "yt-dlp" : ytDlpExecutable.trim();
         this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
         this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+        this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
+        this.ytDlpCookiesFromBrowser = nullToEmpty(ytDlpCookiesFromBrowser).trim();
+        this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
         this.ytDlpResolveTimeoutSeconds = clamp(ytDlpResolveTimeoutSeconds, 10, 300);
         this.javaHlsFallbackEnabled = javaHlsFallbackEnabled;
         this.innertubeBaseUrl = isBlank(innertubeBaseUrl)
@@ -188,6 +203,9 @@ public class RemoteConfig {
             json.optString(JSON_YTDLP_EXECUTABLE, defaults.getYtDlpExecutable()),
             json.optString(JSON_YTDLP_EXTRACTOR_ARGS, defaults.getYtDlpExtractorArgs()),
             ytDlpExtraArgs.isEmpty() ? defaults.getYtDlpExtraArgs() : ytDlpExtraArgs,
+            json.optString(JSON_YTDLP_COOKIES_PATH, defaults.getYtDlpCookiesPath()),
+            json.optString(JSON_YTDLP_COOKIES_FROM_BROWSER, defaults.getYtDlpCookiesFromBrowser()),
+            json.optString(JSON_YTDLP_COOKIE_HEADER, defaults.getYtDlpCookieHeader()),
             json.optInt(JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS, defaults.getYtDlpResolveTimeoutSeconds()),
             json.optBoolean(JSON_JAVA_HLS_FALLBACK_ENABLED, defaults.isJavaHlsFallbackEnabled()),
             json.optString(JSON_INNERTUBE_BASE_URL, defaults.getInnertubeBaseUrl()),
@@ -233,6 +251,9 @@ public class RemoteConfig {
         }
 
         json.put(JSON_YTDLP_EXTRA_ARGS, ytDlpExtraArgsArray);
+        json.put(JSON_YTDLP_COOKIES_PATH, ytDlpCookiesPath);
+        json.put(JSON_YTDLP_COOKIES_FROM_BROWSER, ytDlpCookiesFromBrowser);
+        json.put(JSON_YTDLP_COOKIE_HEADER, ytDlpCookieHeader);
         json.put(JSON_YTDLP_RESOLVE_TIMEOUT_SECONDS, ytDlpResolveTimeoutSeconds);
         json.put(JSON_JAVA_HLS_FALLBACK_ENABLED, javaHlsFallbackEnabled);
         json.put(JSON_INNERTUBE_BASE_URL, innertubeBaseUrl);
@@ -323,6 +344,7 @@ public class RemoteConfig {
             + ", extractorMode=" + youtubeExtractorMode
             + ", ytDlpExecutable=" + ytDlpExecutable
             + ", ytDlpExtraArgs=" + ytDlpExtraArgs.size()
+            + ", ytDlpCookies=" + hasYtDlpCookies()
             + ", javaHlsFallback=" + javaHlsFallbackEnabled
             + ", innertubeBaseUrl=" + innertubeBaseUrl
             + ", webPlayerBaseUrl=" + webPlayerBaseUrl
@@ -604,6 +626,24 @@ public class RemoteConfig {
         return Collections.unmodifiableList(ytDlpExtraArgs);
     }
 
+    public String getYtDlpCookiesPath() {
+        return ytDlpCookiesPath;
+    }
+
+    public String getYtDlpCookiesFromBrowser() {
+        return ytDlpCookiesFromBrowser;
+    }
+
+    public String getYtDlpCookieHeader() {
+        return ytDlpCookieHeader;
+    }
+
+    public boolean hasYtDlpCookies() {
+        return !isBlank(ytDlpCookiesPath)
+            || !isBlank(ytDlpCookiesFromBrowser)
+            || !isBlank(ytDlpCookieHeader);
+    }
+
     public int getYtDlpResolveTimeoutSeconds() {
         return ytDlpResolveTimeoutSeconds;
     }
@@ -686,6 +726,18 @@ public class RemoteConfig {
 
     public void setYtDlpExtraArgs(List<String> ytDlpExtraArgs) {
         this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+    }
+
+    public void setYtDlpCookiesPath(String ytDlpCookiesPath) {
+        this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
+    }
+
+    public void setYtDlpCookiesFromBrowser(String ytDlpCookiesFromBrowser) {
+        this.ytDlpCookiesFromBrowser = nullToEmpty(ytDlpCookiesFromBrowser).trim();
+    }
+
+    public void setYtDlpCookieHeader(String ytDlpCookieHeader) {
+        this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
     }
 
     public void setYtDlpResolveTimeoutSeconds(int ytDlpResolveTimeoutSeconds) {

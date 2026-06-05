@@ -14,6 +14,7 @@ import com.arthenica.ffmpegkit.ReturnCode;
 import com.yausername.youtubedl_android.YoutubeDL;
 import com.yausername.youtubedl_android.YoutubeDLException;
 import com.yausername.youtubedl_android.YoutubeDLRequest;
+import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel;
 import com.yausername.youtubedl_android.mapper.VideoInfo;
 
 import org.json.JSONArray;
@@ -62,6 +63,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean shuttingDown = false;
     private volatile boolean ytDlpExecutableReady = false;
     private volatile boolean youtubedlAndroidReady = false;
+    private volatile boolean youtubedlAndroidUpdateAttempted = false;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -1665,6 +1667,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         RecorderCommandBuilder builder = new RecorderCommandBuilder();
+        updateYoutubedlAndroidRuntimeIfNeeded(
+            "before first yt-dlp resolve",
+            "Updating bundled yt-dlp before first resolve attempt.",
+            channel
+        );
         List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, videoUrl);
         Exception lastError = null;
 
@@ -1721,6 +1728,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             } catch (Exception e) {
                 lastError = e;
 
+                if (refreshYoutubedlAndroidAfterExtractorFailure(e, videoId, channel)) {
+                    attempts = buildYtDlpResolveAttempts(builder, videoUrl);
+                    attemptIndex = -1;
+                    lastError = null;
+                    continue;
+                }
+
                 if (attemptIndex + 1 < attempts.size()) {
                     log(
                         LogItem.LEVEL_WARNING,
@@ -1740,12 +1754,82 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         throw new IllegalStateException("yt-dlp did not run any resolver attempts.");
     }
 
+    private boolean refreshYoutubedlAndroidAfterExtractorFailure(
+        Exception error,
+        String videoId,
+        ChannelItem channel
+    ) {
+        if (!isNoVideoFormatsError(error)) {
+            return false;
+        }
+
+        return updateYoutubedlAndroidRuntimeIfNeeded(
+            "after No video formats found for videoId=" + videoId,
+            "yt-dlp reported no video formats; updating bundled runtime before retry.",
+            channel
+        );
+    }
+
+    private boolean updateYoutubedlAndroidRuntimeIfNeeded(
+        String reason,
+        String message,
+        ChannelItem channel
+    ) {
+        if (!youtubedlAndroidReady || youtubedlAndroidUpdateAttempted) {
+            return false;
+        }
+
+        youtubedlAndroidUpdateAttempted = true;
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            message,
+            "channel=nightly, reason=" + reason
+        );
+
+        try {
+            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel.NIGHTLY);
+
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "youtubedl-android runtime updated.",
+                "Updated bundled yt-dlp from the nightly channel. Continuing yt-dlp-first resolution."
+            );
+
+            return true;
+        } catch (YoutubeDLException | RuntimeException updateError) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "youtubedl-android runtime update failed.",
+                normalizeErrorMessage(updateError)
+            );
+
+            return false;
+        }
+    }
+
+    private boolean isNoVideoFormatsError(Exception error) {
+        return normalizeErrorMessage(error).toLowerCase(java.util.Locale.US).contains("no video formats found");
+    }
+
+
     private List<YtDlpResolveAttempt> buildYtDlpResolveAttempts(
         RecorderCommandBuilder builder,
         String videoUrl
     ) {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         LinkedHashSet<String> extractorArgs = new LinkedHashSet<>();
+
+        // First let yt-dlp choose its own current YouTube clients. Forced
+        // clients can become stale faster than yt-dlp's internal defaults.
+        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
+
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
         if (!isBlank(configuredExtractorArgs)) {
@@ -1766,6 +1850,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          */
         addPreferredYtDlpClient(extractorArgs, "ANDROID");
         addPreferredYtDlpClient(extractorArgs, "IOS");
+        addPreferredYtDlpClient(extractorArgs, "MWEB");
+        addPreferredYtDlpClient(extractorArgs, "WEB");
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
@@ -1775,22 +1861,52 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        if (extractorArgs.isEmpty()) {
-            attempts.add(new YtDlpResolveAttempt(
-                builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig),
-                "default extractor args"
-            ));
-            return attempts;
-        }
+        boolean retryWithoutLiveFromStart = settings != null && settings.isLiveFromStartEnabled();
 
         for (String extractorArg : extractorArgs) {
-            attempts.add(new YtDlpResolveAttempt(
-                builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig, extractorArg),
-                "extractorArgs=" + extractorArg
+            if (retryWithoutLiveFromStart) {
+                attempts.add(buildYtDlpResolveAttempt(
+                    builder,
+                    videoUrl,
+                    extractorArg,
+                    false
+                ));
+            }
+
+            attempts.add(buildYtDlpResolveAttempt(
+                builder,
+                videoUrl,
+                extractorArg,
+                true
             ));
         }
 
         return attempts;
+    }
+
+    private YtDlpResolveAttempt buildYtDlpResolveAttempt(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String extractorArg,
+        boolean allowLiveFromStart
+    ) {
+        String extractorDescription = RecorderCommandBuilder.EXTRACTOR_ARGS_NONE.equals(extractorArg)
+            ? "extractorArgs=yt-dlp-default"
+            : "extractorArgs=" + extractorArg;
+        String liveFromStartDescription = settings != null && settings.isLiveFromStartEnabled()
+            ? ", liveFromStart=" + allowLiveFromStart
+            : "";
+
+        return new YtDlpResolveAttempt(
+            builder.buildYtDlpResolveArgs(
+                videoUrl,
+                settings,
+                remoteConfig,
+                extractorArg,
+                allowLiveFromStart
+            ),
+            extractorDescription + liveFromStartDescription
+        );
     }
 
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
@@ -1853,6 +1969,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || "--socket-timeout".equals(arg)
             || "--user-agent".equals(arg)
             || "--extractor-args".equals(arg)
+            || "--cookies".equals(arg)
+            || "--cookies-from-browser".equals(arg)
             || "--add-header".equals(arg);
     }
 
