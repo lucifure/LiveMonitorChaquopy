@@ -121,6 +121,47 @@ public class RecorderCommandBuilder {
     }
 
     /**
+     * Builds yt-dlp record arguments with an explicit extractor-args override.
+     * Used by youtubedl-android retries so failed clients can be rotated without
+     * giving up on the active recording.
+     */
+    public List<String> buildYtDlpRecordArgs(
+        String videoUrl,
+        String outputTsPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride,
+        boolean allowLiveFromStart
+    ) {
+        if (settings == null) {
+            settings = new AppSettings();
+        }
+
+        if (remoteConfig == null) {
+            remoteConfig = new RemoteConfig();
+        }
+
+        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(videoUrl, outputTsPath, settings, remoteConfig));
+
+        if (!allowLiveFromStart) {
+            args.remove("--live-from-start");
+        }
+
+        if (!isBlank(extractorArgsOverride)) {
+            removeOptionAndValue(args, "--extractor-args");
+
+            if (!EXTRACTOR_ARGS_NONE.equals(extractorArgsOverride)) {
+                int insertIndex = Math.max(1, args.size() - 1);
+                args.add(insertIndex, "--extractor-args");
+                args.add(insertIndex + 1, extractorArgsOverride.trim());
+            }
+        }
+
+        return Collections.unmodifiableList(args);
+    }
+
+
+    /**
      * Builds yt-dlp arguments for resolving one playable media URL.
      * MonitorService feeds the resolved URL into FFmpegRunner so the existing
      * recording/progress/recovery pipeline stays unchanged.
