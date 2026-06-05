@@ -18,6 +18,8 @@ import com.yausername.youtubedl_android.YoutubeDLResponse;
 import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel;
 import com.yausername.youtubedl_android.mapper.VideoInfo;
 
+import kotlin.Unit;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
