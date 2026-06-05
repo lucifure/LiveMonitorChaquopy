@@ -36,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
@@ -615,7 +616,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 storage.upsertRecording(recording);
             }
 
-            recording.setDiagnosticMessage("Playable URL resolved by " + resolvedInput.source + "; starting FFmpeg recorder.");
+            recording.setDiagnosticMessage("Playable URL resolved by " + resolvedInput.source + "; starting recorder.");
             storage.upsertRecording(recording);
             broadcastRecordingUpdated("Playable URL resolved.");
 
@@ -637,7 +638,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 LogItem.SOURCE_RECORDER,
                 channel,
                 "Recording started.",
-                ""
+                youtubedlAndroidReady
+                    ? "resolver=youtubedl-android, recorder=FFmpegKit"
+                    : "recorder=FFmpegKit"
             );
 
             final ChannelItem logChannel = channel;
@@ -1724,7 +1727,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     "videoId=" + videoId + ", " + attempt.describe() + ", input=" + describeUrlForLog(url)
                 );
 
-                return new ResolvedInput(url, videoId, "yt-dlp");
+                return new ResolvedInput(url, videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
             } catch (Exception e) {
                 lastError = e;
 
@@ -1790,7 +1793,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
 
         try {
-            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel.NIGHTLY);
+            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel._NIGHTLY);
 
             log(
                 LogItem.LEVEL_SUCCESS,
@@ -1905,6 +1908,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 extractorArg,
                 allowLiveFromStart
             ),
+            extractorArg,
+            allowLiveFromStart,
             extractorDescription + liveFromStartDescription
         );
     }
@@ -1966,12 +1971,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return "-f".equals(arg)
+            || "-o".equals(arg)
             || "--socket-timeout".equals(arg)
             || "--user-agent".equals(arg)
             || "--extractor-args".equals(arg)
             || "--cookies".equals(arg)
             || "--cookies-from-browser".equals(arg)
-            || "--add-header".equals(arg);
+            || "--add-header".equals(arg)
+            || "--wait-for-video".equals(arg)
+            || "--fragment-retries".equals(arg)
+            || "--retries".equals(arg)
+            || "--extractor-retries".equals(arg)
+            || "--file-access-retries".equals(arg)
+            || "--retry-sleep".equals(arg);
     }
 
     private void logExtractorFallback(ChannelItem channel, String title, Exception error) {
@@ -3168,10 +3180,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private static class YtDlpResolveAttempt {
         final List<String> args;
+        final String extractorArgs;
+        final boolean allowLiveFromStart;
         final String description;
 
-        YtDlpResolveAttempt(List<String> args, String description) {
+        YtDlpResolveAttempt(
+            List<String> args,
+            String extractorArgs,
+            boolean allowLiveFromStart,
+            String description
+        ) {
             this.args = args;
+            this.extractorArgs = extractorArgs == null ? "" : extractorArgs;
+            this.allowLiveFromStart = allowLiveFromStart;
             this.description = description == null ? "" : description;
         }
 

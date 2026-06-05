@@ -120,7 +120,6 @@ public class RecorderCommandBuilder {
         return Collections.unmodifiableList(args);
     }
 
-
     /**
      * Builds yt-dlp arguments for resolving one playable media URL.
      * MonitorService feeds the resolved URL into FFmpegRunner so the existing
@@ -373,6 +372,8 @@ public class RecorderCommandBuilder {
             args.add(cookiesPath.trim());
         }
     }
+
+
 
     private static String quoteForLog(String value) {
         if (value == null) {
