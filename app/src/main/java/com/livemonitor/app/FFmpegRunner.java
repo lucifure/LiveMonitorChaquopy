@@ -217,7 +217,14 @@ public class FFmpegRunner {
             + " -hide_banner"
             + " -loglevel warning"
             + " -reconnect 1"
-            + " -reconnect_at_eof 1"
+            /*
+             * Do not enable -reconnect_at_eof for HLS recordings. A normal HLS
+             * playlist or segment HTTP response ends at EOF, and FFmpegKit then
+             * retries the same local proxy URL with a byte offset instead of
+             * letting the HLS demuxer reload the playlist. In logs this appears
+             * as an endless "Will reconnect at <playlist length> ... End of file"
+             * loop immediately after selecting a variant.
+             */
             + " -reconnect_streamed 1"
             + " -reconnect_on_network_error 1"
             + " -reconnect_on_http_error 4xx,5xx"

@@ -275,7 +275,7 @@ public class HlsProxyServer {
                 builder.header("Origin", "https://www.youtube.com");
             }
 
-            if (rangeHeader != null && !rangeHeader.isEmpty()) {
+            if (rangeHeader != null && !rangeHeader.isEmpty() && !isPlaylistUrl) {
                 builder.header("Range", rangeHeader);
             }
 
