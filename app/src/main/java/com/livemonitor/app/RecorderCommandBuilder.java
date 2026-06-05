@@ -415,6 +415,26 @@ public class RecorderCommandBuilder {
     }
 
 
+    private void removeOptionAndValue(List<String> args, String option) {
+        if (args == null || isBlank(option)) {
+            return;
+        }
+
+        for (int index = 0; index < args.size(); index++) {
+            if (!option.equals(args.get(index))) {
+                continue;
+            }
+
+            args.remove(index);
+
+            if (index < args.size()) {
+                args.remove(index);
+            }
+
+            index--;
+        }
+    }
+
 
     private static String quoteForLog(String value) {
         if (value == null) {
