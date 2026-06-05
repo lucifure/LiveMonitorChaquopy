@@ -14,7 +14,6 @@ import com.arthenica.ffmpegkit.ReturnCode;
 import com.yausername.youtubedl_android.YoutubeDL;
 import com.yausername.youtubedl_android.YoutubeDLException;
 import com.yausername.youtubedl_android.YoutubeDLRequest;
-import com.yausername.youtubedl_android.YoutubeDLResponse;
 import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel;
 import com.yausername.youtubedl_android.mapper.VideoInfo;
 
@@ -47,7 +46,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
     private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
-    private static final int YOUTUBEDL_ANDROID_RECORD_MAX_ATTEMPTS = 3;
 
     private AppStorage storage;
     private AppSettings settings;
@@ -87,7 +85,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         progressTracker.setListener(new RecordingProgressTracker.Listener() {
             @Override
             public void onRecordingProgressUpdated(RecordingItem recording) {
-                // The UI refreshes via existing broadcasts; avoid broadcasting every tick.
+                broadcastRecordingUpdated("");
             }
 
             @Override
@@ -647,29 +645,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     : "recorder=FFmpegKit"
             );
 
-            if (youtubedlAndroidReady) {
-                startYoutubedlAndroidRecording(channelId, channel, recording, liveInfo);
-                return;
-            }
-
-            final ChannelItem logChannel = channel;
-
-            recording.setDiagnosticMessage("FFmpeg recorder is running.");
-            storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording started.");
-
-            FFmpegRunner.executeAsync(
-                recording.getId(),
+            startFfmpegKitRecording(
+                channelId,
+                channel,
+                recording,
                 manifestUrl,
                 recording.getCurrentTempSegmentPath(),
-                returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
-                message -> {
-                    if (message != null
-                        && !message.startsWith("frame=")
-                        && !message.startsWith("size=")) {
-                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
-                    }
-                }
+                false,
+                "Recording started."
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
@@ -943,26 +926,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + chunkPath
             );
 
-            if (youtubedlAndroidReady) {
-                startYoutubedlAndroidRecording(channelId, channel, recording, liveInfo);
-                return;
-            }
-
-            final ChannelItem logChannel = channel;
-
-            FFmpegRunner.executeAsync(
-                recording.getId(),
+            startFfmpegKitRecording(
+                channelId,
+                channel,
+                recording,
                 manifestUrl,
                 chunkPath,
                 false,
-                returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
-                message -> {
-                    if (message != null
-                        && !message.startsWith("frame=")
-                        && !message.startsWith("size=")) {
-                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
-                    }
-                }
+                "Recording stalled; resume recorder started."
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
@@ -1687,147 +1658,42 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
     }
 
-    private void startYoutubedlAndroidRecording(
+    private void startFfmpegKitRecording(
         String channelId,
         ChannelItem channel,
         RecordingItem recording,
-        LiveInfo liveInfo
+        String manifestUrl,
+        String outputPath,
+        boolean appendOutput,
+        String broadcastMessage
     ) {
-        String videoUrl = liveInfo == null || isBlank(liveInfo.videoUrl)
-            ? recording.getVideoUrl()
-            : liveInfo.videoUrl;
-
-        if (isBlank(videoUrl) && !isBlank(recording.getVideoId())) {
-            videoUrl = YouTubeUrlUtils.buildWatchUrl(recording.getVideoId());
+        if (recording == null) {
+            return;
         }
 
-        final String safeVideoUrl = videoUrl;
-        final RecorderCommandBuilder builder = new RecorderCommandBuilder();
-        final List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, safeVideoUrl);
+        final ChannelItem logChannel = channel;
 
-        activeRecordings.put(recording.getId(), recording);
-        recording.setDiagnosticMessage("youtubedl-android recorder is running.");
+        recording.setDiagnosticMessage("FFmpeg recorder is running.");
         storage.upsertRecording(recording);
-        broadcastRecordingUpdated("Recording started with youtubedl-android.");
 
-        executor.execute(() -> {
-            int finalCode = -1;
-            Exception lastError = null;
+        if (!isBlank(broadcastMessage)) {
+            broadcastRecordingUpdated(broadcastMessage);
+        }
 
-            for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
-                if (shuttingDown || !activeRecordings.containsKey(recording.getId())) {
-                    finalCode = 255;
-                    break;
-                }
-
-                if (attemptIndex > 0 && currentRecordingSegmentHasData(recording)) {
-                    String nextChunkPath = createResumeChunkPath(recording);
-                    recording.addTempChunkPath(nextChunkPath);
-                    storage.upsertRecording(recording);
-                }
-
-                String attemptOutputPath = recording.getCurrentTempSegmentPath();
-                YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
-                List<String> args = builder.buildYtDlpRecordArgs(
-                    safeVideoUrl,
-                    attemptOutputPath,
-                    settings,
-                    remoteConfig,
-                    attempt.extractorArgs,
-                    attempt.allowLiveFromStart
-                );
-
-                log(
-                    LogItem.LEVEL_INFO,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "Starting youtubedl-android recorder attempt.",
-                    "recordingId="
-                        + recording.getId()
-                        + ", attempt="
-                        + (attemptIndex + 1)
-                        + "/"
-                        + attempts.size()
-                        + ", "
-                        + attempt.describe()
-                        + ", output="
-                        + attemptOutputPath
-                        + ", command="
-                        + shortenForLog(builder.toLogString(args), 500)
-                );
-
-                try {
-                    YoutubeDLRequest request = buildYoutubedlAndroidRequestFromArgs(safeVideoUrl, args);
-                    YoutubeDLResponse response = YoutubeDL.getInstance().execute(
-                        request,
-                        recording.getId(),
-                        (progress, etaInSeconds, line) -> {
-                            if (!isBlank(line)
-                                && !line.startsWith("frame=")
-                                && !line.startsWith("size=")) {
-                                log(
-                                    LogItem.LEVEL_DEBUG,
-                                    LogItem.SOURCE_RECORDER,
-                                    channel,
-                                    "youtubedl-android recorder output.",
-                                    shortenForLog(line, 500)
-                                );
-                            }
-
-                            return Unit.INSTANCE;
-                        }
-                    );
-                    finalCode = response == null ? -1 : response.getExitCode();
-
-                    if (finalCode == 0 || finalCode == 255) {
-                        break;
-                    }
-
-                    lastError = new IllegalStateException(
-                        response == null
-                            ? "youtubedl-android exited without a response."
-                            : normalizeYoutubedlAndroidFailure(response)
-                    );
-                } catch (Exception e) {
-                    if (!activeRecordings.containsKey(recording.getId()) || shuttingDown) {
-                        finalCode = 255;
-                        break;
-                    }
-
-                    lastError = e;
-                    finalCode = -1;
-                }
-
-                if (refreshYoutubedlAndroidAfterExtractorFailure(lastError, recording.getVideoId(), channel)) {
-                    attemptIndex = -1;
-                    lastError = null;
-                    continue;
-                }
-
-                if (attemptIndex + 1 < attempts.size()) {
-                    log(
-                        LogItem.LEVEL_WARNING,
-                        LogItem.SOURCE_RECORDER,
-                        channel,
-                        "youtubedl-android recorder attempt failed; trying next client.",
-                        "recordingId="
-                            + recording.getId()
-                            + ", "
-                            + attempt.describe()
-                            + ", error="
-                            + normalizeErrorMessage(lastError)
-                    );
-                    sleep(getAttemptBackoffMillis(Math.min(attemptIndex + 1, YOUTUBEDL_ANDROID_RECORD_MAX_ATTEMPTS)));
+        FFmpegRunner.executeAsync(
+            recording.getId(),
+            manifestUrl,
+            outputPath,
+            appendOutput,
+            returnCode -> onRecordingFinished(channelId, recording.getId(), returnCode),
+            message -> {
+                if (message != null
+                    && !message.startsWith("frame=")
+                    && !message.startsWith("size=")) {
+                    log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
                 }
             }
-
-            if (finalCode != 0 && finalCode != 255 && lastError != null) {
-                recording.setDiagnosticMessage("youtubedl-android recorder failed: " + normalizeErrorMessage(lastError));
-                storage.upsertRecording(recording);
-            }
-
-            onRecordingFinished(channelId, recording.getId(), finalCode);
-        });
+        );
     }
 
     private boolean currentRecordingSegmentHasData(RecordingItem recording) {
@@ -1841,54 +1707,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (RuntimeException ignored) {
             return false;
         }
-    }
-
-    private YoutubeDLRequest buildYoutubedlAndroidRequestFromArgs(String videoUrl, List<String> args) {
-        YoutubeDLRequest request = new YoutubeDLRequest(videoUrl);
-
-        if (args == null) {
-            return request;
-        }
-
-        for (int i = 1; i < args.size(); i++) {
-            String arg = args.get(i);
-
-            if (isBlank(arg) || videoUrl.equals(arg)) {
-                continue;
-            }
-
-            if ("--js-runtime".equals(arg) || "--js-runtimes".equals(arg)) {
-                i++;
-                continue;
-            }
-
-            String value = i + 1 < args.size() ? args.get(i + 1) : null;
-
-            if (isYtDlpOptionWithValue(arg) && value != null) {
-                request.addOption(arg, value);
-                i++;
-            } else {
-                request.addOption(arg);
-            }
-        }
-
-        return request;
-    }
-
-    private String normalizeYoutubedlAndroidFailure(YoutubeDLResponse response) {
-        if (response == null) {
-            return "youtubedl-android failed without output.";
-        }
-
-        String err = response.getErr();
-        String out = response.getOut();
-        String details = !isBlank(err) ? err : out;
-
-        if (isBlank(details)) {
-            details = "exitCode=" + response.getExitCode();
-        }
-
-        return shortenForLog(details, 1000);
     }
 
     private ResolvedInput resolveWithYtDlp(
