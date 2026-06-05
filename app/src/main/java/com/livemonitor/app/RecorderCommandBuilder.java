@@ -414,23 +414,7 @@ public class RecorderCommandBuilder {
         }
     }
 
-    private void removeOptionAndValue(List<String> args, String option) {
-        if (args == null || isBlank(option)) {
-            return;
-        }
 
-        for (int i = args.size() - 1; i >= 0; i--) {
-            if (!option.equals(args.get(i))) {
-                continue;
-            }
-
-            args.remove(i);
-
-            if (i < args.size() && !args.get(i).startsWith("-")) {
-                args.remove(i);
-            }
-        }
-    }
 
     private static String quoteForLog(String value) {
         if (value == null) {

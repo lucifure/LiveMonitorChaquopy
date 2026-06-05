@@ -37,7 +37,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import kotlin.Unit;
 
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
@@ -641,7 +640,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 LogItem.SOURCE_RECORDER,
                 channel,
                 "Recording started.",
-                youtubedlAndroidReady ? "recorder=youtubedl-android" : "recorder=FFmpeg"
+                youtubedlAndroidReady
+                    ? "resolver=youtubedl-android, recorder=FFmpegKit"
+                    : "recorder=FFmpegKit"
             );
 
             if (youtubedlAndroidReady) {
@@ -1955,7 +1956,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     "videoId=" + videoId + ", " + attempt.describe() + ", input=" + describeUrlForLog(url)
                 );
 
-                return new ResolvedInput(url, videoId, "yt-dlp");
+                return new ResolvedInput(url, videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
             } catch (Exception e) {
                 lastError = e;
 

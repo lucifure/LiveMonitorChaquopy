@@ -79,6 +79,12 @@ public class SettingsActivity extends AppCompatActivity {
         title.setPadding(0, 0, 0, dp(10));
         root.addView(title);
 
+        Button logSettingsButton = new Button(this);
+        logSettingsButton.setAllCaps(false);
+        logSettingsButton.setText("Log Settings");
+        logSettingsButton.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
+        root.addView(logSettingsButton);
+
         pollIntervalInput = addEditText(root, "Poll interval seconds", "60");
 
         qualitySpinner = new Spinner(this);
