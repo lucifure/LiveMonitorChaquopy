@@ -45,6 +45,8 @@ public class SettingsActivity extends AppCompatActivity {
     private CheckBox waitForVideoCheckBox;
     private CheckBox liveFromStartCheckBox;
     private CheckBox skipUnavailableFragmentsCheckBox;
+    private EditText ytDlpCookieHeaderInput;
+    private EditText ytDlpCookiesPathInput;
     private CheckBox convertTsToMp4CheckBox;
     private CheckBox restoreBootCheckBox;
     private CheckBox batteryOptimizationCheckBox;
@@ -125,6 +127,16 @@ public class SettingsActivity extends AppCompatActivity {
             root,
             "Skip unavailable fragments and keep retrying"
         );
+        ytDlpCookieHeaderInput = addEditText(
+            root,
+            "YouTube Cookie header for yt-dlp (optional)",
+            "VISITOR_INFO1_LIVE=...; YSC=...; SID=..."
+        );
+        ytDlpCookiesPathInput = addEditText(
+            root,
+            "yt-dlp cookies.txt path (optional)",
+            "/data/user/0/com.livemonitor.app/files/youtube-cookies.txt"
+        );
         convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
 
         restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
@@ -187,6 +199,8 @@ public class SettingsActivity extends AppCompatActivity {
         waitForVideoCheckBox.setChecked(settings.isWaitForVideoEnabled());
         liveFromStartCheckBox.setChecked(settings.isLiveFromStartEnabled());
         skipUnavailableFragmentsCheckBox.setChecked(settings.isSkipUnavailableFragmentsEnabled());
+        ytDlpCookieHeaderInput.setText(settings.getYtDlpCookieHeader());
+        ytDlpCookiesPathInput.setText(settings.getYtDlpCookiesPath());
         convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
         restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
         batteryOptimizationCheckBox.setChecked(
@@ -217,6 +231,8 @@ public class SettingsActivity extends AppCompatActivity {
         settings.setWaitForVideoEnabled(waitForVideoCheckBox.isChecked());
         settings.setLiveFromStartEnabled(liveFromStartCheckBox.isChecked());
         settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
+        settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
+        settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
         settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
         settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
         settings.setRequestBatteryOptimizationExemption(

@@ -19,6 +19,8 @@ import java.util.List;
  */
 public class RecorderCommandBuilder {
 
+    public static final String EXTRACTOR_ARGS_NONE = "__live_monitor_no_extractor_args__";
+
     /**
      * Builds yt-dlp style arguments for recording a live video URL to a TS file.
      *
@@ -111,6 +113,7 @@ public class RecorderCommandBuilder {
          * Remote config driven request headers/client behavior.
          */
         addRemoteConfigArgs(args, remoteConfig);
+        addSettingsCookieArgs(args, settings);
 
         args.add(videoUrl);
 
@@ -127,6 +130,31 @@ public class RecorderCommandBuilder {
         String videoUrl,
         AppSettings settings,
         RemoteConfig remoteConfig
+    ) {
+        return buildYtDlpResolveArgs(videoUrl, settings, remoteConfig, "");
+    }
+
+    public List<String> buildYtDlpResolveArgs(
+        String videoUrl,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride
+    ) {
+        return buildYtDlpResolveArgs(
+            videoUrl,
+            settings,
+            remoteConfig,
+            extractorArgsOverride,
+            true
+        );
+    }
+
+    public List<String> buildYtDlpResolveArgs(
+        String videoUrl,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride,
+        boolean allowLiveFromStart
     ) {
         if (settings == null) {
             settings = new AppSettings();
@@ -148,7 +176,7 @@ public class RecorderCommandBuilder {
         args.add("-f");
         args.add(settings.buildYtDlpFormatSelector());
 
-        if (settings.isLiveFromStartEnabled()) {
+        if (allowLiveFromStart && settings.isLiveFromStartEnabled()) {
             args.add("--live-from-start");
         }
 
@@ -156,7 +184,8 @@ public class RecorderCommandBuilder {
             args.add("--skip-unavailable-fragments");
         }
 
-        addRemoteConfigArgs(args, remoteConfig);
+        addRemoteConfigArgs(args, remoteConfig, extractorArgsOverride);
+        addSettingsCookieArgs(args, settings);
 
         args.add("--get-url");
         args.add(videoUrl);
@@ -222,6 +251,14 @@ public class RecorderCommandBuilder {
     }
 
     private void addRemoteConfigArgs(List<String> args, RemoteConfig remoteConfig) {
+        addRemoteConfigArgs(args, remoteConfig, "");
+    }
+
+    private void addRemoteConfigArgs(
+        List<String> args,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride
+    ) {
         if (args == null || remoteConfig == null) {
             return;
         }
@@ -233,12 +270,15 @@ public class RecorderCommandBuilder {
             args.add(userAgent);
         }
 
-        String extractorArgs = remoteConfig.getYtDlpExtractorArgs();
+        boolean suppressExtractorArgs = EXTRACTOR_ARGS_NONE.equals(extractorArgsOverride);
+        String extractorArgs = isBlank(extractorArgsOverride) || suppressExtractorArgs
+            ? remoteConfig.getYtDlpExtractorArgs()
+            : extractorArgsOverride.trim();
 
-        if (!isBlank(extractorArgs)) {
+        if (!suppressExtractorArgs && !isBlank(extractorArgs)) {
             args.add("--extractor-args");
             args.add(extractorArgs);
-        } else {
+        } else if (!suppressExtractorArgs) {
             RemoteConfig.YoutubeClient client = remoteConfig.getPrimaryClient();
 
             if (client != null && client.isValid()) {
@@ -270,6 +310,27 @@ public class RecorderCommandBuilder {
             args.add("X-Goog-Api-Key:" + apiKey);
         }
 
+        String cookieHeader = remoteConfig.getYtDlpCookieHeader();
+
+        if (!isBlank(cookieHeader)) {
+            args.add("--add-header");
+            args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
+        }
+
+        String cookiesPath = remoteConfig.getYtDlpCookiesPath();
+
+        if (!isBlank(cookiesPath)) {
+            args.add("--cookies");
+            args.add(cookiesPath.trim());
+        }
+
+        String cookiesFromBrowser = remoteConfig.getYtDlpCookiesFromBrowser();
+
+        if (!isBlank(cookiesFromBrowser)) {
+            args.add("--cookies-from-browser");
+            args.add(cookiesFromBrowser.trim());
+        }
+
         String visitorDataUrl = remoteConfig.getVisitorDataUrl();
 
         if (!isBlank(visitorDataUrl)) {
@@ -283,9 +344,43 @@ public class RecorderCommandBuilder {
         }
     }
 
+    private String normalizeCookieHeader(String cookieHeader) {
+        String normalized = cookieHeader == null ? "" : cookieHeader.trim();
+
+        if (normalized.toLowerCase(java.util.Locale.US).startsWith("cookie:")) {
+            return normalized.substring("cookie:".length()).trim();
+        }
+
+        return normalized;
+    }
+
+    private void addSettingsCookieArgs(List<String> args, AppSettings settings) {
+        if (args == null || settings == null) {
+            return;
+        }
+
+        String cookieHeader = settings.getYtDlpCookieHeader();
+
+        if (!isBlank(cookieHeader)) {
+            args.add("--add-header");
+            args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
+        }
+
+        String cookiesPath = settings.getYtDlpCookiesPath();
+
+        if (!isBlank(cookiesPath)) {
+            args.add("--cookies");
+            args.add(cookiesPath.trim());
+        }
+    }
+
     private static String quoteForLog(String value) {
         if (value == null) {
             return "''";
+        }
+
+        if (value.toLowerCase(java.util.Locale.US).startsWith("cookie:")) {
+            return "Cookie:<redacted>";
         }
 
         if (value.isEmpty()) {
