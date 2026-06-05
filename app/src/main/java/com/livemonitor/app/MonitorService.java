@@ -11,6 +11,10 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.ReturnCode;
+import com.yausername.youtubedl_android.YoutubeDL;
+import com.yausername.youtubedl_android.YoutubeDLException;
+import com.yausername.youtubedl_android.YoutubeDLRequest;
+import com.yausername.youtubedl_android.mapper.VideoInfo;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -56,6 +60,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean networkAvailable = true;
     private volatile boolean shuttingDown = false;
     private volatile boolean ytDlpExecutableReady = false;
+    private volatile boolean youtubedlAndroidReady = false;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -64,6 +69,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYoutubedlAndroid();
         prepareYtDlpExecutable();
         notificationHelper = new NotificationHelper(this);
         fileManager = new RecordingFileManager(this);
@@ -96,6 +102,33 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
 
+    private void prepareYoutubedlAndroid() {
+        if (youtubedlAndroidReady) {
+            return;
+        }
+
+        try {
+            YoutubeDL.getInstance().init(getApplicationContext());
+            youtubedlAndroidReady = true;
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "youtubedl-android ready.",
+                "Bundled Android yt-dlp runtime initialized for private testing."
+            );
+        } catch (YoutubeDLException | RuntimeException e) {
+            youtubedlAndroidReady = false;
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "youtubedl-android setup failed.",
+                normalizeErrorMessage(e)
+            );
+        }
+    }
+
     private void prepareYtDlpExecutable() {
         YtDlpEnvironment.Result result = YtDlpEnvironment.prepare(this, remoteConfig);
 
@@ -103,20 +136,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        ytDlpExecutableReady = result.isSuccess();
-        ytDlpExecutableStatus = result.getMessage();
+        ytDlpExecutableReady = result.isSuccess() || youtubedlAndroidReady;
+        ytDlpExecutableStatus = youtubedlAndroidReady
+            ? "Using bundled youtubedl-android runtime."
+            : result.getMessage();
 
-        String details = result.getMessage();
+        String details = ytDlpExecutableStatus;
 
-        if (!isBlank(result.getExecutablePath())) {
+        if (!youtubedlAndroidReady && !isBlank(result.getExecutablePath())) {
             details += " path=" + result.getExecutablePath();
         }
 
         log(
-            result.isSuccess() ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            ytDlpExecutableReady ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
             LogItem.SOURCE_REMOTE_CONFIG,
             null,
-            result.isSuccess() ? "yt-dlp executable ready." : "yt-dlp executable needs setup.",
+            ytDlpExecutableReady ? "yt-dlp resolver ready." : "yt-dlp executable needs setup.",
             details
         );
     }
@@ -125,6 +160,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public int onStartCommand(Intent intent, int flags, int startId) {
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYoutubedlAndroid();
         prepareYtDlpExecutable();
         ensureForeground();
         acquireWakeLock();
@@ -1634,7 +1670,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LogItem.LEVEL_INFO,
             LogItem.SOURCE_RECORDER,
             channel,
-            "Trying yt-dlp stream resolver.",
+            youtubedlAndroidReady ? "Trying youtubedl-android stream resolver." : "Trying yt-dlp stream resolver.",
             "videoId="
                 + videoId
                 + ", timeoutSeconds="
@@ -1643,17 +1679,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 + shortenForLog(builder.toLogString(args), 500)
         );
 
-        String url = YtDlpRunner.resolvePlayableUrl(
-            args,
-            remoteConfig.getYtDlpResolveTimeoutSeconds(),
-            message -> log(
-                LogItem.LEVEL_DEBUG,
-                LogItem.SOURCE_RECORDER,
-                channel,
-                "yt-dlp output.",
-                shortenForLog(message, 500)
-            )
-        );
+        String url = youtubedlAndroidReady
+            ? resolvePlayableUrlWithYoutubedlAndroid(videoUrl, args, channel)
+            : YtDlpRunner.resolvePlayableUrl(
+                args,
+                remoteConfig.getYtDlpResolveTimeoutSeconds(),
+                message -> log(
+                    LogItem.LEVEL_DEBUG,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "yt-dlp output.",
+                    shortenForLog(message, 500)
+                )
+            );
 
         if (isBlank(url)) {
             throw new IllegalStateException("yt-dlp returned an empty stream URL.");
@@ -1668,6 +1706,57 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
 
         return new ResolvedInput(url, videoId, "yt-dlp");
+    }
+
+
+    private String resolvePlayableUrlWithYoutubedlAndroid(
+        String videoUrl,
+        List<String> args,
+        ChannelItem channel
+    ) throws Exception {
+        YoutubeDLRequest request = new YoutubeDLRequest(videoUrl);
+
+        for (int i = 1; i < args.size(); i++) {
+            String arg = args.get(i);
+
+            if ("--get-url".equals(arg) || videoUrl.equals(arg)) {
+                continue;
+            }
+
+            String value = i + 1 < args.size() ? args.get(i + 1) : null;
+
+            if (isYtDlpOptionWithValue(arg) && value != null && !value.startsWith("-")) {
+                request.addOption(arg, value);
+                i++;
+            } else {
+                request.addOption(arg);
+            }
+        }
+
+        VideoInfo streamInfo = YoutubeDL.getInstance().getInfo(request);
+        String url = streamInfo == null ? "" : streamInfo.getUrl();
+
+        log(
+            LogItem.LEVEL_DEBUG,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "youtubedl-android output.",
+            "resolvedUrl=" + describeUrlForLog(url)
+        );
+
+        return url;
+    }
+
+    private static boolean isYtDlpOptionWithValue(String arg) {
+        if (arg == null) {
+            return false;
+        }
+
+        return "-f".equals(arg)
+            || "--socket-timeout".equals(arg)
+            || "--user-agent".equals(arg)
+            || "--extractor-args".equals(arg)
+            || "--add-header".equals(arg);
     }
 
     private void logExtractorFallback(ChannelItem channel, String title, Exception error) {
@@ -2526,10 +2615,128 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             URL parsed = new URL(url);
-            return parsed.getProtocol() + "://" + parsed.getHost() + parsed.getPath();
+            StringBuilder builder = new StringBuilder();
+            builder.append(parsed.getProtocol()).append("://").append(parsed.getHost());
+
+            int port = parsed.getPort();
+
+            if (port >= 0) {
+                builder.append(':').append(port);
+            }
+
+            builder.append(redactUrlPathForLog(parsed.getPath()));
+
+            if (parsed.getQuery() != null && !parsed.getQuery().isEmpty()) {
+                builder.append('?').append(redactUrlQueryForLog(parsed.getQuery()));
+            }
+
+            return shortenForLog(builder.toString(), 320);
         } catch (Exception e) {
-            return shortenForLog(url, 160);
+            return shortenForLog(redactSensitiveUrlTextForLog(url), 160);
         }
+    }
+
+    private static String redactUrlPathForLog(String path) {
+        if (path == null || path.isEmpty()) {
+            return "";
+        }
+
+        String[] parts = path.split("/", -1);
+        StringBuilder builder = new StringBuilder(path.length());
+
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+                builder.append('/');
+            }
+
+            String part = parts[i];
+
+            if (i > 0 && shouldRedactUrlPathValue(parts[i - 1])) {
+                builder.append("<redacted>");
+            } else {
+                builder.append(part);
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private static boolean shouldRedactUrlPathValue(String previousPart) {
+        if (previousPart == null) {
+            return false;
+        }
+
+        String key = previousPart.toLowerCase();
+
+        return "ip".equals(key)
+            || "sig".equals(key)
+            || "signature".equals(key)
+            || "lsig".equals(key)
+            || "spc".equals(key)
+            || "bui".equals(key)
+            || "ei".equals(key)
+            || "expire".equals(key)
+            || "tx".equals(key)
+            || "txs".equals(key)
+            || "xpc".equals(key)
+            || "n".equals(key)
+            || "rqh".equals(key);
+    }
+
+    private static String redactUrlQueryForLog(String query) {
+        if (query == null || query.isEmpty()) {
+            return "";
+        }
+
+        String[] params = query.split("&", -1);
+        StringBuilder builder = new StringBuilder(query.length());
+
+        for (int i = 0; i < params.length; i++) {
+            if (i > 0) {
+                builder.append('&');
+            }
+
+            String param = params[i];
+            int equals = param.indexOf('=');
+            String key = equals >= 0 ? param.substring(0, equals) : param;
+
+            builder.append(key);
+
+            if (equals >= 0) {
+                builder.append('=');
+                builder.append(shouldRedactUrlQueryValue(key) ? "<redacted>" : param.substring(equals + 1));
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private static boolean shouldRedactUrlQueryValue(String key) {
+        if (key == null) {
+            return false;
+        }
+
+        String normalized = key.toLowerCase();
+
+        return normalized.contains("sig")
+            || "ip".equals(normalized)
+            || "spc".equals(normalized)
+            || "bui".equals(normalized)
+            || "expire".equals(normalized)
+            || "ei".equals(normalized)
+            || "xpc".equals(normalized)
+            || "n".equals(normalized);
+    }
+
+    private static String redactSensitiveUrlTextForLog(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+            .replaceAll("(?i)(/ip/)[^/?#]+", "$1<redacted>")
+            .replaceAll("(?i)(/(?:sig|signature|lsig|spc|bui|ei|expire|tx|txs|xpc|n|rqh)/)[^/?#]+", "$1<redacted>")
+            .replaceAll("(?i)([?&](?:ip|sig|signature|lsig|spc|bui|ei|expire|xpc|n)=)[^&#]+", "$1<redacted>");
     }
 
     private static String normalizeErrorMessage(Exception e) {

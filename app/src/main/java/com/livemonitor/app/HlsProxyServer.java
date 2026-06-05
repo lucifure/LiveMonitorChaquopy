@@ -990,16 +990,27 @@ public class HlsProxyServer {
         int sq = remoteUrl.indexOf("/sq/");
 
         if (sq >= 0) {
-            return remoteUrl.substring(sq);
+            return redactSensitiveUrlText(remoteUrl.substring(sq));
         }
 
         int itag = remoteUrl.indexOf("/itag/");
 
         if (itag >= 0) {
-            return remoteUrl.substring(itag);
+            return shorten(redactSensitiveUrlText(remoteUrl.substring(itag)), 160);
         }
 
-        return shorten(remoteUrl, 160);
+        return shorten(redactSensitiveUrlText(remoteUrl), 160);
+    }
+
+    private String redactSensitiveUrlText(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+            .replaceAll("(?i)(/ip/)[^/?#]+", "$1<redacted>")
+            .replaceAll("(?i)(/(?:sig|signature|lsig|spc|bui|ei|expire|tx|txs|xpc|n|rqh)/)[^/?#]+", "$1<redacted>")
+            .replaceAll("(?i)([?&](?:ip|sig|signature|lsig|spc|bui|ei|expire|xpc|n)=)[^&#]+", "$1<redacted>");
     }
 
     private String shorten(String value, int max) {
