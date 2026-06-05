@@ -49,14 +49,22 @@ jobs:
 
       - name: Verify requested feature files
         run: |
-          test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-          test -f app/src/main/java/com/livemonitor/app/YouTubeUrlUtils.java
-          grep -q 'delete.setText("Delete")' app/src/main/java/com/livemonitor/app/ChannelAdapter.java
-          grep -q 'deleteButton.setText("Delete")' app/src/main/java/com/livemonitor/app/RecordingAdapter.java
-          grep -q 'buildDebugSummary' app/src/main/java/com/livemonitor/app/RemoteConfig.java
-          grep -q 'markFetchedNow' app/src/main/java/com/livemonitor/app/RemoteConfig.java
-          grep -q 'ACTION_DOWNLOAD_VIDEO' app/src/main/java/com/livemonitor/app/LiveMonitorActions.java
+          set -euo pipefail
+          require_file() {
+            test -f "$1" || { echo "Missing required file: $1"; exit 1; }
+          }
+          require_text() {
+            grep -q "$1" "$2" || { echo "Missing required text '$1' in $2"; exit 1; }
+          }
+
+          require_file app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          require_file app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          require_file app/src/main/java/com/livemonitor/app/YouTubeUrlUtils.java
+          require_text 'delete.setText("Delete")' app/src/main/java/com/livemonitor/app/ChannelAdapter.java
+          require_text 'deleteButton.setText("Delete")' app/src/main/java/com/livemonitor/app/RecordingAdapter.java
+          require_text 'buildDebugSummary' app/src/main/java/com/livemonitor/app/RemoteConfig.java
+          require_text 'markFetchedNow' app/src/main/java/com/livemonitor/app/RemoteConfig.java
+          require_text 'ACTION_DOWNLOAD_VIDEO' app/src/main/java/com/livemonitor/app/LiveMonitorActions.java
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
