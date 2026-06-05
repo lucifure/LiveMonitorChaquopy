@@ -217,7 +217,7 @@ public class RecordingAdapter extends BaseAdapter {
 
         Button deleteButton = new Button(context);
         deleteButton.setAllCaps(false);
-        deleteButton.setText("Cancel");
+        deleteButton.setText("Delete");
 
         buttonRow.addView(openButton);
 
@@ -298,7 +298,11 @@ public class RecordingAdapter extends BaseAdapter {
         holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setText(recording.isPausedByUser() ? "Resume" : "Pause");
         holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
-        holder.deleteButton.setText(downloadedMode ? "🗑 Delete" : "✕ Cancel");
+        if (downloadedMode) {
+            holder.deleteButton.setText("Delete");
+        } else {
+            holder.deleteButton.setText("Cancel");
+        }
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
