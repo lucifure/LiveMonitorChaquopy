@@ -27,6 +27,7 @@ import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1664,48 +1665,144 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         RecorderCommandBuilder builder = new RecorderCommandBuilder();
-        List<String> args = builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig);
+        List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, videoUrl);
+        Exception lastError = null;
 
-        log(
-            LogItem.LEVEL_INFO,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            youtubedlAndroidReady ? "Trying youtubedl-android stream resolver." : "Trying yt-dlp stream resolver.",
-            "videoId="
-                + videoId
-                + ", timeoutSeconds="
-                + remoteConfig.getYtDlpResolveTimeoutSeconds()
-                + ", command="
-                + shortenForLog(builder.toLogString(args), 500)
-        );
+        for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
+            YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
-        String url = youtubedlAndroidReady
-            ? resolvePlayableUrlWithYoutubedlAndroid(videoUrl, args, channel)
-            : YtDlpRunner.resolvePlayableUrl(
-                args,
-                remoteConfig.getYtDlpResolveTimeoutSeconds(),
-                message -> log(
-                    LogItem.LEVEL_DEBUG,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "yt-dlp output.",
-                    shortenForLog(message, 500)
-                )
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                youtubedlAndroidReady ? "Trying youtubedl-android stream resolver." : "Trying yt-dlp stream resolver.",
+                "videoId="
+                    + videoId
+                    + ", attempt="
+                    + (attemptIndex + 1)
+                    + "/"
+                    + attempts.size()
+                    + ", "
+                    + attempt.describe()
+                    + ", timeoutSeconds="
+                    + remoteConfig.getYtDlpResolveTimeoutSeconds()
+                    + ", command="
+                    + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
-        if (isBlank(url)) {
-            throw new IllegalStateException("yt-dlp returned an empty stream URL.");
+            try {
+                String url = youtubedlAndroidReady
+                    ? resolvePlayableUrlWithYoutubedlAndroid(videoUrl, attempt.args, channel)
+                    : YtDlpRunner.resolvePlayableUrl(
+                        attempt.args,
+                        remoteConfig.getYtDlpResolveTimeoutSeconds(),
+                        message -> log(
+                            LogItem.LEVEL_DEBUG,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            "yt-dlp output.",
+                            shortenForLog(message, 500)
+                        )
+                    );
+
+                if (isBlank(url)) {
+                    throw new IllegalStateException("yt-dlp returned an empty stream URL.");
+                }
+
+                log(
+                    LogItem.LEVEL_SUCCESS,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "yt-dlp stream resolver succeeded.",
+                    "videoId=" + videoId + ", " + attempt.describe() + ", input=" + describeUrlForLog(url)
+                );
+
+                return new ResolvedInput(url, videoId, "yt-dlp");
+            } catch (Exception e) {
+                lastError = e;
+
+                if (attemptIndex + 1 < attempts.size()) {
+                    log(
+                        LogItem.LEVEL_WARNING,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "yt-dlp resolver attempt failed; trying next YouTube client.",
+                        "videoId=" + videoId + ", " + attempt.describe() + ", error=" + normalizeErrorMessage(e)
+                    );
+                }
+            }
         }
 
-        log(
-            LogItem.LEVEL_SUCCESS,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            "yt-dlp stream resolver succeeded.",
-            "videoId=" + videoId + ", input=" + describeUrlForLog(url)
-        );
+        if (lastError != null) {
+            throw lastError;
+        }
 
-        return new ResolvedInput(url, videoId, "yt-dlp");
+        throw new IllegalStateException("yt-dlp did not run any resolver attempts.");
+    }
+
+    private List<YtDlpResolveAttempt> buildYtDlpResolveAttempts(
+        RecorderCommandBuilder builder,
+        String videoUrl
+    ) {
+        List<YtDlpResolveAttempt> attempts = new ArrayList<>();
+        LinkedHashSet<String> extractorArgs = new LinkedHashSet<>();
+        String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
+
+        if (!isBlank(configuredExtractorArgs)) {
+            extractorArgs.add(configuredExtractorArgs.trim());
+        } else if (remoteConfig != null) {
+            RemoteConfig.YoutubeClient primaryClient = remoteConfig.getPrimaryClient();
+
+            if (primaryClient != null && primaryClient.isValid()) {
+                extractorArgs.add(buildYtDlpPlayerClientArg(primaryClient.getClientName()));
+            }
+        }
+
+        /*
+         * YouTube can return "No video formats found" for one yt-dlp player
+         * client while another client remains playable. The Java HLS resolver
+         * already rotates through RemoteConfig clients; mirror that behavior for
+         * yt-dlp-first so it does not give up after the default WEB client.
+         */
+        addPreferredYtDlpClient(extractorArgs, "ANDROID");
+        addPreferredYtDlpClient(extractorArgs, "IOS");
+
+        if (remoteConfig != null) {
+            for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
+                if (client != null && client.isValid()) {
+                    addPreferredYtDlpClient(extractorArgs, client.getClientName());
+                }
+            }
+        }
+
+        if (extractorArgs.isEmpty()) {
+            attempts.add(new YtDlpResolveAttempt(
+                builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig),
+                "default extractor args"
+            ));
+            return attempts;
+        }
+
+        for (String extractorArg : extractorArgs) {
+            attempts.add(new YtDlpResolveAttempt(
+                builder.buildYtDlpResolveArgs(videoUrl, settings, remoteConfig, extractorArg),
+                "extractorArgs=" + extractorArg
+            ));
+        }
+
+        return attempts;
+    }
+
+    private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
+        if (extractorArgs == null || isBlank(clientName)) {
+            return;
+        }
+
+        extractorArgs.add(buildYtDlpPlayerClientArg(clientName));
+    }
+
+    private String buildYtDlpPlayerClientArg(String clientName) {
+        return "youtube:player_client=" + clientName.trim().toLowerCase();
     }
 
 
@@ -2949,6 +3046,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         FINALIZE,
         RESTARTED,
         DEFERRED
+    }
+
+    private static class YtDlpResolveAttempt {
+        final List<String> args;
+        final String description;
+
+        YtDlpResolveAttempt(List<String> args, String description) {
+            this.args = args;
+            this.description = description == null ? "" : description;
+        }
+
+        String describe() {
+            return description;
+        }
     }
 
     private static class ResolvedInput {

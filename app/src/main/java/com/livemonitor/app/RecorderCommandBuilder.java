@@ -128,6 +128,15 @@ public class RecorderCommandBuilder {
         AppSettings settings,
         RemoteConfig remoteConfig
     ) {
+        return buildYtDlpResolveArgs(videoUrl, settings, remoteConfig, "");
+    }
+
+    public List<String> buildYtDlpResolveArgs(
+        String videoUrl,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride
+    ) {
         if (settings == null) {
             settings = new AppSettings();
         }
@@ -156,7 +165,7 @@ public class RecorderCommandBuilder {
             args.add("--skip-unavailable-fragments");
         }
 
-        addRemoteConfigArgs(args, remoteConfig);
+        addRemoteConfigArgs(args, remoteConfig, extractorArgsOverride);
 
         args.add("--get-url");
         args.add(videoUrl);
@@ -222,6 +231,14 @@ public class RecorderCommandBuilder {
     }
 
     private void addRemoteConfigArgs(List<String> args, RemoteConfig remoteConfig) {
+        addRemoteConfigArgs(args, remoteConfig, "");
+    }
+
+    private void addRemoteConfigArgs(
+        List<String> args,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride
+    ) {
         if (args == null || remoteConfig == null) {
             return;
         }
@@ -233,7 +250,9 @@ public class RecorderCommandBuilder {
             args.add(userAgent);
         }
 
-        String extractorArgs = remoteConfig.getYtDlpExtractorArgs();
+        String extractorArgs = isBlank(extractorArgsOverride)
+            ? remoteConfig.getYtDlpExtractorArgs()
+            : extractorArgsOverride.trim();
 
         if (!isBlank(extractorArgs)) {
             args.add("--extractor-args");
