@@ -66,3 +66,81 @@ dependencies {
     // FFmpegKit maintained Maven Central fork.
     implementation 'com.mrljdx:ffmpeg-kit-full:6.1.4'
 }
+
+tasks.register('generateLauncherPngs') {
+    description = 'Generates launcher PNG files from text-based build logic before Android resource processing.'
+    outputs.dir file('src/main/res')
+    outputs.upToDateWhen { false }
+
+    doLast {
+        def densities = [
+                'mipmap-mdpi'   : 48,
+                'mipmap-hdpi'   : 72,
+                'mipmap-xhdpi'  : 96,
+                'mipmap-xxhdpi' : 144,
+                'mipmap-xxxhdpi': 192,
+        ]
+
+        densities.each { folder, size ->
+            def dir = file("src/main/res/${folder}")
+            dir.mkdirs()
+            writeLauncherPng(new File(dir, 'ic_launcher.png'), size, false)
+            writeLauncherPng(new File(dir, 'ic_launcher_round.png'), size, true)
+        }
+    }
+}
+
+def writeLauncherPng(File outputFile, int size, boolean roundIcon) {
+    def image = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+    def graphics = image.createGraphics()
+    graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+    graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+
+    def background = new java.awt.GradientPaint(0, 0, new java.awt.Color(18, 31, 50), size, size, new java.awt.Color(13, 71, 161))
+    graphics.setPaint(background)
+    if (roundIcon) {
+        graphics.fillOval(((int) Math.round(size * 0.04f)), ((int) Math.round(size * 0.04f)), ((int) Math.round(size * 0.92f)), ((int) Math.round(size * 0.92f)))
+    } else {
+        graphics.fillRoundRect(0, 0, size, size, ((int) Math.round(size * 0.20f)), ((int) Math.round(size * 0.20f)))
+    }
+
+    int screenX = ((int) Math.round(size * 0.17f))
+    int screenY = ((int) Math.round(size * 0.28f))
+    int screenW = ((int) Math.round(size * 0.66f))
+    int screenH = ((int) Math.round(size * 0.42f))
+    int stroke = Math.max(2, ((int) Math.round(size * 0.045f)))
+
+    graphics.setColor(new java.awt.Color(16, 32, 51))
+    graphics.fillRoundRect(screenX, screenY, screenW, screenH, stroke * 2, stroke * 2)
+    graphics.setStroke(new java.awt.BasicStroke(stroke, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    graphics.setColor(java.awt.Color.WHITE)
+    graphics.drawRoundRect(screenX, screenY, screenW, screenH, stroke * 2, stroke * 2)
+
+    int[][] points = [
+            [((int) Math.round(size * 0.25f)), ((int) Math.round(size * 0.52f))],
+            [((int) Math.round(size * 0.34f)), ((int) Math.round(size * 0.52f))],
+            [((int) Math.round(size * 0.39f)), ((int) Math.round(size * 0.40f))],
+            [((int) Math.round(size * 0.48f)), ((int) Math.round(size * 0.61f))],
+            [((int) Math.round(size * 0.55f)), ((int) Math.round(size * 0.45f))],
+            [((int) Math.round(size * 0.62f)), ((int) Math.round(size * 0.52f))],
+            [((int) Math.round(size * 0.75f)), ((int) Math.round(size * 0.52f))],
+    ]
+    graphics.setStroke(new java.awt.BasicStroke(Math.max(3, ((int) Math.round(size * 0.045f))), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    graphics.setColor(new java.awt.Color(0, 230, 118))
+    for (int i = 0; i < points.length - 1; i++) {
+        graphics.drawLine(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+    }
+
+    int badge = Math.max(6, ((int) Math.round(size * 0.085f)))
+    graphics.setColor(new java.awt.Color(255, 61, 0))
+    graphics.fillOval(((int) Math.round(size * 0.70f)), ((int) Math.round(size * 0.17f)), badge, badge)
+
+    graphics.dispose()
+    javax.imageio.ImageIO.write(image, 'png', outputFile)
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preBuild' || task.name.startsWith('merge') || task.name.startsWith('process') || task.name.startsWith('lint')) {
+        task.dependsOn tasks.named('generateLauncherPngs')
+    }
+}
