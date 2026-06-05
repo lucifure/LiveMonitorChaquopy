@@ -120,6 +120,46 @@ public class RecorderCommandBuilder {
         return Collections.unmodifiableList(args);
     }
 
+    /**
+     * Builds yt-dlp record arguments with an explicit extractor-args override.
+     * Used by youtubedl-android retries so failed clients can be rotated without
+     * giving up on the active recording.
+     */
+    public List<String> buildYtDlpRecordArgs(
+        String videoUrl,
+        String outputTsPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride,
+        boolean allowLiveFromStart
+    ) {
+        if (settings == null) {
+            settings = new AppSettings();
+        }
+
+        if (remoteConfig == null) {
+            remoteConfig = new RemoteConfig();
+        }
+
+        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(videoUrl, outputTsPath, settings, remoteConfig));
+
+        if (!allowLiveFromStart) {
+            args.remove("--live-from-start");
+        }
+
+        if (!isBlank(extractorArgsOverride)) {
+            removeOptionAndValue(args, "--extractor-args");
+
+            if (!EXTRACTOR_ARGS_NONE.equals(extractorArgsOverride)) {
+                int insertIndex = Math.max(1, args.size() - 1);
+                args.add(insertIndex, "--extractor-args");
+                args.add(insertIndex + 1, extractorArgsOverride.trim());
+            }
+        }
+
+        return Collections.unmodifiableList(args);
+    }
+
 
     /**
      * Builds yt-dlp arguments for resolving one playable media URL.
@@ -371,6 +411,24 @@ public class RecorderCommandBuilder {
         if (!isBlank(cookiesPath)) {
             args.add("--cookies");
             args.add(cookiesPath.trim());
+        }
+    }
+
+    private void removeOptionAndValue(List<String> args, String option) {
+        if (args == null || isBlank(option)) {
+            return;
+        }
+
+        for (int i = args.size() - 1; i >= 0; i--) {
+            if (!option.equals(args.get(i))) {
+                continue;
+            }
+
+            args.remove(i);
+
+            if (i < args.size() && !args.get(i).startsWith("-")) {
+                args.remove(i);
+            }
         }
     }
 
