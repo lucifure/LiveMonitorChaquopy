@@ -2,6 +2,8 @@ package com.livemonitor.app;
 
 import android.app.Service;
 import android.content.Intent;
+import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -24,7 +26,9 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
@@ -426,6 +430,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         if (recording.isCompleted()) {
+            copyCompletedRecordingToSelectedFolder(recording, null);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             return;
@@ -433,8 +438,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
+            copyCompletedRecordingToSelectedFolder(recording, null);
         } else if (recording.hasExistingTempTsFile()) {
             recording.markCompleted(recording.getTempTsPath());
+            copyCompletedRecordingToSelectedFolder(recording, null);
         } else {
             recording.markStoppedByUser();
         }
@@ -1303,6 +1310,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void convertRecording(RecordingItem recording, ChannelItem channel) {
         if (!settings.isConvertTsToMp4()) {
             recording.markCompleted(recording.getTempTsPath());
+            copyCompletedRecordingToSelectedFolder(recording, null);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             return;
@@ -1329,6 +1337,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             if (ReturnCode.isSuccess(code)) {
                 recording.markCompleted(recording.getFinalMp4Path());
+                copyCompletedRecordingToSelectedFolder(recording, channel);
                 recording.hideFromDownloading();
                 for (String segmentPath : tempSegments) {
                     safeDelete(segmentPath);
@@ -1344,6 +1353,65 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         storage.upsertRecording(recording);
+    }
+
+    private void copyCompletedRecordingToSelectedFolder(RecordingItem recording, ChannelItem channel) {
+        if (recording == null || !fileManager.hasCustomSaveLocation()) {
+            return;
+        }
+
+        Uri folderUri = fileManager.getCustomSaveLocationUri();
+        String folderName = fileManager.getCustomSaveLocationDisplayName();
+        File source = new File(recording.getBestPlayablePath());
+
+        if (folderUri == null || !source.exists() || !source.isFile()) {
+            return;
+        }
+
+        recording.markCopyingToFolder(folderName);
+        storage.upsertRecording(recording);
+        broadcastRecordingUpdated("Copying to selected folder…");
+        log(LogItem.LEVEL_INFO, LogItem.SOURCE_STORAGE, channel, "Copying to selected folder.", folderName);
+
+        try {
+            Uri parentUri = DocumentsContract.buildDocumentUriUsingTree(
+                folderUri,
+                DocumentsContract.getTreeDocumentId(folderUri)
+            );
+            Uri destination = DocumentsContract.createDocument(
+                getContentResolver(),
+                parentUri,
+                source.getName().endsWith(".ts") ? "video/mp2t" : "video/mp4",
+                source.getName()
+            );
+
+            if (destination == null) {
+                throw new IllegalStateException("Could not create destination file.");
+            }
+
+            try (InputStream input = new FileInputStream(source);
+                 OutputStream output = getContentResolver().openOutputStream(destination, "w")) {
+                if (output == null) {
+                    throw new IllegalStateException("Could not open destination file.");
+                }
+
+                byte[] buffer = new byte[1024 * 64];
+                int read;
+
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+
+            recording.markCompleted(source.getAbsolutePath());
+            recording.setSavedToDisplay(folderName);
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_STORAGE, channel, "Saved to selected folder.", folderName);
+            broadcastRecordingUpdated("Saved to: " + folderName);
+        } catch (Exception e) {
+            recording.markCompleted(source.getAbsolutePath());
+            recording.setSavedToDisplay("App storage (folder copy failed: " + normalizeErrorMessage(e) + ")");
+            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Folder copy failed.", normalizeErrorMessage(e));
+        }
     }
 
 

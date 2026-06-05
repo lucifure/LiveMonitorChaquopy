@@ -8,6 +8,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.net.Uri;
 import android.view.View;
 import android.widget.PopupMenu;
 import android.widget.Toast;
@@ -141,8 +142,31 @@ public class MainActivity extends AppCompatActivity {
     private void setupClickListeners() {
         binding.btnAddChannel.setOnClickListener(v -> addChannelFromInput());
 
-        binding.navMonitoring.setOnClickListener(v -> showMonitoringTab());
-        binding.navDownloads.setOnClickListener(v -> showDownloadsTab());
+        binding.bottomNavigation.setOnItemSelectedListener(item -> {
+            int itemId = item.getItemId();
+
+            if (itemId == R.id.nav_monitoring) {
+                showMonitoringTab();
+                return true;
+            }
+
+            if (itemId == R.id.nav_downloading) {
+                showDownloadsTab();
+                return true;
+            }
+
+            if (itemId == R.id.nav_files) {
+                startActivity(new Intent(this, DownloadedFilesActivity.class));
+                return true;
+            }
+
+            if (itemId == R.id.nav_settings) {
+                startActivity(new Intent(this, SettingsActivity.class));
+                return true;
+            }
+
+            return false;
+        });
 
         binding.btnMenu.setOnClickListener(v -> showOverflowMenu());
     }
@@ -395,17 +419,24 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
         startServiceCompat(intent);
 
-        if (recording.hasExistingFinalMp4File()) {
-            recording.markCompleted(recording.getFinalMp4Path());
-        } else if (recording.hasExistingTempTsFile()) {
-            recording.markCompleted(recording.getTempTsPath());
+        AppSettings settings = storage.loadSettings();
+        boolean customFolder = !settings.getSaveLocationUri().trim().isEmpty();
+
+        if (customFolder) {
+            recording.markCopyingToFolder(settings.getSaveLocationDisplayName());
+        } else {
+            if (recording.hasExistingFinalMp4File()) {
+                recording.markCompleted(recording.getFinalMp4Path());
+            } else if (recording.hasExistingTempTsFile()) {
+                recording.markCompleted(recording.getTempTsPath());
+            }
+            recording.hideFromDownloading();
         }
 
-        recording.hideFromDownloading();
         storage.upsertRecording(recording);
 
         refreshAll();
-        Toast.makeText(this, "Recording stopped and saved to Downloaded Files.", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Copying to selected folder…", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {
@@ -508,10 +539,6 @@ public class MainActivity extends AppCompatActivity {
         binding.monitoringPanel.setVisibility(View.VISIBLE);
         binding.downloadsPanel.setVisibility(View.GONE);
 
-        binding.navMonitoringText.setTextColor(getColorCompat("#00A884"));
-        binding.navMonitoringIcon.setTextColor(getColorCompat("#00A884"));
-        binding.navDownloadsText.setTextColor(getColorCompat("#667781"));
-        binding.navDownloadsIcon.setTextColor(getColorCompat("#667781"));
 
         refreshAll();
     }
@@ -522,10 +549,6 @@ public class MainActivity extends AppCompatActivity {
         binding.monitoringPanel.setVisibility(View.GONE);
         binding.downloadsPanel.setVisibility(View.VISIBLE);
 
-        binding.navMonitoringText.setTextColor(getColorCompat("#667781"));
-        binding.navMonitoringIcon.setTextColor(getColorCompat("#667781"));
-        binding.navDownloadsText.setTextColor(getColorCompat("#00A884"));
-        binding.navDownloadsIcon.setTextColor(getColorCompat("#00A884"));
 
         refreshAll();
     }
@@ -536,6 +559,8 @@ public class MainActivity extends AppCompatActivity {
 
         List<RecordingItem> recordings = loadVisibleDownloadingItems();
         recordingAdapter.setRecordings(recordings);
+        updateStorageHealthCard();
+        updateDownloadSummary(recordings);
 
         int monitoringCount = 0;
 
@@ -584,6 +609,41 @@ public class MainActivity extends AppCompatActivity {
         }
 
         return result;
+    }
+
+    private void updateStorageHealthCard() {
+        AppSettings settings = storage.loadSettings();
+        java.io.File externalDir = getExternalFilesDir(null);
+        java.io.File baseDir = externalDir == null ? getFilesDir() : externalDir;
+        String freeSpace = RecordingProgressTracker.formatBytes(baseDir.getUsableSpace());
+        String folder = settings.getSaveLocationDisplayName();
+        boolean hasCustomFolder = !settings.getSaveLocationUri().trim().isEmpty();
+        String permission = hasCustomFolder && hasPersistedWritePermission(settings.getSaveLocationUri())
+            ? "write permission valid"
+            : hasCustomFolder ? "write permission needs reselect" : "using app storage";
+        binding.storageHealthText.setText("Free space: " + freeSpace + "\nSelected folder: " + folder + "\nFolder status: " + permission);
+    }
+
+    private void updateDownloadSummary(List<RecordingItem> recordings) {
+        int active = recordings == null ? 0 : recordings.size();
+        java.io.File externalDir = getExternalFilesDir(null);
+        java.io.File baseDir = externalDir == null ? getFilesDir() : externalDir;
+        String freeSpace = RecordingProgressTracker.formatBytes(baseDir.getUsableSpace());
+        binding.downloadSummaryText.setText(active + " active downloads · live speed unavailable · " + freeSpace + " free");
+    }
+
+    private boolean hasPersistedWritePermission(String uriString) {
+        try {
+            Uri uri = Uri.parse(uriString);
+            for (android.content.UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
+                if (permission.isWritePermission() && permission.getUri().equals(uri)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
     }
 
     private boolean shouldShowHeaderStatus(String action, String message) {

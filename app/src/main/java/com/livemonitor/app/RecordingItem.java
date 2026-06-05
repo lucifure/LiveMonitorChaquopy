@@ -37,6 +37,7 @@ public class RecordingItem {
     public static final String STATUS_PAUSED_NETWORK = "PAUSED_NETWORK";
     public static final String STATUS_PAUSED_BY_USER = "PAUSED_BY_USER";
     public static final String STATUS_CONVERTING = "CONVERTING";
+    public static final String STATUS_COPYING = "COPYING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";
     public static final String STATUS_STOPPED_BY_USER = "STOPPED_BY_USER";
@@ -64,6 +65,7 @@ public class RecordingItem {
     private static final String JSON_FINISHED_AT = "finishedAt";
     private static final String JSON_CONVERTED_AT = "convertedAt";
     private static final String JSON_HIDDEN_FROM_DOWNLOADING = "hiddenFromDownloading";
+    private static final String JSON_SAVED_TO_DISPLAY = "savedToDisplay";
 
     private String id;
     private String channelId;
@@ -87,6 +89,7 @@ public class RecordingItem {
     private long finishedAt;
     private long convertedAt;
     private boolean hiddenFromDownloading;
+    private String savedToDisplay;
 
     public RecordingItem(
         String channelId,
@@ -123,6 +126,7 @@ public class RecordingItem {
         this.finishedAt = 0L;
         this.convertedAt = 0L;
         this.hiddenFromDownloading = false;
+        this.savedToDisplay = "";
     }
 
     public RecordingItem(
@@ -147,7 +151,8 @@ public class RecordingItem {
         long updatedAt,
         long finishedAt,
         long convertedAt,
-        boolean hiddenFromDownloading
+        boolean hiddenFromDownloading,
+        String savedToDisplay
     ) {
         this.id = isBlank(id) ? UUID.randomUUID().toString() : id;
         this.channelId = nullToEmpty(channelId);
@@ -171,6 +176,7 @@ public class RecordingItem {
         this.finishedAt = Math.max(0L, finishedAt);
         this.convertedAt = Math.max(0L, convertedAt);
         this.hiddenFromDownloading = hiddenFromDownloading;
+        this.savedToDisplay = nullToEmpty(savedToDisplay);
     }
 
     public static RecordingItem fromJson(JSONObject json) throws JSONException {
@@ -200,7 +206,8 @@ public class RecordingItem {
             json.optLong(JSON_UPDATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_FINISHED_AT, 0L),
             json.optLong(JSON_CONVERTED_AT, 0L),
-            json.optBoolean(JSON_HIDDEN_FROM_DOWNLOADING, false)
+            json.optBoolean(JSON_HIDDEN_FROM_DOWNLOADING, false),
+            json.optString(JSON_SAVED_TO_DISPLAY, "")
         );
     }
 
@@ -233,6 +240,7 @@ public class RecordingItem {
         json.put(JSON_FINISHED_AT, finishedAt);
         json.put(JSON_CONVERTED_AT, convertedAt);
         json.put(JSON_HIDDEN_FROM_DOWNLOADING, hiddenFromDownloading);
+        json.put(JSON_SAVED_TO_DISPLAY, savedToDisplay);
 
         return json;
     }
@@ -272,6 +280,16 @@ public class RecordingItem {
         progressPercent = 95;
         errorMessage = "";
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
+        touch();
+    }
+
+    public void markCopyingToFolder(String folderDisplayName) {
+        status = STATUS_COPYING;
+        progressPercent = Math.max(progressPercent, 96);
+        errorMessage = "Copying to selected folder…";
+        if (!isBlank(folderDisplayName)) {
+            savedToDisplay = folderDisplayName.trim();
+        }
         touch();
     }
 
@@ -330,7 +348,8 @@ public class RecordingItem {
             || STATUS_RECORDING.equals(status)
             || STATUS_PAUSED_NETWORK.equals(status)
             || STATUS_PAUSED_BY_USER.equals(status)
-            || STATUS_CONVERTING.equals(status);
+            || STATUS_CONVERTING.equals(status)
+            || STATUS_COPYING.equals(status);
     }
 
     public boolean isFinished() {
@@ -344,12 +363,21 @@ public class RecordingItem {
         return STATUS_COMPLETED.equals(status);
     }
 
+    public String getSavedToDisplay() {
+        return savedToDisplay == null ? "" : savedToDisplay;
+    }
+
+    public void setSavedToDisplay(String savedToDisplay) {
+        this.savedToDisplay = nullToEmpty(savedToDisplay);
+        touch();
+    }
+
     public boolean isPausedByUser() {
         return STATUS_PAUSED_BY_USER.equals(status);
     }
 
     public boolean isPlayableCompletedFile() {
-        return isCompleted() && (hasExistingFinalMp4File() || hasExistingTempTsFile());
+        return isFinished() && (hasExistingFinalMp4File() || hasExistingTempTsFile());
     }
 
     public boolean isRecoverable() {

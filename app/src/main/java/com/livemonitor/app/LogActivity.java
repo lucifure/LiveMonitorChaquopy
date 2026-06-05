@@ -4,6 +4,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.os.Bundle;
+import android.graphics.Color;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -49,12 +50,14 @@ public class LogActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(12), dp(12), dp(12));
+        root.setBackgroundColor(Color.rgb(15, 15, 15));
 
         TextView title = new TextView(this);
         title.setText("Global Log");
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(0, 0, 0, dp(8));
+        title.setTextColor(Color.WHITE);
         root.addView(
             title,
             new LinearLayout.LayoutParams(
@@ -66,6 +69,12 @@ public class LogActivity extends AppCompatActivity {
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.END);
+
+        TextView filters = new TextView(this);
+        filters.setText("All   Errors   Warnings   Success");
+        filters.setTextColor(Color.rgb(190, 190, 190));
+        filters.setPadding(0, 0, 0, dp(8));
+        root.addView(filters);
 
         Button copyButton = new Button(this);
         copyButton.setAllCaps(false);
@@ -98,10 +107,12 @@ public class LogActivity extends AppCompatActivity {
         emptyView.setText("No log entries yet.");
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
+        emptyView.setTextColor(Color.rgb(102, 102, 102));
 
         listView = new ListView(this);
         listView.setAdapter(adapter);
         listView.setEmptyView(emptyView);
+        listView.setBackgroundColor(Color.rgb(15, 15, 15));
 
         root.addView(
             emptyView,

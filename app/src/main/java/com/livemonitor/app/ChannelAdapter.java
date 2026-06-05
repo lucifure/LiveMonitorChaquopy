@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -135,14 +136,14 @@ public class ChannelAdapter extends BaseAdapter {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setBackgroundColor(Color.WHITE);
+        root.setBackground(rounded(Color.rgb(26, 26, 26), dp(16), Color.rgb(42, 42, 42)));
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(context);
-        title.setTextColor(Color.rgb(25, 25, 25));
+        title.setTextColor(Color.WHITE);
         title.setTextSize(16);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setSingleLine(false);
@@ -162,13 +163,13 @@ public class ChannelAdapter extends BaseAdapter {
         topRow.addView(statusBadge);
 
         TextView url = new TextView(context);
-        url.setTextColor(Color.rgb(90, 90, 90));
+        url.setTextColor(Color.rgb(190, 190, 190));
         url.setTextSize(13);
         url.setSingleLine(false);
         url.setPadding(0, dp(4), 0, 0);
 
         TextView details = new TextView(context);
-        details.setTextColor(Color.rgb(110, 110, 110));
+        details.setTextColor(Color.rgb(160, 160, 160));
         details.setTextSize(12);
         details.setSingleLine(false);
         details.setPadding(0, dp(4), 0, 0);
@@ -339,7 +340,7 @@ public class ChannelAdapter extends BaseAdapter {
 
     private int statusColor(String status) {
         if (ChannelItem.STATUS_RECORDING.equals(status)) {
-            return Color.rgb(220, 0, 0);
+            return Color.rgb(255, 107, 107);
         }
 
         if (ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
@@ -347,7 +348,7 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         if (ChannelItem.STATUS_WAITING_FOR_LIVE.equals(status)) {
-            return Color.rgb(0, 168, 132);
+            return Color.rgb(22, 199, 132);
         }
 
         if (ChannelItem.STATUS_RETRYING.equals(status)) {
@@ -364,6 +365,14 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         return Color.rgb(80, 120, 200);
+    }
+
+    private GradientDrawable rounded(int color, int radius, int strokeColor) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        drawable.setStroke(dp(1), strokeColor);
+        return drawable;
     }
 
     private int dp(int value) {
