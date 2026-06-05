@@ -35,6 +35,7 @@ public class LogItem {
     public static final String SOURCE_REMOTE_CONFIG = "REMOTE_CONFIG";
     public static final String SOURCE_FFMPEG = "FFMPEG";
     public static final String SOURCE_BOOT = "BOOT";
+    public static final String SOURCE_STORAGE = "STORAGE";
 
     private static final String JSON_ID = "id";
     private static final String JSON_TIMESTAMP = "timestamp";

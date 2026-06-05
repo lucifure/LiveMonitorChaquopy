@@ -2,6 +2,7 @@ package com.livemonitor.app;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
@@ -71,6 +72,7 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setBackgroundColor(Color.rgb(15, 15, 15));
 
         TextView title = new TextView(this);
         title.setText("Settings");
@@ -115,6 +117,12 @@ public class SettingsActivity extends AppCompatActivity {
         chooseSaveLocationButton.setText("Choose Save Folder");
         chooseSaveLocationButton.setOnClickListener(v -> storageAccessHelper.openFolderPicker());
         root.addView(chooseSaveLocationButton);
+
+        Button openSaveLocationButton = new Button(this);
+        openSaveLocationButton.setAllCaps(false);
+        openSaveLocationButton.setText("Open folder");
+        openSaveLocationButton.setOnClickListener(v -> openSelectedSaveFolder());
+        root.addView(openSaveLocationButton);
 
         scheduledCheckBox = addCheckBox(root, "Enable scheduled monitoring");
         scheduleStartInput = addEditText(root, "Schedule start HH:mm", "00:00");
@@ -278,6 +286,24 @@ public class SettingsActivity extends AppCompatActivity {
         }
     }
 
+    private void openSelectedSaveFolder() {
+        String uriString = settings == null ? "" : settings.getSaveLocationUri();
+
+        if (uriString == null || uriString.trim().isEmpty()) {
+            Toast.makeText(this, "No custom save folder selected yet.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setData(Uri.parse(uriString));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private EditText addEditText(LinearLayout root, String label, String hint) {
         addLabel(root, label);
 
@@ -307,6 +333,7 @@ public class SettingsActivity extends AppCompatActivity {
         TextView label = new TextView(this);
         label.setText(text);
         label.setTextSize(13);
+        label.setTextColor(Color.rgb(190, 190, 190));
         label.setPadding(0, dp(8), 0, 0);
         root.addView(label);
     }

@@ -91,21 +91,23 @@ public class LogAdapter extends BaseAdapter {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(8), dp(12), dp(8));
-        root.setBackgroundColor(Color.rgb(250, 250, 250));
+        root.setBackgroundColor(Color.rgb(15, 15, 15));
 
         TextView header = new TextView(context);
         header.setTextSize(12);
-        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
 
         TextView message = new TextView(context);
         message.setTextSize(14);
-        message.setTextColor(Color.rgb(25, 25, 25));
+        message.setTextColor(Color.WHITE);
+        message.setTypeface(Typeface.MONOSPACE);
         message.setPadding(0, dp(3), 0, 0);
         message.setSingleLine(false);
 
         TextView details = new TextView(context);
         details.setTextSize(12);
-        details.setTextColor(Color.rgb(100, 100, 100));
+        details.setTextColor(Color.rgb(160, 160, 160));
+        details.setTypeface(Typeface.MONOSPACE);
         details.setPadding(0, dp(3), 0, 0);
         details.setSingleLine(false);
 
@@ -133,9 +135,10 @@ public class LogAdapter extends BaseAdapter {
         holder.header.setText(
             log.getFormattedTime()
                 + "  "
-                + log.getLevel()
+                + levelIcon(log.getLevel())
                 + "  "
                 + log.getSource()
+                + "  →"
                 + "  "
                 + log.getTag()
         );
@@ -176,24 +179,32 @@ public class LogAdapter extends BaseAdapter {
         return builder.toString();
     }
 
+    private String levelIcon(String level) {
+        if (LogItem.LEVEL_ERROR.equals(level)) return "🔴";
+        if (LogItem.LEVEL_WARNING.equals(level)) return "🟡";
+        if (LogItem.LEVEL_SUCCESS.equals(level)) return "🟢";
+        if (LogItem.LEVEL_DEBUG.equals(level)) return "⚪";
+        return "🔵";
+    }
+
     private int levelColor(String level) {
         if (LogItem.LEVEL_ERROR.equals(level)) {
-            return Color.rgb(190, 0, 0);
+            return Color.rgb(255, 107, 107);
         }
 
         if (LogItem.LEVEL_WARNING.equals(level)) {
-            return Color.rgb(210, 130, 0);
+            return Color.rgb(255, 210, 64);
         }
 
         if (LogItem.LEVEL_SUCCESS.equals(level)) {
-            return Color.rgb(0, 150, 100);
+            return Color.rgb(22, 199, 132);
         }
 
         if (LogItem.LEVEL_DEBUG.equals(level)) {
-            return Color.rgb(100, 100, 100);
+            return Color.rgb(150, 150, 150);
         }
 
-        return Color.rgb(40, 90, 180);
+        return Color.rgb(64, 156, 255);
     }
 
     private int dp(int value) {

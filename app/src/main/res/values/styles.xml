@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/green</item>
+        <item name="colorPrimary">@color/accent</item>
         <item name="colorPrimaryVariant">@color/surface</item>
         <item name="colorOnPrimary">@color/white</item>
-        <item name="android:windowBackground">@color/bg</item>
-        <item name="android:statusBarColor">@color/surface</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/surface</item>
+    </style>
+
+    <style name="ChannelCard">
+        <item name="android:background">@drawable/card_bg</item>
+        <item name="android:layout_marginBottom">12dp</item>
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardElevation">0dp</item>
     </style>
 </resources>

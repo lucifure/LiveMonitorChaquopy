@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -135,14 +136,14 @@ public class RecordingAdapter extends BaseAdapter {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setBackgroundColor(Color.WHITE);
+        root.setBackground(rounded(Color.rgb(26, 26, 26), dp(16), Color.rgb(42, 42, 42)));
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(context);
-        title.setTextColor(Color.rgb(25, 25, 25));
+        title.setTextColor(Color.WHITE);
         title.setTextSize(16);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setSingleLine(false);
@@ -164,12 +165,12 @@ public class RecordingAdapter extends BaseAdapter {
         topRow.addView(statusBadge);
 
         TextView subtitle = new TextView(context);
-        subtitle.setTextColor(Color.rgb(90, 90, 90));
+        subtitle.setTextColor(Color.rgb(190, 190, 190));
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(4), 0, 0);
 
         TextView details = new TextView(context);
-        details.setTextColor(Color.rgb(110, 110, 110));
+        details.setTextColor(Color.rgb(160, 160, 160));
         details.setTextSize(12);
         details.setPadding(0, dp(4), 0, 0);
 
@@ -181,6 +182,26 @@ public class RecordingAdapter extends BaseAdapter {
         progressBar.setMax(100);
         progressBar.setPadding(0, dp(8), 0, 0);
 
+        LinearLayout statsRow = new LinearLayout(context);
+        statsRow.setOrientation(LinearLayout.HORIZONTAL);
+        statsRow.setPadding(0, dp(8), 0, 0);
+
+        TextView durationStat = createStatBox();
+        TextView sizeStat = createStatBox();
+        TextView qualityStat = createStatBox();
+        statsRow.addView(durationStat, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams statParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        statParams.leftMargin = dp(8);
+        statsRow.addView(sizeStat, statParams);
+        LinearLayout.LayoutParams qualityParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        qualityParams.leftMargin = dp(8);
+        statsRow.addView(qualityStat, qualityParams);
+
+        TextView savedTo = new TextView(context);
+        savedTo.setTextColor(Color.rgb(22, 199, 132));
+        savedTo.setTextSize(12);
+        savedTo.setPadding(0, dp(6), 0, 0);
+
         LinearLayout buttonRow = new LinearLayout(context);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.END);
@@ -188,7 +209,7 @@ public class RecordingAdapter extends BaseAdapter {
 
         Button openButton = new Button(context);
         openButton.setAllCaps(false);
-        openButton.setText("Open");
+        openButton.setText("▶ Open");
 
         Button pauseResumeButton = new Button(context);
         pauseResumeButton.setAllCaps(false);
@@ -196,7 +217,7 @@ public class RecordingAdapter extends BaseAdapter {
 
         Button deleteButton = new Button(context);
         deleteButton.setAllCaps(false);
-        deleteButton.setText("Delete");
+        deleteButton.setText("Cancel");
 
         buttonRow.addView(openButton);
 
@@ -217,6 +238,8 @@ public class RecordingAdapter extends BaseAdapter {
         root.addView(topRow);
         root.addView(subtitle);
         root.addView(details);
+        root.addView(statsRow);
+        root.addView(savedTo);
         root.addView(progressBar);
         root.addView(buttonRow);
 
@@ -226,6 +249,10 @@ public class RecordingAdapter extends BaseAdapter {
         holder.statusBadge = statusBadge;
         holder.subtitle = subtitle;
         holder.details = details;
+        holder.durationStat = durationStat;
+        holder.sizeStat = sizeStat;
+        holder.qualityStat = qualityStat;
+        holder.savedTo = savedTo;
         holder.progressBar = progressBar;
         holder.openButton = openButton;
         holder.pauseResumeButton = pauseResumeButton;
@@ -241,6 +268,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.details.setText("");
             holder.statusBadge.setText("Unknown");
             holder.progressBar.setProgress(0);
+            holder.savedTo.setVisibility(View.GONE);
             holder.openButton.setVisibility(View.GONE);
             holder.pauseResumeButton.setVisibility(View.GONE);
             holder.deleteButton.setVisibility(View.GONE);
@@ -250,6 +278,12 @@ public class RecordingAdapter extends BaseAdapter {
         holder.title.setText(recording.getDisplayTitle());
         holder.subtitle.setText(recording.getDisplaySubtitle());
         holder.details.setText(buildDetails(recording));
+        holder.durationStat.setText("⏱ " + RecordingProgressTracker.formatDuration(recording.getDurationSeconds()));
+        holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(recording.getBytesRecorded()));
+        holder.qualityStat.setText("📺 " + recording.getQuality());
+        String savedToDisplay = recording.getSavedToDisplay();
+        holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);
+        holder.savedTo.setVisibility(savedToDisplay.trim().isEmpty() ? View.GONE : View.VISIBLE);
         holder.statusBadge.setText(formatStatus(recording.getStatus()));
         holder.statusBadge.setBackgroundColor(statusColor(recording.getStatus()));
         holder.progressBar.setProgress(recording.getProgressPercent());
@@ -264,6 +298,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setText(recording.isPausedByUser() ? "Resume" : "Pause");
         holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
+        holder.deleteButton.setText(downloadedMode ? "🗑 Delete" : "✕ Cancel");
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
@@ -293,11 +328,7 @@ public class RecordingAdapter extends BaseAdapter {
     private String buildDetails(RecordingItem recording) {
         StringBuilder builder = new StringBuilder();
 
-        builder.append("Duration ");
-        builder.append(RecordingProgressTracker.formatDuration(recording.getDurationSeconds()));
-
-        builder.append(" • Size ");
-        builder.append(RecordingProgressTracker.formatBytes(recording.getBytesRecorded()));
+        builder.append(diagnosticLabel(recording));
 
         if (recording.getVideoId() != null && !recording.getVideoId().trim().isEmpty()) {
             builder.append(" • videoId=");
@@ -318,7 +349,7 @@ public class RecordingAdapter extends BaseAdapter {
         }
 
         if (RecordingItem.STATUS_RECORDING.equals(status)) {
-            return "Recording";
+            return "● REC";
         }
 
         if (RecordingItem.STATUS_PAUSED_NETWORK.equals(status)) {
@@ -330,19 +361,23 @@ public class RecordingAdapter extends BaseAdapter {
         }
 
         if (RecordingItem.STATUS_CONVERTING.equals(status)) {
-            return "Converting";
+            return "🔄 Converting";
+        }
+
+        if (RecordingItem.STATUS_COPYING.equals(status)) {
+            return "Copying";
         }
 
         if (RecordingItem.STATUS_COMPLETED.equals(status)) {
-            return "Done";
+            return "✅ Completed";
         }
 
         if (RecordingItem.STATUS_FAILED.equals(status)) {
-            return "Failed";
+            return "❌ Failed";
         }
 
         if (RecordingItem.STATUS_STOPPED_BY_USER.equals(status)) {
-            return "Stopped";
+            return "⏹ Stopped";
         }
 
         if (RecordingItem.STATUS_RECOVERABLE.equals(status)) {
@@ -357,8 +392,8 @@ public class RecordingAdapter extends BaseAdapter {
             return Color.rgb(220, 0, 0);
         }
 
-        if (RecordingItem.STATUS_CONVERTING.equals(status)) {
-            return Color.rgb(255, 128, 0);
+        if (RecordingItem.STATUS_CONVERTING.equals(status) || RecordingItem.STATUS_COPYING.equals(status)) {
+            return Color.rgb(255, 184, 77);
         }
 
         if (RecordingItem.STATUS_PAUSED_BY_USER.equals(status)) {
@@ -366,7 +401,7 @@ public class RecordingAdapter extends BaseAdapter {
         }
 
         if (RecordingItem.STATUS_COMPLETED.equals(status)) {
-            return Color.rgb(0, 168, 132);
+            return Color.rgb(22, 199, 132);
         }
 
         if (RecordingItem.STATUS_RECOVERABLE.equals(status)) {
@@ -380,6 +415,38 @@ public class RecordingAdapter extends BaseAdapter {
         return Color.rgb(100, 100, 100);
     }
 
+    private TextView createStatBox() {
+        TextView textView = new TextView(context);
+        textView.setTextColor(Color.WHITE);
+        textView.setTextSize(12);
+        textView.setGravity(Gravity.CENTER);
+        textView.setPadding(dp(6), dp(6), dp(6), dp(6));
+        textView.setSingleLine(true);
+        textView.setBackground(rounded(Color.rgb(36, 36, 36), dp(10), Color.rgb(48, 48, 48)));
+        return textView;
+    }
+
+    private GradientDrawable rounded(int color, int radius, int strokeColor) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        drawable.setStroke(dp(1), strokeColor);
+        return drawable;
+    }
+
+    private String diagnosticLabel(RecordingItem recording) {
+        String status = recording.getStatus();
+        if (RecordingItem.STATUS_WAITING_FOR_LIVE.equals(status)) return "Resolving stream";
+        if (RecordingItem.STATUS_RECORDING.equals(status)) return "Recording";
+        if (RecordingItem.STATUS_CONVERTING.equals(status)) return "Converting";
+        if (RecordingItem.STATUS_COPYING.equals(status)) return "Copying to folder";
+        if (RecordingItem.STATUS_COMPLETED.equals(status)) return "Saved";
+        if (RecordingItem.STATUS_FAILED.equals(status)) return "Failed";
+        if (RecordingItem.STATUS_STOPPED_BY_USER.equals(status)) return "Stopped by user";
+        if (RecordingItem.STATUS_RECOVERABLE.equals(status)) return "Stalled / recoverable";
+        return "Status update";
+    }
+
     private int dp(int value) {
         float density = context.getResources().getDisplayMetrics().density;
         return Math.round(value * density);
@@ -391,6 +458,10 @@ public class RecordingAdapter extends BaseAdapter {
         TextView statusBadge;
         TextView subtitle;
         TextView details;
+        TextView durationStat;
+        TextView sizeStat;
+        TextView qualityStat;
+        TextView savedTo;
         ProgressBar progressBar;
         Button openButton;
         Button pauseResumeButton;

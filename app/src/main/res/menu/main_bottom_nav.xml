@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/nav_monitoring" android:icon="@drawable/ic_nav_monitoring" android:title="Monitoring" />
+    <item android:id="@+id/nav_downloading" android:icon="@drawable/ic_nav_downloads" android:title="Downloading" />
+    <item android:id="@+id/nav_files" android:icon="@drawable/ic_nav_files" android:title="Files" />
+    <item android:id="@+id/nav_settings" android:icon="@drawable/ic_nav_settings" android:title="Settings" />
+</menu>
