@@ -33,6 +33,16 @@ public class RecorderCommandBuilder {
         AppSettings settings,
         RemoteConfig remoteConfig
     ) {
+        return buildYtDlpRecordArgs(videoUrl, outputTsPath, settings, remoteConfig, true);
+    }
+
+    public List<String> buildYtDlpRecordArgs(
+        String videoUrl,
+        String outputTsPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        boolean allowWaitForVideo
+    ) {
         if (settings == null) {
             settings = new AppSettings();
         }
@@ -73,7 +83,7 @@ public class RecorderCommandBuilder {
         /*
          * Wait and retry if the live stream page exists but video is not ready.
          */
-        if (settings.isWaitForVideoEnabled()) {
+        if (allowWaitForVideo && settings.isWaitForVideoEnabled()) {
             args.add("--wait-for-video");
             args.add("60");
         }
