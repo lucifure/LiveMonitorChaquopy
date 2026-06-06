@@ -161,14 +161,14 @@ public class MainActivity extends AppCompatActivity {
             }
 
             if (itemId == R.id.nav_settings) {
-                startActivity(new Intent(this, SettingsActivity.class));
+                startActivity(new Intent(this, LogActivity.class));
                 return true;
             }
 
             return false;
         });
 
-        binding.btnMenu.setOnClickListener(v -> showOverflowMenu());
+        binding.btnMenu.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
     }
 
     private void setupUpdateReceiver() {
@@ -573,7 +573,7 @@ public class MainActivity extends AppCompatActivity {
         if (monitoringCount > 0) {
             binding.statusText.setText("Monitoring " + monitoringCount);
         } else {
-            binding.statusText.setText("Ready");
+            binding.statusText.setText("Remote config ready");
         }
 
         if (showingMonitoring) {

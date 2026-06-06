@@ -2,14 +2,24 @@
 <resources>
     <color name="background">#0F0F0F</color>
     <color name="surface">#1A1A1A</color>
+    <color name="surface_2">#222222</color>
     <color name="accent">#16C784</color>
-    <color name="accent_dim">#16C78422</color>
+    <color name="accent_dim">#1A16C784</color>
     <color name="danger">#FF6B6B</color>
-    <color name="text_secondary">#666666</color>
-    <color name="text">#FFFFFF</color>
+    <color name="danger_dim">#1AFF6B6B</color>
+    <color name="warning">#F59E0B</color>
+    <color name="info">#3B82F6</color>
+    <color name="purple">#A855F7</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#AAAAAA</color>
+    <color name="text_muted">#555555</color>
+    <color name="divider">#1E1E1E</color>
+    <color name="nav_active">#16C784</color>
+    <color name="nav_inactive">#666666</color>
     <color name="white">#FFFFFF</color>
 
     <!-- Backwards-compatible aliases used by existing code/styles. -->
+    <color name="text">@color/text_primary</color>
     <color name="bg">@color/background</color>
     <color name="green">@color/accent</color>
     <color name="red">@color/danger</color>

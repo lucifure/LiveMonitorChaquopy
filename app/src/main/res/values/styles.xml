@@ -15,4 +15,15 @@
         <item name="cardCornerRadius">16dp</item>
         <item name="cardElevation">0dp</item>
     </style>
+
+    <style name="BottomNavTextActive">
+        <item name="android:textSize">11sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="BottomNavTextInactive">
+        <item name="android:textSize">11sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
 </resources>
