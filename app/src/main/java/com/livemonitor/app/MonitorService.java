@@ -926,17 +926,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
             YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
+            String ytDlpRecorderMode = attempt.allowLiveFromStart
+                ? "live-from-start"
+                : "live-edge";
             recording.setDiagnosticMessage(
                 attempts.size() > 1
-                    ? "yt-dlp live-from-start recorder is starting (attempt "
+                    ? "yt-dlp "
+                        + ytDlpRecorderMode
+                        + " recorder is starting (attempt "
                         + (attemptIndex + 1)
                         + " of "
                         + attempts.size()
                         + ")."
-                    : "yt-dlp live-from-start recorder is starting."
+                    : "yt-dlp " + ytDlpRecorderMode + " recorder is starting."
             );
             storage.upsertRecording(recording);
-            broadcastRecordingUpdated("yt-dlp recorder starting from DVR beginning.");
+            broadcastRecordingUpdated(attempt.allowLiveFromStart
+                ? "yt-dlp recorder starting from DVR beginning."
+                : "yt-dlp recorder starting from live edge.");
 
             log(
                 LogItem.LEVEL_INFO,
@@ -953,14 +960,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + attempts.size()
                     + ", "
                     + attempt.describe()
-                    + ", retries=10, liveFromStart=true, command="
+                    + ", retries=10, command="
                     + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
             try {
-                recording.setDiagnosticMessage("yt-dlp live-from-start recorder is running.");
+                recording.setDiagnosticMessage("yt-dlp " + ytDlpRecorderMode + " recorder is running.");
                 storage.upsertRecording(recording);
-                broadcastRecordingUpdated("yt-dlp recorder is running from DVR beginning.");
+                broadcastRecordingUpdated(attempt.allowLiveFromStart
+                    ? "yt-dlp recorder is running from DVR beginning."
+                    : "yt-dlp recorder is running from live edge.");
 
                 int exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
                     primaryRecorderDecision.getRecorderName()
@@ -1009,11 +1018,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return true;
                 }
 
-                lastFailureReason = "yt-dlp recorder exited with code "
-                    + exitCode
-                    + " ("
-                    + attempt.describe()
-                    + ")";
+                lastFailureReason = addYtDlpAccessGuidance(
+                    "yt-dlp recorder exited with code "
+                        + exitCode
+                        + " ("
+                        + attempt.describe()
+                        + ")"
+                );
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
 
@@ -1021,7 +1032,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
                 }
 
-                lastFailureReason = errorMessage + " (" + attempt.describe() + ")";
+                lastFailureReason = addYtDlpAccessGuidance(errorMessage + " (" + attempt.describe() + ")");
             }
 
             if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
@@ -1029,7 +1040,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
                     channel,
-                    "yt-dlp primary recorder attempt failed before writing data; trying next YouTube client.",
+                    "yt-dlp primary recorder attempt failed before writing data; trying next yt-dlp recorder attempt.",
                     "recordingId="
                         + recording.getId()
                         + ", "
@@ -1062,30 +1073,72 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
         RecorderCommandBuilder builder,
         String videoUrl,
-        String outputPath
+        String outputPath,
+        AppSettings appSettings,
+        RemoteConfig config,
+        boolean allowWaitForVideo
     ) {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
 
+        boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
+
         for (String extractorArg : extractorArgs) {
-            attempts.add(new YtDlpResolveAttempt(
-                builder.buildYtDlpRecordArgs(
-                    videoUrl,
-                    outputPath,
-                    settings,
-                    remoteConfig,
-                    extractorArg,
-                    true
-                ),
+            attempts.add(buildYtDlpPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                outputPath,
+                appSettings,
+                config,
                 extractorArg,
                 true,
-                buildYtDlpExtractorAttemptDescription(extractorArg, true)
+                allowWaitForVideo
             ));
+        }
+
+        if (retryWithoutLiveFromStart) {
+            for (String extractorArg : extractorArgs) {
+                attempts.add(buildYtDlpPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    outputPath,
+                    appSettings,
+                    config,
+                    extractorArg,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
         }
 
         return attempts;
     }
 
+    private YtDlpResolveAttempt buildYtDlpPrimaryRecordAttempt(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String outputPath,
+        AppSettings appSettings,
+        RemoteConfig config,
+        String extractorArg,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
+        return new YtDlpResolveAttempt(
+            builder.buildYtDlpRecordArgs(
+                videoUrl,
+                outputPath,
+                appSettings,
+                config,
+                extractorArg,
+                allowLiveFromStart,
+                allowWaitForVideo
+            ),
+            extractorArg,
+            allowLiveFromStart,
+            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart)
+        );
+    }
 
     private boolean handleYtDlpPrimaryLiveNotReady(
         String channelId,
@@ -1339,6 +1392,38 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             broadcastRecordingUpdated("Recording is recoverable; fallback failed.");
             return true;
         }
+    }
+
+    private String addYtDlpAccessGuidance(String failureReason) {
+        if (!isYoutubeBotProtectionError(failureReason)) {
+            return failureReason;
+        }
+
+        boolean hasConfiguredCookies = (settings != null && settings.hasYtDlpCookies())
+            || (remoteConfig != null && remoteConfig.hasYtDlpCookies());
+        String guidance = hasConfiguredCookies
+            ? "YouTube bot/rate-limit challenge detected even though yt-dlp cookies are configured; "
+                + "refresh the cookies from a real signed-in browser session, reduce retry rate, "
+                + "or configure a valid yt-dlp PO-token/visitor-data extractor arg for the selected YouTube client."
+            : "YouTube bot/rate-limit challenge detected; configure the user's own YouTube cookies.txt "
+                + "or Cookie header in Settings, or configure a valid yt-dlp PO-token/visitor-data extractor arg. "
+                + "The app cannot safely impersonate or bypass YouTube's bot checks without legitimate session data.";
+
+        return failureReason + " " + guidance;
+    }
+
+    private boolean isYoutubeBotProtectionError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+
+        return lower.contains("sign in to confirm")
+            || lower.contains("not a bot")
+            || lower.contains("http error 429")
+            || lower.contains("too many requests")
+            || lower.contains("po token");
     }
 
     private boolean isLiveNotReadyError(String message) {
