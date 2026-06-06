@@ -148,6 +148,26 @@ public class RecorderCommandBuilder {
         String extractorArgsOverride,
         boolean allowLiveFromStart
     ) {
+        return buildYtDlpRecordArgs(
+            videoUrl,
+            outputTsPath,
+            settings,
+            remoteConfig,
+            extractorArgsOverride,
+            allowLiveFromStart,
+            true
+        );
+    }
+
+    public List<String> buildYtDlpRecordArgs(
+        String videoUrl,
+        String outputTsPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String extractorArgsOverride,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
         if (settings == null) {
             settings = new AppSettings();
         }
@@ -156,7 +176,13 @@ public class RecorderCommandBuilder {
             remoteConfig = new RemoteConfig();
         }
 
-        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(videoUrl, outputTsPath, settings, remoteConfig));
+        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(
+            videoUrl,
+            outputTsPath,
+            settings,
+            remoteConfig,
+            allowWaitForVideo
+        ));
 
         if (!allowLiveFromStart) {
             args.remove("--live-from-start");
