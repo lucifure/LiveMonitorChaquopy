@@ -594,6 +594,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         try {
             String videoId = liveInfo == null ? "" : liveInfo.videoId;
 
+            if (shouldTryYtDlpPrimaryRecording(recording)) {
+                boolean ytDlpHandledRecording = tryYtDlpPrimaryRecording(channelId, channel, recording, liveInfo);
+
+                if (ytDlpHandledRecording) {
+                    return;
+                }
+            }
+
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
@@ -652,12 +660,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     : "recorder=FFmpegKit"
             );
 
+            String ffmpegOutputPath = prepareFreshFfmpegOutputPath(recording);
+
             startFfmpegKitRecording(
                 channelId,
                 channel,
                 recording,
                 manifestUrl,
-                recording.getCurrentTempSegmentPath(),
+                ffmpegOutputPath,
                 false,
                 "Recording started."
             );
@@ -666,6 +676,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             restartingRecordings.remove(recording.getId());
             activeRecordings.remove(channelId);
+            activeRecordings.remove(recording.getChannelId());
             activeRecordings.remove(recording.getId());
             progressTracker.untrack(recording);
 
@@ -711,6 +722,265 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             );
 
             broadcastRecordingUpdated("Recording failed.");
+        }
+    }
+
+    private String prepareFreshFfmpegOutputPath(RecordingItem recording) {
+        if (recording == null) {
+            return "";
+        }
+
+        if (!currentRecordingSegmentHasData(recording)) {
+            return recording.getCurrentTempSegmentPath();
+        }
+
+        String chunkPath = createResumeChunkPath(recording);
+        recording.addTempChunkPath(chunkPath);
+        storage.upsertRecording(recording);
+        return chunkPath;
+    }
+
+    private boolean shouldTryYtDlpPrimaryRecording(RecordingItem recording) {
+        if (recording == null || settings == null || !settings.isLiveFromStartEnabled()) {
+            return false;
+        }
+
+        if (recording.hasExistingTempTsFile()) {
+            return false;
+        }
+
+        return canRunYtDlpProcessRecorder();
+    }
+
+    private boolean canRunYtDlpProcessRecorder() {
+        if (remoteConfig == null) {
+            return false;
+        }
+
+        String executable = remoteConfig.getYtDlpExecutable();
+
+        if (isBlank(executable)) {
+            return false;
+        }
+
+        File executableFile = new File(executable);
+        return executableFile.isAbsolute()
+            && executableFile.exists()
+            && executableFile.isFile()
+            && executableFile.canExecute();
+    }
+
+    private boolean tryYtDlpPrimaryRecording(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        LiveInfo liveInfo
+    ) {
+        String videoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
+            ? liveInfo.videoUrl
+            : recording.getVideoUrl();
+
+        if (isBlank(videoUrl)) {
+            videoUrl = YouTubeUrlUtils.buildWatchUrl(recording.getVideoId());
+        }
+
+        if (isBlank(videoUrl)) {
+            return false;
+        }
+
+        RecorderCommandBuilder builder = new RecorderCommandBuilder();
+        List<String> args = builder.buildYtDlpRecordArgs(
+            videoUrl,
+            recording.getCurrentTempSegmentPath(),
+            settings,
+            remoteConfig
+        );
+
+        recording.setDiagnosticMessage("yt-dlp live-from-start recorder is starting.");
+        storage.upsertRecording(recording);
+        broadcastRecordingUpdated("yt-dlp recorder starting from DVR beginning.");
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Starting yt-dlp primary recorder.",
+            "videoId="
+                + recording.getVideoId()
+                + ", retries=10, liveFromStart=true, command="
+                + shortenForLog(builder.toLogString(args), 500)
+        );
+
+        try {
+            int exitCode = YtDlpRunner.recordLiveStream(
+                recording.getId(),
+                args,
+                recording.getCurrentTempSegmentPath(),
+                message -> log(
+                    LogItem.LEVEL_DEBUG,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "yt-dlp recorder output.",
+                    shortenForLog(message, 500)
+                )
+            );
+
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+
+            if (latest != null) {
+                recording = latest;
+            }
+
+            if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated("Recording paused.");
+                return true;
+            }
+
+            if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated("Recording stopped.");
+                return true;
+            }
+
+            if (exitCode == 0) {
+                log(
+                    LogItem.LEVEL_SUCCESS,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "yt-dlp primary recorder completed.",
+                    "recordingId=" + recording.getId()
+                );
+                onRecordingFinished(channelId, recording.getId(), 0);
+                return true;
+            }
+
+            return startFfmpegFallbackAfterYtDlpFailure(
+                channelId,
+                channel,
+                recording,
+                liveInfo,
+                "yt-dlp recorder exited with code " + exitCode
+            );
+        } catch (Exception e) {
+            return startFfmpegFallbackAfterYtDlpFailure(
+                channelId,
+                channel,
+                recording,
+                liveInfo,
+                normalizeErrorMessage(e)
+            );
+        }
+    }
+
+    private boolean startFfmpegFallbackAfterYtDlpFailure(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        LiveInfo liveInfo,
+        String failureReason
+    ) {
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+
+        if (latest != null) {
+            recording = latest;
+        }
+
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording paused.");
+            return true;
+        }
+
+        if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording stopped.");
+            return true;
+        }
+
+        try {
+            String fallbackOutputPath = recording.getCurrentTempSegmentPath();
+
+            if (currentRecordingSegmentHasData(recording)) {
+                fallbackOutputPath = createResumeChunkPath(recording);
+                recording.addTempChunkPath(fallbackOutputPath);
+            }
+
+            String activeChannelId = isBlank(channelId) ? recording.getChannelId() : channelId;
+
+            recording.markRecording();
+            recording.showInDownloading();
+            recording.setDiagnosticMessage("yt-dlp live-from-start failed; falling back to FFmpeg live-edge recording.");
+            storage.upsertRecording(recording);
+
+            if (!isBlank(activeChannelId)) {
+                activeRecordings.put(activeChannelId, recording);
+            }
+
+            progressTracker.track(recording);
+
+            String videoId = liveInfo == null ? recording.getVideoId() : liveInfo.videoId;
+            ResolvedInput resolvedInput = resolveRecordingInputUrl(videoId, channel, liveInfo, true);
+            String manifestUrl = resolvedInput.url;
+
+            if (isBlank(manifestUrl)) {
+                throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
+            }
+
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "yt-dlp primary recorder failed; using FFmpeg fallback.",
+                "recordingId="
+                    + recording.getId()
+                    + ", reason="
+                    + shortenForLog(failureReason, 300)
+                    + ", fallbackInput="
+                    + describeUrlForLog(manifestUrl)
+            );
+
+            startFfmpegKitRecording(
+                activeChannelId,
+                channel,
+                recording,
+                manifestUrl,
+                fallbackOutputPath,
+                false,
+                "yt-dlp failed; FFmpeg fallback started."
+            );
+
+            return true;
+        } catch (Exception fallbackError) {
+            String combinedError = "yt-dlp recorder failed ("
+                + failureReason
+                + ") and FFmpeg fallback failed ("
+                + normalizeErrorMessage(fallbackError)
+                + ").";
+
+            restartingRecordings.remove(recording.getId());
+            activeRecordings.remove(channelId);
+            activeRecordings.remove(recording.getId());
+            progressTracker.untrack(recording);
+            recording.markRecoverable(combinedError);
+            storage.upsertRecording(recording);
+
+            if (channel != null) {
+                channel.markFailed(combinedError);
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            log(
+                LogItem.LEVEL_ERROR,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "yt-dlp primary recorder and FFmpeg fallback failed.",
+                combinedError
+            );
+
+            broadcastRecordingUpdated("Recording is recoverable; fallback failed.");
+            return true;
         }
     }
 
@@ -786,9 +1056,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean cancelRequested = false;
 
         try {
-            if (FFmpegRunner.isRunning(recordingId)) {
+            if (FFmpegRunner.isRunning(recordingId) || YtDlpRunner.isRecording(recordingId)) {
                 stalledRecording.setDiagnosticMessage(
-                    "No file growth detected; keeping FFmpeg alive while reconnect retries continue."
+                    "No file growth detected; keeping the active recorder alive while reconnect retries continue."
                 );
                 storage.upsertRecording(stalledRecording);
 
@@ -796,7 +1066,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
                     channel,
-                    "Recording progress stalled; not restarting yet.",
+                    "Recording progress stalled; active recorder is still running.",
                     "recordingId=" + recordingId
                 );
                 broadcastRecordingUpdated("Recorder reconnect is still running.");
@@ -992,6 +1262,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         boolean cancelled = FFmpegRunner.cancel(recording.getId());
+        cancelled = YtDlpRunner.cancelRecording(recording.getId()) || cancelled;
 
         if (youtubedlAndroidReady) {
             try {
@@ -3197,6 +3468,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         activeRecordings.clear();
         restartingRecordings.clear();
         FFmpegRunner.cancel();
+        YtDlpRunner.cancelAllRecordings();
         FFmpegKit.cancel();
 
         if (progressTracker != null) progressTracker.stop();
