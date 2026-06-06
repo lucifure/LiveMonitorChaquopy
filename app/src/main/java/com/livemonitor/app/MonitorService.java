@@ -1062,7 +1062,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
         RecorderCommandBuilder builder,
         String videoUrl,
-        String outputPath
+        String outputPath,
+        AppSettings appSettings,
+        RemoteConfig config,
+        boolean allowWaitForVideo
     ) {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
@@ -1072,10 +1075,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 builder.buildYtDlpRecordArgs(
                     videoUrl,
                     outputPath,
-                    settings,
-                    remoteConfig,
+                    appSettings,
+                    config,
                     extractorArg,
-                    true
+                    true,
+                    allowWaitForVideo
                 ),
                 extractorArg,
                 true,
