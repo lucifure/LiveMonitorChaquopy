@@ -902,78 +902,143 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return false;
         }
 
+        if (YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
+            primaryRecorderDecision.getRecorderName()
+        )) {
+            updateYoutubedlAndroidRuntimeIfNeeded(
+                "before primary yt-dlp recording",
+                "Updating bundled yt-dlp before primary recorder starts.",
+                channel
+            );
+        }
+
         RecorderCommandBuilder builder = new RecorderCommandBuilder();
-        List<String> args = builder.buildYtDlpRecordArgs(
+        List<YtDlpResolveAttempt> attempts = buildYtDlpPrimaryRecordAttempts(
+            builder,
             videoUrl,
             recording.getCurrentTempSegmentPath(),
             settings,
             remoteConfig,
             false
         );
+        String lastFailureReason = "yt-dlp recorder did not run.";
 
-        recording.setDiagnosticMessage("yt-dlp live-from-start recorder is starting.");
-        storage.upsertRecording(recording);
-        broadcastRecordingUpdated("yt-dlp recorder starting from DVR beginning.");
+        for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
+            YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
-        log(
-            LogItem.LEVEL_INFO,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            "Starting yt-dlp primary recorder.",
-            "videoId="
-                + recording.getVideoId()
-                + ", primaryRecorder="
-                + primaryRecorderDecision.getRecorderName()
-                + ", retries=10, liveFromStart=true, command="
-                + shortenForLog(builder.toLogString(args), 500)
-        );
+            recording.setDiagnosticMessage(
+                attempts.size() > 1
+                    ? "yt-dlp live-from-start recorder is starting (attempt "
+                        + (attemptIndex + 1)
+                        + " of "
+                        + attempts.size()
+                        + ")."
+                    : "yt-dlp live-from-start recorder is starting."
+            );
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("yt-dlp recorder starting from DVR beginning.");
 
-        try {
-            int exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
-                primaryRecorderDecision.getRecorderName()
-            )
-                ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, args, channel)
-                : YtDlpRunner.recordLiveStream(
-                    recording.getId(),
-                    args,
-                    recording.getCurrentTempSegmentPath(),
-                    message -> log(
-                        LogItem.LEVEL_DEBUG,
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Starting yt-dlp primary recorder.",
+                "videoId="
+                    + recording.getVideoId()
+                    + ", primaryRecorder="
+                    + primaryRecorderDecision.getRecorderName()
+                    + ", attempt="
+                    + (attemptIndex + 1)
+                    + "/"
+                    + attempts.size()
+                    + ", "
+                    + attempt.describe()
+                    + ", retries=10, liveFromStart=true, command="
+                    + shortenForLog(builder.toLogString(attempt.args), 500)
+            );
+
+            try {
+                recording.setDiagnosticMessage("yt-dlp live-from-start recorder is running.");
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated("yt-dlp recorder is running from DVR beginning.");
+
+                int exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
+                    primaryRecorderDecision.getRecorderName()
+                )
+                    ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, attempt.args, channel)
+                    : YtDlpRunner.recordLiveStream(
+                        recording.getId(),
+                        attempt.args,
+                        recording.getCurrentTempSegmentPath(),
+                        message -> log(
+                            LogItem.LEVEL_DEBUG,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            "yt-dlp recorder output.",
+                            shortenForLog(message, 500)
+                        )
+                    );
+
+                RecordingItem latest = storage.findRecordingById(recording.getId());
+
+                if (latest != null) {
+                    recording = latest;
+                }
+
+                if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
+                    storage.upsertRecording(recording);
+                    broadcastRecordingUpdated("Recording paused.");
+                    return true;
+                }
+
+                if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
+                    storage.upsertRecording(recording);
+                    broadcastRecordingUpdated("Recording stopped.");
+                    return true;
+                }
+
+                if (exitCode == 0) {
+                    log(
+                        LogItem.LEVEL_SUCCESS,
                         LogItem.SOURCE_RECORDER,
                         channel,
-                        "yt-dlp recorder output.",
-                        shortenForLog(message, 500)
-                    )
-                );
+                        "yt-dlp primary recorder completed.",
+                        "recordingId=" + recording.getId() + ", " + attempt.describe()
+                    );
+                    onRecordingFinished(channelId, recording.getId(), 0);
+                    return true;
+                }
 
-            RecordingItem latest = storage.findRecordingById(recording.getId());
+                lastFailureReason = "yt-dlp recorder exited with code "
+                    + exitCode
+                    + " ("
+                    + attempt.describe()
+                    + ")";
+            } catch (Exception e) {
+                String errorMessage = normalizeErrorMessage(e);
 
-            if (latest != null) {
-                recording = latest;
+                if (isLiveNotReadyError(errorMessage)) {
+                    return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
+                }
+
+                lastFailureReason = errorMessage + " (" + attempt.describe() + ")";
             }
 
-            if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
-                storage.upsertRecording(recording);
-                broadcastRecordingUpdated("Recording paused.");
-                return true;
-            }
-
-            if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
-                storage.upsertRecording(recording);
-                broadcastRecordingUpdated("Recording stopped.");
-                return true;
-            }
-
-            if (exitCode == 0) {
+            if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
                 log(
-                    LogItem.LEVEL_SUCCESS,
+                    LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
                     channel,
-                    "yt-dlp primary recorder completed.",
-                    "recordingId=" + recording.getId()
+                    "yt-dlp primary recorder attempt failed before writing data; trying next YouTube client.",
+                    "recordingId="
+                        + recording.getId()
+                        + ", "
+                        + attempt.describe()
+                        + ", reason="
+                        + shortenForLog(lastFailureReason, 300)
                 );
-                onRecordingFinished(channelId, recording.getId(), 0);
-                return true;
+                safeDelete(recording.getCurrentTempSegmentPath());
+                continue;
             }
 
             return startFfmpegFallbackAfterYtDlpFailure(
@@ -981,24 +1046,46 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channel,
                 recording,
                 liveInfo,
-                "yt-dlp recorder exited with code " + exitCode
-            );
-        } catch (Exception e) {
-            String errorMessage = normalizeErrorMessage(e);
-
-            if (isLiveNotReadyError(errorMessage)) {
-                return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
-            }
-
-            return startFfmpegFallbackAfterYtDlpFailure(
-                channelId,
-                channel,
-                recording,
-                liveInfo,
-                errorMessage
+                lastFailureReason
             );
         }
+
+        return startFfmpegFallbackAfterYtDlpFailure(
+            channelId,
+            channel,
+            recording,
+            liveInfo,
+            lastFailureReason
+        );
     }
+
+    private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String outputPath
+    ) {
+        List<YtDlpResolveAttempt> attempts = new ArrayList<>();
+        LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
+
+        for (String extractorArg : extractorArgs) {
+            attempts.add(new YtDlpResolveAttempt(
+                builder.buildYtDlpRecordArgs(
+                    videoUrl,
+                    outputPath,
+                    settings,
+                    remoteConfig,
+                    extractorArg,
+                    true
+                ),
+                extractorArg,
+                true,
+                buildYtDlpExtractorAttemptDescription(extractorArg, true)
+            ));
+        }
+
+        return attempts;
+    }
+
 
     private boolean handleYtDlpPrimaryLiveNotReady(
         String channelId,
@@ -2492,6 +2579,51 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String videoUrl
     ) {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
+        LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
+        boolean allowLiveFromStart = settings != null && settings.isLiveFromStartEnabled();
+
+        for (String extractorArg : extractorArgs) {
+            attempts.add(buildYtDlpResolveAttempt(
+                builder,
+                videoUrl,
+                extractorArg,
+                true
+            ));
+
+            if (allowLiveFromStart) {
+                attempts.add(buildYtDlpResolveAttempt(
+                    builder,
+                    videoUrl,
+                    extractorArg,
+                    false
+                ));
+            }
+        }
+
+        return attempts;
+    }
+
+    private YtDlpResolveAttempt buildYtDlpResolveAttempt(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String extractorArg,
+        boolean allowLiveFromStart
+    ) {
+        return new YtDlpResolveAttempt(
+            builder.buildYtDlpResolveArgs(
+                videoUrl,
+                settings,
+                remoteConfig,
+                extractorArg,
+                allowLiveFromStart
+            ),
+            extractorArg,
+            allowLiveFromStart,
+            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart)
+        );
+    }
+
+    private LinkedHashSet<String> buildYtDlpExtractorArgAttempts() {
         LinkedHashSet<String> extractorArgs = new LinkedHashSet<>();
 
         // First let yt-dlp choose its own current YouTube clients. Forced
@@ -2514,7 +2646,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          * YouTube can return "No video formats found" for one yt-dlp player
          * client while another client remains playable. The Java HLS resolver
          * already rotates through RemoteConfig clients; mirror that behavior for
-         * yt-dlp-first so it does not give up after the default WEB client.
+         * yt-dlp-first and the primary recorder so a stale default client does
+         * not immediately force FFmpeg fallback.
          */
         addPreferredYtDlpClient(extractorArgs, "ANDROID");
         addPreferredYtDlpClient(extractorArgs, "IOS");
@@ -2529,32 +2662,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        boolean retryWithoutLiveFromStart = settings != null && settings.isLiveFromStartEnabled();
-
-        for (String extractorArg : extractorArgs) {
-            if (retryWithoutLiveFromStart) {
-                attempts.add(buildYtDlpResolveAttempt(
-                    builder,
-                    videoUrl,
-                    extractorArg,
-                    false
-                ));
-            }
-
-            attempts.add(buildYtDlpResolveAttempt(
-                builder,
-                videoUrl,
-                extractorArg,
-                true
-            ));
-        }
-
-        return attempts;
+        return extractorArgs;
     }
 
-    private YtDlpResolveAttempt buildYtDlpResolveAttempt(
-        RecorderCommandBuilder builder,
-        String videoUrl,
+    private String buildYtDlpExtractorAttemptDescription(
         String extractorArg,
         boolean allowLiveFromStart
     ) {
@@ -2565,18 +2676,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ? ", liveFromStart=" + allowLiveFromStart
             : "";
 
-        return new YtDlpResolveAttempt(
-            builder.buildYtDlpResolveArgs(
-                videoUrl,
-                settings,
-                remoteConfig,
-                extractorArg,
-                allowLiveFromStart
-            ),
-            extractorArg,
-            allowLiveFromStart,
-            extractorDescription + liveFromStartDescription
-        );
+        return extractorDescription + liveFromStartDescription;
     }
 
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {

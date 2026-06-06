@@ -58,6 +58,7 @@ public class RecorderCommandBuilder {
         args.add("quickjs");
         args.add("--force-ipv4");
         args.add("--no-check-certificates");
+        args.add("--no-update");
 
         /*
          * Prefer one complete/muxed stream.
@@ -67,9 +68,12 @@ public class RecorderCommandBuilder {
         args.add(settings.buildYtDlpFormatSelector());
 
         /*
-         * Record live as MPEG-TS for better crash resilience.
+         * Record live as MPEG-TS for better crash resilience. Prefer yt-dlp's
+         * native HLS downloader so the bundled youtubedl-android runtime can
+         * record without depending on an external ffmpeg executable path.
          */
         args.add("--hls-use-mpegts");
+        args.add("--hls-prefer-native");
 
         /*
          * Do not stop because of missing HLS fragments.
@@ -112,6 +116,7 @@ public class RecorderCommandBuilder {
         args.add("10");
 
         args.add("--no-part");
+        args.add("--force-overwrites");
 
         /*
          * Force file output path.
@@ -221,6 +226,7 @@ public class RecorderCommandBuilder {
         args.add("--no-warnings");
         args.add("--force-ipv4");
         args.add("--no-check-certificates");
+        args.add("--no-update");
         args.add("--socket-timeout");
         args.add("10");
         args.add("-f");
