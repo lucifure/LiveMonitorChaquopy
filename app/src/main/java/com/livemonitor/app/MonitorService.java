@@ -916,7 +916,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = buildYtDlpPrimaryRecordAttempts(
             builder,
             videoUrl,
-            recording.getCurrentTempSegmentPath()
+            recording.getCurrentTempSegmentPath(),
+            settings,
+            remoteConfig,
+            false
         );
         String lastFailureReason = "yt-dlp recorder did not run.";
 
