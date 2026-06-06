@@ -20,6 +20,7 @@ import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel;
 import com.yausername.youtubedl_android.mapper.VideoInfo;
 
 import kotlin.Unit;
+import kotlin.jvm.functions.Function3;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -594,8 +595,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         try {
             String videoId = liveInfo == null ? "" : liveInfo.videoId;
 
-            if (shouldTryYtDlpPrimaryRecording(recording)) {
-                boolean ytDlpHandledRecording = tryYtDlpPrimaryRecording(channelId, channel, recording, liveInfo);
+            YtDlpPrimaryRecorderDecision primaryRecorderDecision = evaluateYtDlpPrimaryRecorder(recording);
+            logYtDlpPrimaryRecorderDecision(channel, recording, primaryRecorderDecision);
+
+            if (primaryRecorderDecision.shouldTry()) {
+                boolean ytDlpHandledRecording = tryYtDlpPrimaryRecording(
+                    channelId,
+                    channel,
+                    recording,
+                    liveInfo,
+                    primaryRecorderDecision
+                );
 
                 if (ytDlpHandledRecording) {
                     return;
@@ -740,17 +750,86 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return chunkPath;
     }
 
-    private boolean shouldTryYtDlpPrimaryRecording(RecordingItem recording) {
-        if (recording == null || settings == null || !settings.isLiveFromStartEnabled()) {
-            return false;
+    private YtDlpPrimaryRecorderDecision evaluateYtDlpPrimaryRecorder(RecordingItem recording) {
+        if (recording == null) {
+            return YtDlpPrimaryRecorderDecision.skip("recording object is missing.");
+        }
+
+        if (settings == null) {
+            return YtDlpPrimaryRecorderDecision.skip("app settings are unavailable.");
+        }
+
+        if (!settings.isLiveFromStartEnabled()) {
+            return YtDlpPrimaryRecorderDecision.skip("live-from-start setting is disabled.");
         }
 
         if (recording.hasExistingTempTsFile()) {
-            return false;
+            return YtDlpPrimaryRecorderDecision.skip(
+                "existing temp TS data is present; primary yt-dlp recorder will not overwrite or resume it."
+            );
         }
 
-        return canRunYtDlpProcessRecorder();
+        if (canRunYtDlpProcessRecorder()) {
+            return YtDlpPrimaryRecorderDecision.tryRecorder(
+                YtDlpPrimaryRecorderDecision.RECORDER_DIRECT_EXECUTABLE,
+                "direct yt-dlp executable is available."
+            );
+        }
+
+        if (youtubedlAndroidReady) {
+            return YtDlpPrimaryRecorderDecision.tryRecorder(
+                YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID,
+                "bundled youtubedl-android runtime is available for recording."
+            );
+        }
+
+        return YtDlpPrimaryRecorderDecision.skip(
+            "no direct executable yt-dlp path and bundled youtubedl-android runtime is not ready. "
+                + describeYtDlpProcessRecorderAvailability()
+        );
     }
+
+    private boolean shouldTryYtDlpPrimaryRecording(RecordingItem recording) {
+        return evaluateYtDlpPrimaryRecorder(recording).shouldTry();
+    }
+
+    private void logYtDlpPrimaryRecorderDecision(
+        ChannelItem channel,
+        RecordingItem recording,
+        YtDlpPrimaryRecorderDecision decision
+    ) {
+        if (decision == null) {
+            decision = YtDlpPrimaryRecorderDecision.skip("primary recorder decision was unavailable.");
+        }
+
+        String details = "recordingId="
+            + (recording == null ? "" : recording.getId())
+            + ", liveFromStart="
+            + (settings != null && settings.isLiveFromStartEnabled())
+            + ", hasExistingTempTs="
+            + (recording != null && recording.hasExistingTempTsFile())
+            + ", directExecutable="
+            + describeYtDlpProcessRecorderAvailability()
+            + ", youtubedlAndroidReady="
+            + youtubedlAndroidReady
+            + ", decision="
+            + (decision.shouldTry() ? "try" : "skip")
+            + ", primaryRecorder="
+            + decision.getRecorderName()
+            + ", reason="
+            + decision.getReason();
+
+        log(
+            decision.shouldTry() ? LogItem.LEVEL_INFO : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            decision.shouldTry()
+                ? "yt-dlp primary recorder is eligible."
+                : "yt-dlp primary recorder skipped.",
+            details
+        );
+    }
+
 
     private boolean canRunYtDlpProcessRecorder() {
         if (remoteConfig == null) {
@@ -770,11 +849,36 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             && executableFile.canExecute();
     }
 
+    private String describeYtDlpProcessRecorderAvailability() {
+        if (remoteConfig == null) {
+            return "remoteConfig=missing";
+        }
+
+        String executable = remoteConfig.getYtDlpExecutable();
+
+        if (isBlank(executable)) {
+            return "path=empty";
+        }
+
+        File executableFile = new File(executable);
+        return "path="
+            + executable
+            + ", absolute="
+            + executableFile.isAbsolute()
+            + ", exists="
+            + executableFile.exists()
+            + ", file="
+            + executableFile.isFile()
+            + ", executable="
+            + executableFile.canExecute();
+    }
+
     private boolean tryYtDlpPrimaryRecording(
         String channelId,
         ChannelItem channel,
         RecordingItem recording,
-        LiveInfo liveInfo
+        LiveInfo liveInfo,
+        YtDlpPrimaryRecorderDecision primaryRecorderDecision
     ) {
         String videoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
             ? liveInfo.videoUrl
@@ -807,23 +911,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "Starting yt-dlp primary recorder.",
             "videoId="
                 + recording.getVideoId()
+                + ", primaryRecorder="
+                + primaryRecorderDecision.getRecorderName()
                 + ", retries=10, liveFromStart=true, command="
                 + shortenForLog(builder.toLogString(args), 500)
         );
 
         try {
-            int exitCode = YtDlpRunner.recordLiveStream(
-                recording.getId(),
-                args,
-                recording.getCurrentTempSegmentPath(),
-                message -> log(
-                    LogItem.LEVEL_DEBUG,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "yt-dlp recorder output.",
-                    shortenForLog(message, 500)
-                )
-            );
+            int exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
+                primaryRecorderDecision.getRecorderName()
+            )
+                ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, args, channel)
+                : YtDlpRunner.recordLiveStream(
+                    recording.getId(),
+                    args,
+                    recording.getCurrentTempSegmentPath(),
+                    message -> log(
+                        LogItem.LEVEL_DEBUG,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "yt-dlp recorder output.",
+                        shortenForLog(message, 500)
+                    )
+                );
 
             RecordingItem latest = storage.findRecordingById(recording.getId());
 
@@ -871,6 +981,116 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 normalizeErrorMessage(e)
             );
         }
+    }
+
+
+    private int recordLiveStreamWithYoutubedlAndroid(
+        String recordingId,
+        String videoUrl,
+        List<String> args,
+        ChannelItem channel
+    ) throws Exception {
+        if (!youtubedlAndroidReady) {
+            throw new IllegalStateException("youtubedl-android recorder is not ready.");
+        }
+
+        YoutubeDLRequest request = buildYoutubedlAndroidRequest(videoUrl, args);
+        String processId = isBlank(recordingId) ? "yt-dlp-primary-recorder" : recordingId;
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Starting bundled youtubedl-android primary recorder process.",
+            "processId=" + processId
+        );
+
+        Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
+            @Override
+            public Unit invoke(Float progress, Long etaSeconds, String line) {
+                if (!isBlank(line)) {
+                    log(
+                        LogItem.LEVEL_DEBUG,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "youtubedl-android recorder output.",
+                        shortenForLog(line, 500)
+                    );
+                }
+                return Unit.INSTANCE;
+            }
+        };
+
+        executeYoutubedlAndroidRequest(request, processId, callback);
+
+        return 0;
+    }
+
+    private void executeYoutubedlAndroidRequest(
+        YoutubeDLRequest request,
+        String processId,
+        Function3<Float, Long, String, Unit> callback
+    ) throws Exception {
+        YoutubeDL youtubeDL = YoutubeDL.getInstance();
+
+        try {
+            youtubeDL.getClass()
+                .getMethod("execute", YoutubeDLRequest.class, String.class, Function3.class)
+                .invoke(youtubeDL, request, processId, callback);
+            return;
+        } catch (NoSuchMethodException ignored) {
+            // Older youtubedl-android versions used request, callback, processId ordering.
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw unwrapYoutubedlAndroidExecutionError(e);
+        }
+
+        try {
+            youtubeDL.getClass()
+                .getMethod("execute", YoutubeDLRequest.class, Function3.class, String.class)
+                .invoke(youtubeDL, request, callback, processId);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw unwrapYoutubedlAndroidExecutionError(e);
+        }
+    }
+
+    private Exception unwrapYoutubedlAndroidExecutionError(java.lang.reflect.InvocationTargetException error) {
+        Throwable cause = error == null ? null : error.getCause();
+
+        if (cause instanceof Exception) {
+            return (Exception) cause;
+        }
+
+        return new IllegalStateException(
+            cause == null ? "youtubedl-android recorder failed." : cause.getMessage(),
+            cause
+        );
+    }
+
+    private YoutubeDLRequest buildYoutubedlAndroidRequest(String videoUrl, List<String> args) {
+        YoutubeDLRequest request = new YoutubeDLRequest(videoUrl);
+
+        if (args == null) {
+            return request;
+        }
+
+        for (int i = 1; i < args.size(); i++) {
+            String arg = args.get(i);
+
+            if (videoUrl.equals(arg)) {
+                continue;
+            }
+
+            String value = i + 1 < args.size() ? args.get(i + 1) : null;
+
+            if (isYtDlpOptionWithValue(arg) && value != null && !value.startsWith("-")) {
+                request.addOption(arg, value);
+                i++;
+            } else {
+                request.addOption(arg);
+            }
+        }
+
+        return request;
     }
 
     private boolean startFfmpegFallbackAfterYtDlpFailure(
@@ -1264,13 +1484,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean cancelled = FFmpegRunner.cancel(recording.getId());
         cancelled = YtDlpRunner.cancelRecording(recording.getId()) || cancelled;
 
-        if (youtubedlAndroidReady) {
-            try {
-                YoutubeDL.getInstance().destroyProcessById(recording.getId());
-                cancelled = true;
-            } catch (RuntimeException ignored) {
-            }
-        }
+        cancelled = cancelYoutubedlAndroidRecording(recording.getId()) || cancelled;
 
         if (cancelled) {
             log(
@@ -1283,6 +1497,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return cancelled;
+    }
+
+    private boolean cancelYoutubedlAndroidRecording(String recordingId) {
+        if (!youtubedlAndroidReady || isBlank(recordingId)) {
+            return false;
+        }
+
+        try {
+            YoutubeDL.getInstance().destroyProcessById(recordingId);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     private boolean ensureRecordingStorageAvailable(ChannelItem channel, long minimumBytes) {
@@ -2361,17 +2588,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return "-f".equals(arg)
             || "-o".equals(arg)
             || "--socket-timeout".equals(arg)
-            || "--user-agent".equals(arg)
-            || "--extractor-args".equals(arg)
-            || "--cookies".equals(arg)
-            || "--cookies-from-browser".equals(arg)
-            || "--add-header".equals(arg)
-            || "--wait-for-video".equals(arg)
             || "--fragment-retries".equals(arg)
             || "--retries".equals(arg)
             || "--extractor-retries".equals(arg)
             || "--file-access-retries".equals(arg)
-            || "--retry-sleep".equals(arg);
+            || "--retry-sleep".equals(arg)
+            || "--wait-for-video".equals(arg)
+            || "--js-runtime".equals(arg)
+            || "--user-agent".equals(arg)
+            || "--extractor-args".equals(arg)
+            || "--cookies".equals(arg)
+            || "--cookies-from-browser".equals(arg)
+            || "--add-header".equals(arg);
     }
 
     private void logExtractorFallback(ChannelItem channel, String title, Exception error) {
@@ -3462,6 +3690,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (recording != null) {
                 recording.markStoppedByUser();
                 storage.upsertRecording(recording);
+                cancelYoutubedlAndroidRecording(recording.getId());
             }
         }
 
@@ -3565,6 +3794,43 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         FINALIZE,
         RESTARTED,
         DEFERRED
+    }
+
+
+    private static class YtDlpPrimaryRecorderDecision {
+        static final String RECORDER_NONE = "none";
+        static final String RECORDER_DIRECT_EXECUTABLE = "direct-executable";
+        static final String RECORDER_YOUTUBEDL_ANDROID = "youtubedl-android";
+
+        private final boolean shouldTry;
+        private final String recorderName;
+        private final String reason;
+
+        private YtDlpPrimaryRecorderDecision(boolean shouldTry, String recorderName, String reason) {
+            this.shouldTry = shouldTry;
+            this.recorderName = isBlank(recorderName) ? RECORDER_NONE : recorderName;
+            this.reason = isBlank(reason) ? "no reason provided." : reason;
+        }
+
+        static YtDlpPrimaryRecorderDecision skip(String reason) {
+            return new YtDlpPrimaryRecorderDecision(false, RECORDER_NONE, reason);
+        }
+
+        static YtDlpPrimaryRecorderDecision tryRecorder(String recorderName, String reason) {
+            return new YtDlpPrimaryRecorderDecision(true, recorderName, reason);
+        }
+
+        boolean shouldTry() {
+            return shouldTry;
+        }
+
+        String getRecorderName() {
+            return recorderName;
+        }
+
+        String getReason() {
+            return reason;
+        }
     }
 
     private static class YtDlpResolveAttempt {
