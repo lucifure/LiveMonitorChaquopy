@@ -422,33 +422,43 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         cancelActiveRecording(recording);
-        broadcastRecordingUpdated("Download stopped and saved.");
+        if (recording == null || recording.getBestPlayablePath().trim().isEmpty()) {
+            broadcastRecordingUpdated("Download stopped; no file was saved because no stream data was received.");
+        } else {
+            broadcastRecordingUpdated("Download stopped and saved.");
+        }
     }
 
-    private void saveStoppedRecordingForDownloads(RecordingItem recording) {
+    private boolean saveStoppedRecordingForDownloads(RecordingItem recording) {
         if (recording == null) {
-            return;
+            return false;
         }
 
         if (recording.isCompleted()) {
             copyCompletedRecordingToSelectedFolder(recording, null);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
-            return;
+            return true;
         }
+
+        boolean savedPlayableFile;
 
         if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, null);
+            savedPlayableFile = true;
         } else if (recording.hasExistingTempTsFile()) {
             recording.markCompleted(recording.getTempTsPath());
             copyCompletedRecordingToSelectedFolder(recording, null);
+            savedPlayableFile = true;
         } else {
             recording.markStoppedByUser();
+            savedPlayableFile = false;
         }
 
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
+        return savedPlayableFile;
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
@@ -897,7 +907,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             videoUrl,
             recording.getCurrentTempSegmentPath(),
             settings,
-            remoteConfig
+            remoteConfig,
+            false
         );
 
         recording.setDiagnosticMessage("yt-dlp live-from-start recorder is starting.");
@@ -973,16 +984,55 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "yt-dlp recorder exited with code " + exitCode
             );
         } catch (Exception e) {
+            String errorMessage = normalizeErrorMessage(e);
+
+            if (isLiveNotReadyError(errorMessage)) {
+                return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
+            }
+
             return startFfmpegFallbackAfterYtDlpFailure(
                 channelId,
                 channel,
                 recording,
                 liveInfo,
-                normalizeErrorMessage(e)
+                errorMessage
             );
         }
     }
 
+    private boolean handleYtDlpPrimaryLiveNotReady(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String errorMessage
+    ) {
+        restartingRecordings.remove(recording.getId());
+        activeRecordings.remove(channelId);
+        activeRecordings.remove(recording.getChannelId());
+        activeRecordings.remove(recording.getId());
+        progressTracker.untrack(recording);
+        discardUnstartedRecording(recording);
+
+        ChannelItem latest = channel == null ? storage.findChannelById(channelId) : channel;
+
+        if (latest != null) {
+            latest.markWaitingForLive();
+            storage.upsertChannel(latest);
+            notificationHelper.showChannelMonitoringNotification(latest);
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            latest,
+            "yt-dlp reported the live event is not active yet; waiting instead of saving an empty file.",
+            errorMessage
+        );
+
+        broadcastChannelUpdated("Waiting for live.");
+        broadcastRecordingUpdated("Live event is not active yet; no empty file was saved.");
+        return true;
+    }
 
     private int recordLiveStreamWithYoutubedlAndroid(
         String recordingId,
