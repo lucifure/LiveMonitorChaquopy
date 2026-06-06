@@ -1084,12 +1084,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
         for (String extractorArg : extractorArgs) {
-            attempts.add(buildYtDlpPrimaryRecordAttempt(
-                builder,
-                videoUrl,
-                outputPath,
-                appSettings,
-                config,
+            attempts.add(new YtDlpResolveAttempt(
+                builder.buildYtDlpRecordArgs(
+                    videoUrl,
+                    outputPath,
+                    appSettings,
+                    config,
+                    extractorArg,
+                    true,
+                    allowWaitForVideo
+                ),
                 extractorArg,
                 true,
                 allowWaitForVideo
