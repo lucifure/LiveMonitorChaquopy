@@ -3,20 +3,26 @@ package com.livemonitor.app;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Small ProcessBuilder wrapper for invoking an installed/bundled yt-dlp binary.
  *
- * The app uses this only as an extractor first: yt-dlp resolves the changing
- * YouTube playback URL, then the existing FFmpegRunner records that URL.
+ * The app can use this in two ways:
+ * - extractor mode: yt-dlp resolves one playable URL for FFmpeg fallback.
+ * - recorder mode: yt-dlp owns the download so --live-from-start can walk the
+ *   YouTube DVR fragments from the earliest available fragment.
  */
 public class YtDlpRunner {
     private static final String TAG = "YtDlpRunner";
+    private static final Map<String, Process> recordingProcesses = new ConcurrentHashMap<>();
 
     public interface OnLogCallback {
         void onLog(String message);
@@ -83,6 +89,85 @@ public class YtDlpRunner {
             "yt-dlp failed with exit code " + exitCode + ". "
                 + collector.getLastOutputSummary()
         );
+    }
+
+    public static int recordLiveStream(
+        String recordingId,
+        List<String> args,
+        String outputPath,
+        OnLogCallback logCallback
+    ) throws Exception {
+        if (args == null || args.isEmpty()) {
+            throw new IllegalArgumentException("yt-dlp recording command is empty.");
+        }
+
+        String safeRecordingId = normalizeRecordingId(recordingId, outputPath);
+        ensureParentDirectory(outputPath);
+        cancelRecording(safeRecordingId);
+
+        ProcessBuilder builder = new ProcessBuilder(args);
+        builder.redirectErrorStream(true);
+
+        Process process;
+
+        try {
+            process = builder.start();
+        } catch (IOException e) {
+            String executable = args.get(0);
+            throw new IllegalStateException(
+                "Unable to start yt-dlp recorder. "
+                    + YtDlpEnvironment.describeExecutableProblem(executable)
+                    + " Original error: "
+                    + e.getMessage(),
+                e
+            );
+        }
+
+        recordingProcesses.put(safeRecordingId, process);
+
+        OutputCollector collector = new OutputCollector(process.getInputStream(), logCallback);
+        Thread collectorThread = new Thread(collector, "YtDlpRecordingOutputCollector-" + safeRecordingId);
+        collectorThread.start();
+
+        try {
+            int exitCode = process.waitFor();
+            collectorThread.join(2_000L);
+            return exitCode;
+        } finally {
+            recordingProcesses.remove(safeRecordingId, process);
+        }
+    }
+
+    public static boolean cancelRecording(String recordingId) {
+        String safeRecordingId = normalizeRecordingId(recordingId, "");
+        Process process = recordingProcesses.remove(safeRecordingId);
+
+        if (process == null) {
+            return false;
+        }
+
+        process.destroy();
+
+        try {
+            if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+        }
+
+        return true;
+    }
+
+    public static boolean isRecording(String recordingId) {
+        return recordingProcesses.containsKey(normalizeRecordingId(recordingId, ""));
+    }
+
+    public static void cancelAllRecordings() {
+        for (String recordingId : recordingProcesses.keySet()) {
+            cancelRecording(recordingId);
+        }
     }
 
     private static class OutputCollector implements Runnable {
@@ -173,7 +258,33 @@ public class YtDlpRunner {
             || lower.contains("private")
             || lower.contains("members-only")
             || lower.contains("premiere")
-            || lower.contains("live event");
+            || lower.contains("live event")
+            || lower.contains("destination")
+            || lower.contains("merging formats");
+    }
+
+    private static void ensureParentDirectory(String outputPath) {
+        if (isBlank(outputPath)) {
+            return;
+        }
+
+        File parent = new File(outputPath).getParentFile();
+
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+    }
+
+    private static String normalizeRecordingId(String recordingId, String fallback) {
+        if (!isBlank(recordingId)) {
+            return recordingId.trim();
+        }
+
+        if (!isBlank(fallback)) {
+            return fallback.trim();
+        }
+
+        return "default";
     }
 
     private static boolean isBlank(String value) {

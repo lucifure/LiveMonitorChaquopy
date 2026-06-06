@@ -67,7 +67,7 @@ public class RecorderCommandBuilder {
         if (settings.isSkipUnavailableFragmentsEnabled()) {
             args.add("--skip-unavailable-fragments");
             args.add("--fragment-retries");
-            args.add("infinite");
+            args.add("10");
         }
 
         /*
@@ -86,15 +86,15 @@ public class RecorderCommandBuilder {
         }
 
         /*
-         * Match the proven Termux recorder behavior: keep retrying live
-         * fragments and extractors instead of ending a long recording early.
+         * Match the proven Termux recorder behavior, but keep retries bounded
+         * so Android does not keep a broken recorder alive forever.
          */
         args.add("--retries");
-        args.add("infinite");
+        args.add("10");
         args.add("--extractor-retries");
-        args.add("infinite");
+        args.add("10");
         args.add("--file-access-retries");
-        args.add("infinite");
+        args.add("10");
         args.add("--retry-sleep");
         args.add("5");
 
