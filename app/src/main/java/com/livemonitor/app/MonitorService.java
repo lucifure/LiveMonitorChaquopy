@@ -2882,6 +2882,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (!isBlank(poTokenExtractorArgs)) {
             extractorArgs.add(poTokenExtractorArgs.trim());
+            logYtDlpPoTokenCacheState();
         }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
@@ -2928,6 +2929,36 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         logYtDlpExtractorAttemptList(extractorArgs);
         return extractorArgs;
+    }
+
+    private void logYtDlpPoTokenCacheState() {
+        if (settings == null || !settings.hasYtDlpPoToken()) {
+            return;
+        }
+
+        boolean refreshNeeded = settings.isYtDlpPoTokenRefreshNeeded(System.currentTimeMillis());
+        log(
+            refreshNeeded ? LogItem.LEVEL_WARNING : LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            null,
+            refreshNeeded
+                ? "Cached YouTube PO token may need refresh."
+                : "Cached YouTube PO token will be used.",
+            "client="
+                + settings.getYtDlpPoTokenClient()
+                + ", type="
+                + settings.getYtDlpPoTokenType()
+                + ", videoId="
+                + settings.getYtDlpPoTokenVideoId()
+                + ", source="
+                + settings.getYtDlpPoTokenSource()
+                + ", updatedAt="
+                + settings.getYtDlpPoTokenUpdatedAt()
+                + ", session="
+                + settings.getYtDlpPoTokenSessionBinding()
+                + ", refreshNeeded="
+                + refreshNeeded
+        );
     }
 
     private void logYtDlpExtractorAttemptList(LinkedHashSet<String> extractorArgs) {

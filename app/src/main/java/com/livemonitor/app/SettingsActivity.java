@@ -172,7 +172,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         Button youtubeSignInButton = new Button(this);
         youtubeSignInButton.setAllCaps(false);
-        youtubeSignInButton.setText("Sign in to YouTube WebView");
+        youtubeSignInButton.setText("Open YouTube session / PO token setup");
         youtubeSignInButton.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
         root.addView(youtubeSignInButton);
 
@@ -328,6 +328,7 @@ public class SettingsActivity extends AppCompatActivity {
         settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
         settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
         settings.setYtDlpExtractorArgs(ytDlpExtractorArgsInput.getText().toString());
+        String previousPoTokenValue = settings.getYtDlpPoTokenValue();
         String poTokenInput = ytDlpPoTokenValueInput.getText().toString();
         String poTokenClient = inferPoTokenClient(
             ytDlpPoTokenClientInput.getText().toString(),
@@ -335,6 +336,19 @@ public class SettingsActivity extends AppCompatActivity {
         );
         settings.setYtDlpPoTokenClient(poTokenClient);
         settings.setYtDlpPoTokenValue(poTokenInput);
+
+        if (settings.getYtDlpPoTokenValue().isEmpty()) {
+            settings.clearYtDlpPoToken();
+        } else if (!settings.getYtDlpPoTokenValue().equals(previousPoTokenValue)) {
+            settings.setYtDlpPoTokenMetadata(
+                "gvs",
+                System.currentTimeMillis(),
+                "manual-settings",
+                "manual-session",
+                "",
+                ""
+            );
+        }
         settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
         settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
         settings.setRequestBatteryOptimizationExemption(
