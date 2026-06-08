@@ -65,6 +65,12 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Visible user-approved YouTube sign-in WebView for yt-dlp cookies. -->
+        <activity
+            android:name=".YouTubeSignInActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Global log screen. -->
         <activity
             android:name=".LogActivity"

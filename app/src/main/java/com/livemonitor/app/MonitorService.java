@@ -51,6 +51,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
     private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
+    private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
 
     private AppStorage storage;
     private AppSettings settings;
@@ -65,6 +66,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Boolean> activeLoops = new ConcurrentHashMap<>();
     private final Map<String, RecordingItem> activeRecordings = new ConcurrentHashMap<>();
     private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
+    private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
@@ -414,10 +416,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ChannelItem channel = storage.findChannelById(channelId);
 
             if (channel != null) {
-                channel.markRecordingFinished();
-                channel.markWaitingForLive();
+                activeLoops.remove(channel.getId());
+                channel.markPausedByUser();
                 storage.upsertChannel(channel);
                 notificationHelper.showChannelMonitoringNotification(channel);
+                broadcastChannelUpdated("Monitoring paused after recording stop.");
             }
         }
 
@@ -506,6 +509,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 activeLoops.remove(channelId);
                 break;
             }
+
+            Long cooldownUntil = channelRateLimitCooldownUntil.get(channelId);
+
+            if (cooldownUntil != null && cooldownUntil > System.currentTimeMillis()) {
+                long remainingMillis = cooldownUntil - System.currentTimeMillis();
+                channel.markRetrying("YouTube returned HTTP 429; cooling down before the next check.");
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+                broadcastChannelUpdated("Rate-limit cooldown active.");
+                sleep(Math.min(remainingMillis, settings.getPollIntervalMillis()));
+                continue;
+            }
+
+            channelRateLimitCooldownUntil.remove(channelId);
 
             if (!networkAvailable) {
                 channel.markPausedByNetwork("Waiting for internet connection.");
@@ -722,6 +739,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 broadcastChannelUpdated("Waiting for live.");
                 broadcastRecordingUpdated("Live event is not active yet.");
                 return;
+            }
+
+            if (isHttp429Error(errorMessage)) {
+                startHttp429Cooldown(latest, errorMessage);
             }
 
             recording.markFailed(errorMessage);
@@ -1025,6 +1046,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         + attempt.describe()
                         + ")"
                 );
+
+                if (isHttp429Error(lastFailureReason)) {
+                    startHttp429Cooldown(channel, lastFailureReason);
+                    return startFfmpegFallbackAfterYtDlpFailure(
+                        channelId,
+                        channel,
+                        recording,
+                        liveInfo,
+                        lastFailureReason
+                    );
+                }
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
 
@@ -1033,6 +1065,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
 
                 lastFailureReason = addYtDlpAccessGuidance(errorMessage + " (" + attempt.describe() + ")");
+
+                if (isHttp429Error(lastFailureReason)) {
+                    startHttp429Cooldown(channel, lastFailureReason);
+                    return startFfmpegFallbackAfterYtDlpFailure(
+                        channelId,
+                        channel,
+                        recording,
+                        liveInfo,
+                        lastFailureReason
+                    );
+                }
             }
 
             if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
@@ -1410,6 +1453,39 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 + "The app cannot safely impersonate or bypass YouTube's bot checks without legitimate session data.";
 
         return failureReason + " " + guidance;
+    }
+
+    private void startHttp429Cooldown(ChannelItem channel, String reason) {
+        if (channel == null) {
+            return;
+        }
+
+        channelRateLimitCooldownUntil.put(
+            channel.getId(),
+            System.currentTimeMillis() + HTTP_429_COOLDOWN_MILLIS
+        );
+        channel.markRetrying("YouTube HTTP 429 rate limit detected; cooling down for 10 minutes.");
+        storage.upsertChannel(channel);
+        notificationHelper.showChannelMonitoringNotification(channel);
+        broadcastChannelUpdated("Rate-limit cooldown active.");
+        log(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_SERVICE,
+            channel,
+            "HTTP 429 cooldown started.",
+            "cooldownMillis=" + HTTP_429_COOLDOWN_MILLIS + ", reason=" + reason
+        );
+    }
+
+    private boolean isHttp429Error(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+        return lower.contains("http 429")
+            || lower.contains("http error 429")
+            || lower.contains("too many requests");
     }
 
     private boolean isYoutubeBotProtectionError(String message) {
@@ -2174,6 +2250,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void handleRetry(ChannelItem channel, String message) {
         if (channel == null) return;
 
+        if (isHttp429Error(message)) {
+            startHttp429Cooldown(channel, message);
+            sleep(Math.min(HTTP_429_COOLDOWN_MILLIS, settings.getPollIntervalMillis()));
+            return;
+        }
+
         if (!channel.canRetry()) {
             channel.markFailed(message);
             storage.upsertChannel(channel);
@@ -2714,6 +2796,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         // First let yt-dlp choose its own current YouTube clients. Forced
         // clients can become stale faster than yt-dlp's internal defaults.
         extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
+
+        String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
+
+        if (!isBlank(localExtractorArgs)) {
+            extractorArgs.add(localExtractorArgs.trim());
+        }
 
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
@@ -3474,7 +3562,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return message.contains("timeout")
             || message.contains("connection")
             || message.contains("http 408")
-            || message.contains("http 429")
             || message.contains("http 500")
             || message.contains("http 502")
             || message.contains("http 503")
