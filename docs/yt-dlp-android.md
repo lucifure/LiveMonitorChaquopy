@@ -95,7 +95,43 @@ resolver before falling back to Java HLS.
 This is intended as a practical personal-testing path. If you later distribute
 the APK to other people, review the dependency licenses first; for private
 on-device testing, the important checks are simply that initialization logs
-`youtubedl-android ready.` and stream resolution logs `source=yt-dlp`.
+`youtubedl-android ready.` with `yt-dlp and ffmpeg runtimes initialized` and stream resolution logs `source=yt-dlp`.
+
+
+## YouTube cookies and GVS PO tokens
+
+The app uses a visible, user-approved token setup flow instead of hidden WebView
+scraping. Open **Settings → YouTube session / PO token setup**, sign in if needed,
+load a real YouTube watch/player URL, and tap **Generate/Refresh PO token**. The
+button evaluates the currently visible player context and only caches a token if
+one is observable from player configuration/response data already available to
+that WebView page.
+
+Cached PO-token metadata includes:
+
+- yt-dlp player client (`mweb`, `web`, `android`, or `ios` when detected);
+- token type (`gvs`);
+- refresh timestamp;
+- source path in the visible player context;
+- a short hash of the current YouTube cookie session;
+- player video ID and player URL.
+
+The token value is stored for yt-dlp use but is never written to app logs. Logs
+only show redacted extractor args and non-secret metadata so you can verify that
+the correct client/type/video/session cache is being used. Tokens older than the
+six-hour refresh window are logged as refresh-recommended, but the app does not
+silently refresh or scrape in the background; refresh is user-triggered from the
+visible setup screen.
+
+The recorder builds the matching yt-dlp extractor argument as:
+
+```text
+youtube:player_client=<client>;po_token=<client>.<type>+<TOKEN>
+```
+
+A cached token attempt is tried before yt-dlp defaults, remote-config clients,
+and the generic Android/iOS/MWeb/Web fallback clients. Placeholder values such as
+`TOKEN` or `...` are ignored.
 
 ## Remote config fallback
 

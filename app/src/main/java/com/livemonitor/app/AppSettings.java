@@ -38,6 +38,14 @@ public class AppSettings {
     private static final String JSON_YTDLP_COOKIES_PATH = "ytDlpCookiesPath";
     private static final String JSON_YTDLP_COOKIE_HEADER = "ytDlpCookieHeader";
     private static final String JSON_YTDLP_EXTRACTOR_ARGS = "ytDlpExtractorArgs";
+    private static final String JSON_YTDLP_PO_TOKEN_CLIENT = "ytDlpPoTokenClient";
+    private static final String JSON_YTDLP_PO_TOKEN_VALUE = "ytDlpPoTokenValue";
+    private static final String JSON_YTDLP_PO_TOKEN_TYPE = "ytDlpPoTokenType";
+    private static final String JSON_YTDLP_PO_TOKEN_UPDATED_AT = "ytDlpPoTokenUpdatedAt";
+    private static final String JSON_YTDLP_PO_TOKEN_SOURCE = "ytDlpPoTokenSource";
+    private static final String JSON_YTDLP_PO_TOKEN_SESSION_BINDING = "ytDlpPoTokenSessionBinding";
+    private static final String JSON_YTDLP_PO_TOKEN_VIDEO_ID = "ytDlpPoTokenVideoId";
+    private static final String JSON_YTDLP_PO_TOKEN_PLAYER_URL = "ytDlpPoTokenPlayerUrl";
     private static final String JSON_TEMP_CLEANUP_BEFORE_RECORDING = "tempCleanupBeforeRecording";
     private static final String JSON_CONVERT_TS_TO_MP4 = "convertTsToMp4";
     private static final String JSON_RECOVER_ORPHAN_TS_FILES = "recoverOrphanTsFiles";
@@ -85,6 +93,14 @@ public class AppSettings {
     private String ytDlpCookiesPath;
     private String ytDlpCookieHeader;
     private String ytDlpExtractorArgs;
+    private String ytDlpPoTokenClient;
+    private String ytDlpPoTokenValue;
+    private String ytDlpPoTokenType;
+    private long ytDlpPoTokenUpdatedAt;
+    private String ytDlpPoTokenSource;
+    private String ytDlpPoTokenSessionBinding;
+    private String ytDlpPoTokenVideoId;
+    private String ytDlpPoTokenPlayerUrl;
 
     private boolean tempCleanupBeforeRecording;
     private boolean convertTsToMp4;
@@ -132,6 +148,14 @@ public class AppSettings {
         this.ytDlpCookiesPath = "";
         this.ytDlpCookieHeader = "";
         this.ytDlpExtractorArgs = "";
+        this.ytDlpPoTokenClient = "mweb";
+        this.ytDlpPoTokenValue = "";
+        this.ytDlpPoTokenType = "gvs";
+        this.ytDlpPoTokenUpdatedAt = 0L;
+        this.ytDlpPoTokenSource = "";
+        this.ytDlpPoTokenSessionBinding = "";
+        this.ytDlpPoTokenVideoId = "";
+        this.ytDlpPoTokenPlayerUrl = "";
 
         this.tempCleanupBeforeRecording = true;
         this.convertTsToMp4 = true;
@@ -174,6 +198,14 @@ public class AppSettings {
         String ytDlpCookiesPath,
         String ytDlpCookieHeader,
         String ytDlpExtractorArgs,
+        String ytDlpPoTokenClient,
+        String ytDlpPoTokenValue,
+        String ytDlpPoTokenType,
+        long ytDlpPoTokenUpdatedAt,
+        String ytDlpPoTokenSource,
+        String ytDlpPoTokenSessionBinding,
+        String ytDlpPoTokenVideoId,
+        String ytDlpPoTokenPlayerUrl,
         boolean tempCleanupBeforeRecording,
         boolean convertTsToMp4,
         boolean recoverOrphanTsFiles,
@@ -217,6 +249,14 @@ public class AppSettings {
         this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
         this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
         this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
+        this.ytDlpPoTokenClient = normalizePoTokenClient(ytDlpPoTokenClient);
+        this.ytDlpPoTokenValue = normalizePoTokenValue(ytDlpPoTokenValue);
+        this.ytDlpPoTokenType = normalizePoTokenType(ytDlpPoTokenType);
+        this.ytDlpPoTokenUpdatedAt = Math.max(0L, ytDlpPoTokenUpdatedAt);
+        this.ytDlpPoTokenSource = nullToEmpty(ytDlpPoTokenSource).trim();
+        this.ytDlpPoTokenSessionBinding = nullToEmpty(ytDlpPoTokenSessionBinding).trim();
+        this.ytDlpPoTokenVideoId = normalizeVideoId(ytDlpPoTokenVideoId);
+        this.ytDlpPoTokenPlayerUrl = nullToEmpty(ytDlpPoTokenPlayerUrl).trim();
 
         this.tempCleanupBeforeRecording = tempCleanupBeforeRecording;
         this.convertTsToMp4 = convertTsToMp4;
@@ -281,6 +321,17 @@ public class AppSettings {
             json.optString(JSON_YTDLP_COOKIES_PATH, defaults.getYtDlpCookiesPath()),
             json.optString(JSON_YTDLP_COOKIE_HEADER, defaults.getYtDlpCookieHeader()),
             json.optString(JSON_YTDLP_EXTRACTOR_ARGS, defaults.getYtDlpExtractorArgs()),
+            json.optString(JSON_YTDLP_PO_TOKEN_CLIENT, defaults.getYtDlpPoTokenClient()),
+            json.optString(JSON_YTDLP_PO_TOKEN_VALUE, defaults.getYtDlpPoTokenValue()),
+            json.optString(JSON_YTDLP_PO_TOKEN_TYPE, defaults.getYtDlpPoTokenType()),
+            json.optLong(JSON_YTDLP_PO_TOKEN_UPDATED_AT, defaults.getYtDlpPoTokenUpdatedAt()),
+            json.optString(JSON_YTDLP_PO_TOKEN_SOURCE, defaults.getYtDlpPoTokenSource()),
+            json.optString(
+                JSON_YTDLP_PO_TOKEN_SESSION_BINDING,
+                defaults.getYtDlpPoTokenSessionBinding()
+            ),
+            json.optString(JSON_YTDLP_PO_TOKEN_VIDEO_ID, defaults.getYtDlpPoTokenVideoId()),
+            json.optString(JSON_YTDLP_PO_TOKEN_PLAYER_URL, defaults.getYtDlpPoTokenPlayerUrl()),
             json.optBoolean(
                 JSON_TEMP_CLEANUP_BEFORE_RECORDING,
                 defaults.isTempCleanupBeforeRecording()
@@ -332,6 +383,14 @@ public class AppSettings {
         json.put(JSON_YTDLP_COOKIES_PATH, ytDlpCookiesPath);
         json.put(JSON_YTDLP_COOKIE_HEADER, ytDlpCookieHeader);
         json.put(JSON_YTDLP_EXTRACTOR_ARGS, ytDlpExtractorArgs);
+        json.put(JSON_YTDLP_PO_TOKEN_CLIENT, ytDlpPoTokenClient);
+        json.put(JSON_YTDLP_PO_TOKEN_VALUE, ytDlpPoTokenValue);
+        json.put(JSON_YTDLP_PO_TOKEN_TYPE, ytDlpPoTokenType);
+        json.put(JSON_YTDLP_PO_TOKEN_UPDATED_AT, ytDlpPoTokenUpdatedAt);
+        json.put(JSON_YTDLP_PO_TOKEN_SOURCE, ytDlpPoTokenSource);
+        json.put(JSON_YTDLP_PO_TOKEN_SESSION_BINDING, ytDlpPoTokenSessionBinding);
+        json.put(JSON_YTDLP_PO_TOKEN_VIDEO_ID, ytDlpPoTokenVideoId);
+        json.put(JSON_YTDLP_PO_TOKEN_PLAYER_URL, ytDlpPoTokenPlayerUrl);
         json.put(JSON_TEMP_CLEANUP_BEFORE_RECORDING, tempCleanupBeforeRecording);
         json.put(JSON_CONVERT_TS_TO_MP4, convertTsToMp4);
         json.put(JSON_RECOVER_ORPHAN_TS_FILES, recoverOrphanTsFiles);
@@ -597,6 +656,52 @@ public class AppSettings {
         return value == null || value.trim().isEmpty();
     }
 
+    private static String normalizePoTokenClient(String client) {
+        String normalized = nullToEmpty(client).trim().toLowerCase(java.util.Locale.US);
+
+        if (normalized.isEmpty()) {
+            return "mweb";
+        }
+
+        int dotIndex = normalized.indexOf('.');
+
+        if (dotIndex > 0) {
+            normalized = normalized.substring(0, dotIndex);
+        }
+
+        return normalized.replaceAll("[^a-z0-9_ -]", "").replace(' ', '_');
+    }
+
+    private static String normalizePoTokenType(String tokenType) {
+        String normalized = nullToEmpty(tokenType).trim().toLowerCase(java.util.Locale.US);
+        return normalized.isEmpty() ? "gvs" : normalized.replaceAll("[^a-z0-9_ -]", "").replace(' ', '_');
+    }
+
+    private static String normalizeVideoId(String videoId) {
+        String normalized = nullToEmpty(videoId).trim();
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+    }
+
+    private static String normalizePoTokenValue(String token) {
+        String normalized = nullToEmpty(token).trim();
+
+        if (normalized.toLowerCase(java.util.Locale.US).startsWith("po_token=")) {
+            normalized = normalized.substring("po_token=".length()).trim();
+        }
+
+        int plusIndex = normalized.indexOf('+');
+
+        if (plusIndex >= 0 && plusIndex + 1 < normalized.length()) {
+            normalized = normalized.substring(plusIndex + 1).trim();
+        }
+
+        if ("TOKEN".equalsIgnoreCase(normalized) || normalized.contains("...")) {
+            return "";
+        }
+
+        return normalized;
+    }
+
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
     }
@@ -679,6 +784,77 @@ public class AppSettings {
 
     public String getYtDlpExtractorArgs() {
         return ytDlpExtractorArgs;
+    }
+
+    public String getYtDlpPoTokenClient() {
+        return ytDlpPoTokenClient;
+    }
+
+    public String getYtDlpPoTokenValue() {
+        return ytDlpPoTokenValue;
+    }
+
+    public String getYtDlpPoTokenType() {
+        return ytDlpPoTokenType;
+    }
+
+    public long getYtDlpPoTokenUpdatedAt() {
+        return ytDlpPoTokenUpdatedAt;
+    }
+
+    public String getYtDlpPoTokenSource() {
+        return ytDlpPoTokenSource;
+    }
+
+    public String getYtDlpPoTokenSessionBinding() {
+        return ytDlpPoTokenSessionBinding;
+    }
+
+    public String getYtDlpPoTokenVideoId() {
+        return ytDlpPoTokenVideoId;
+    }
+
+    public String getYtDlpPoTokenPlayerUrl() {
+        return ytDlpPoTokenPlayerUrl;
+    }
+
+    public boolean hasYtDlpPoToken() {
+        return !isBlank(ytDlpPoTokenClient) && !isBlank(ytDlpPoTokenValue);
+    }
+
+    public boolean isYtDlpPoTokenRefreshNeeded(long nowMillis) {
+        if (!hasYtDlpPoToken() || ytDlpPoTokenUpdatedAt <= 0L) {
+            return true;
+        }
+
+        return nowMillis - ytDlpPoTokenUpdatedAt >= getYtDlpPoTokenRefreshIntervalMillis();
+    }
+
+    public long getYtDlpPoTokenRefreshIntervalMillis() {
+        return 6L * 60L * 60L * 1000L;
+    }
+
+    public String buildYtDlpPoTokenExtractorArgs() {
+        if (!hasYtDlpPoToken()) {
+            return "";
+        }
+
+        String client = normalizePoTokenClient(ytDlpPoTokenClient);
+        String token = normalizePoTokenValue(ytDlpPoTokenValue);
+        String tokenType = normalizePoTokenType(ytDlpPoTokenType);
+
+        if (isBlank(client) || isBlank(token) || isBlank(tokenType)) {
+            return "";
+        }
+
+        return "youtube:player_client="
+            + client
+            + ";po_token="
+            + client
+            + "."
+            + tokenType
+            + "+"
+            + token;
     }
 
     public boolean hasYtDlpCookies() {
@@ -843,6 +1019,43 @@ public class AppSettings {
     public void setYtDlpExtractorArgs(String ytDlpExtractorArgs) {
         this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
         touch();
+    }
+
+    public void setYtDlpPoTokenClient(String ytDlpPoTokenClient) {
+        this.ytDlpPoTokenClient = normalizePoTokenClient(ytDlpPoTokenClient);
+        touch();
+    }
+
+    public void setYtDlpPoTokenValue(String ytDlpPoTokenValue) {
+        this.ytDlpPoTokenValue = normalizePoTokenValue(ytDlpPoTokenValue);
+        touch();
+    }
+
+    public void setYtDlpPoTokenType(String ytDlpPoTokenType) {
+        this.ytDlpPoTokenType = normalizePoTokenType(ytDlpPoTokenType);
+        touch();
+    }
+
+    public void setYtDlpPoTokenMetadata(
+        String tokenType,
+        long updatedAt,
+        String source,
+        String sessionBinding,
+        String videoId,
+        String playerUrl
+    ) {
+        this.ytDlpPoTokenType = normalizePoTokenType(tokenType);
+        this.ytDlpPoTokenUpdatedAt = Math.max(0L, updatedAt);
+        this.ytDlpPoTokenSource = nullToEmpty(source).trim();
+        this.ytDlpPoTokenSessionBinding = nullToEmpty(sessionBinding).trim();
+        this.ytDlpPoTokenVideoId = normalizeVideoId(videoId);
+        this.ytDlpPoTokenPlayerUrl = nullToEmpty(playerUrl).trim();
+        touch();
+    }
+
+    public void clearYtDlpPoToken() {
+        this.ytDlpPoTokenValue = "";
+        setYtDlpPoTokenMetadata("gvs", 0L, "", "", "", "");
     }
 
     public void setTempCleanupBeforeRecording(boolean tempCleanupBeforeRecording) {

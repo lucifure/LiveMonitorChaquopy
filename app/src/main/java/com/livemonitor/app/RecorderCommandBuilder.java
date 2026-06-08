@@ -451,6 +451,10 @@ public class RecorderCommandBuilder {
 
         String extractorArgs = settings.getYtDlpExtractorArgs();
 
+        if (allowExtractorArgs && isBlank(extractorArgs)) {
+            extractorArgs = settings.buildYtDlpPoTokenExtractorArgs();
+        }
+
         if (allowExtractorArgs && !isBlank(extractorArgs)) {
             removeOptionAndValue(args, "--extractor-args");
             int insertIndex = Math.max(1, args.size() - 1);
@@ -502,6 +506,10 @@ public class RecorderCommandBuilder {
 
         if (value.toLowerCase(java.util.Locale.US).startsWith("cookie:")) {
             return "Cookie:<redacted>";
+        }
+
+        if (value.toLowerCase(java.util.Locale.US).contains("po_token=")) {
+            value = value.replaceAll("(?i)(po_token=[^;\\s]+\\+)[^;\\s]+", "$1<redacted>");
         }
 
         if (value.isEmpty()) {
