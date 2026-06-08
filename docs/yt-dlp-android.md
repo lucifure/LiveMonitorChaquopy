@@ -95,7 +95,25 @@ resolver before falling back to Java HLS.
 This is intended as a practical personal-testing path. If you later distribute
 the APK to other people, review the dependency licenses first; for private
 on-device testing, the important checks are simply that initialization logs
-`youtubedl-android ready.` and stream resolution logs `source=yt-dlp`.
+`youtubedl-android ready.` with `yt-dlp and ffmpeg runtimes initialized` and stream resolution logs `source=yt-dlp`.
+
+
+## YouTube cookies and GVS PO tokens
+
+Settings now has separate fields for the GVS PO token client and token value in
+addition to the raw extractor-args override. Paste either the bare token value or
+a `client.gvs+TOKEN` value. The recorder builds the matching yt-dlp extractor
+argument as:
+
+```text
+youtube:player_client=<client>;po_token=<client>.gvs+<TOKEN>
+```
+
+A real token attempt is tried before yt-dlp defaults, remote-config clients, and
+the generic Android/iOS/MWeb/Web fallback clients. Recorder logs include the
+extractor-attempt list with the token value redacted so you can verify that the
+correct client is attached without leaking the token. Placeholder values such as
+`TOKEN` or `...` are ignored.
 
 ## Remote config fallback
 

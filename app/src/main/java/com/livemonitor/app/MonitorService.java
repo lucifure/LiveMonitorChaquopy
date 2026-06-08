@@ -18,6 +18,7 @@ import com.yausername.youtubedl_android.YoutubeDLException;
 import com.yausername.youtubedl_android.YoutubeDLRequest;
 import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel;
 import com.yausername.youtubedl_android.mapper.VideoInfo;
+import com.yausername.ffmpeg.FFmpeg;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function3;
@@ -122,13 +123,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             YoutubeDL.getInstance().init(getApplicationContext());
+            FFmpeg.getInstance().init(getApplicationContext());
             youtubedlAndroidReady = true;
             log(
                 LogItem.LEVEL_SUCCESS,
                 LogItem.SOURCE_REMOTE_CONFIG,
                 null,
                 "youtubedl-android ready.",
-                "Bundled Android yt-dlp runtime initialized for private testing."
+                "Bundled Android yt-dlp and ffmpeg runtimes initialized for private testing."
             );
         } catch (YoutubeDLException | RuntimeException e) {
             youtubedlAndroidReady = false;
@@ -1288,6 +1290,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private YoutubeDLRequest buildYoutubedlAndroidRequest(String videoUrl, List<String> args) {
         YoutubeDLRequest request = new YoutubeDLRequest(videoUrl);
 
+        if (!hasYtDlpOption(args, "--ffmpeg-location")) {
+            String ffmpegLocation = getYoutubedlAndroidFfmpegLocation();
+
+            if (!isBlank(ffmpegLocation)) {
+                request.addOption("--ffmpeg-location", ffmpegLocation);
+            }
+        }
+
         if (args == null) {
             return request;
         }
@@ -1310,6 +1320,34 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return request;
+    }
+
+    private String getYoutubedlAndroidFfmpegLocation() {
+        File ffmpegBinDir = new File(
+            getNoBackupFilesDir(),
+            "youtubedl-android/packages/ffmpeg/usr/bin"
+        );
+
+        if (ffmpegBinDir.exists() && ffmpegBinDir.isDirectory()) {
+            return ffmpegBinDir.getAbsolutePath();
+        }
+
+        File ffmpegExecutable = new File(ffmpegBinDir, "ffmpeg");
+        return ffmpegExecutable.getAbsolutePath();
+    }
+
+    private boolean hasYtDlpOption(List<String> args, String option) {
+        if (args == null || isBlank(option)) {
+            return false;
+        }
+
+        for (String arg : args) {
+            if (option.equals(arg)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean stopRecordingForHttp429Cooldown(
@@ -2838,15 +2876,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private LinkedHashSet<String> buildYtDlpExtractorArgAttempts() {
         LinkedHashSet<String> extractorArgs = new LinkedHashSet<>();
 
-        // First let yt-dlp choose its own current YouTube clients. Forced
-        // clients can become stale faster than yt-dlp's internal defaults.
-        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
+        String poTokenExtractorArgs = settings == null
+            ? ""
+            : settings.buildYtDlpPoTokenExtractorArgs();
+
+        if (!isBlank(poTokenExtractorArgs)) {
+            extractorArgs.add(poTokenExtractorArgs.trim());
+        }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
 
         if (!isBlank(localExtractorArgs)) {
             extractorArgs.add(localExtractorArgs.trim());
         }
+
+        // Let yt-dlp choose its own current YouTube clients after explicit app
+        // settings. Forced clients can become stale faster than yt-dlp defaults.
+        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
 
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
@@ -2880,7 +2926,28 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
+        logYtDlpExtractorAttemptList(extractorArgs);
         return extractorArgs;
+    }
+
+    private void logYtDlpExtractorAttemptList(LinkedHashSet<String> extractorArgs) {
+        if (extractorArgs == null || extractorArgs.isEmpty()) {
+            return;
+        }
+
+        List<String> descriptions = new ArrayList<>();
+
+        for (String extractorArg : extractorArgs) {
+            descriptions.add(redactYtDlpExtractorArgForLog(extractorArg));
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            null,
+            "yt-dlp extractor args attempt list built.",
+            "attempts=" + descriptions
+        );
     }
 
     private String buildYtDlpExtractorAttemptDescription(
@@ -2889,12 +2956,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     ) {
         String extractorDescription = RecorderCommandBuilder.EXTRACTOR_ARGS_NONE.equals(extractorArg)
             ? "extractorArgs=yt-dlp-default"
-            : "extractorArgs=" + extractorArg;
+            : "extractorArgs=" + redactYtDlpExtractorArgForLog(extractorArg);
         String liveFromStartDescription = settings != null && settings.isLiveFromStartEnabled()
             ? ", liveFromStart=" + allowLiveFromStart
             : "";
 
         return extractorDescription + liveFromStartDescription;
+    }
+
+    private String redactYtDlpExtractorArgForLog(String extractorArg) {
+        if (extractorArg == null) {
+            return "";
+        }
+
+        return extractorArg.replaceAll("(?i)(po_token=[^;\\s]+\\+)[^;\\s]+", "$1<redacted>");
     }
 
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
@@ -2916,6 +2991,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel
     ) throws Exception {
         YoutubeDLRequest request = new YoutubeDLRequest(videoUrl);
+
+        if (!hasYtDlpOption(args, "--ffmpeg-location")) {
+            String ffmpegLocation = getYoutubedlAndroidFfmpegLocation();
+
+            if (!isBlank(ffmpegLocation)) {
+                request.addOption("--ffmpeg-location", ffmpegLocation);
+            }
+        }
 
         for (int i = 1; i < args.size(); i++) {
             String arg = args.get(i);
@@ -2965,6 +3048,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || "--js-runtime".equals(arg)
             || "--user-agent".equals(arg)
             || "--extractor-args".equals(arg)
+            || "--ffmpeg-location".equals(arg)
             || "--cookies".equals(arg)
             || "--cookies-from-browser".equals(arg)
             || "--add-header".equals(arg);

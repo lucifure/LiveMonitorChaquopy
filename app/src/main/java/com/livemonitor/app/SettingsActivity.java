@@ -50,6 +50,8 @@ public class SettingsActivity extends AppCompatActivity {
     private EditText ytDlpCookieHeaderInput;
     private EditText ytDlpCookiesPathInput;
     private EditText ytDlpExtractorArgsInput;
+    private EditText ytDlpPoTokenClientInput;
+    private EditText ytDlpPoTokenValueInput;
     private CheckBox convertTsToMp4CheckBox;
     private CheckBox restoreBootCheckBox;
     private CheckBox batteryOptimizationCheckBox;
@@ -176,9 +178,25 @@ public class SettingsActivity extends AppCompatActivity {
 
         ytDlpExtractorArgsInput = addEditText(
             root,
-            "yt-dlp extractor args / PO token args (optional)",
-            "youtube:player_client=mweb;po_token=mweb.gvs+TOKEN"
+            "yt-dlp extractor args (optional)",
+            "youtube:player_client=mweb"
         );
+        ytDlpPoTokenClientInput = addEditText(
+            root,
+            "YouTube PO token client for GVS formats",
+            "mweb"
+        );
+        ytDlpPoTokenValueInput = addEditText(
+            root,
+            "YouTube GVS PO token value",
+            "Paste real token only, or mweb.gvs+TOKEN"
+        );
+
+        Button applyPoTokenButton = new Button(this);
+        applyPoTokenButton.setAllCaps(false);
+        applyPoTokenButton.setText("Apply PO token to extractor args");
+        applyPoTokenButton.setOnClickListener(v -> applyPoTokenToExtractorArgs());
+        root.addView(applyPoTokenButton);
         convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
 
         restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
@@ -244,6 +262,8 @@ public class SettingsActivity extends AppCompatActivity {
         ytDlpCookieHeaderInput.setText(settings.getYtDlpCookieHeader());
         ytDlpCookiesPathInput.setText(settings.getYtDlpCookiesPath());
         ytDlpExtractorArgsInput.setText(settings.getYtDlpExtractorArgs());
+        ytDlpPoTokenClientInput.setText(settings.getYtDlpPoTokenClient());
+        ytDlpPoTokenValueInput.setText(settings.getYtDlpPoTokenValue());
         convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
         restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
         batteryOptimizationCheckBox.setChecked(
@@ -258,6 +278,37 @@ public class SettingsActivity extends AppCompatActivity {
         } else {
             remoteConfigUrlInput.setText(settings.getRemoteConfigUrl());
         }
+    }
+
+    private void applyPoTokenToExtractorArgs() {
+        AppSettings preview = new AppSettings();
+        String poTokenInput = ytDlpPoTokenValueInput.getText().toString();
+        preview.setYtDlpPoTokenClient(inferPoTokenClient(
+            ytDlpPoTokenClientInput.getText().toString(),
+            poTokenInput
+        ));
+        preview.setYtDlpPoTokenValue(poTokenInput);
+
+        String extractorArgs = preview.buildYtDlpPoTokenExtractorArgs();
+
+        if (extractorArgs.isEmpty()) {
+            Toast.makeText(this, "Enter a real GVS PO token first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        ytDlpExtractorArgsInput.setText(extractorArgs);
+        Toast.makeText(this, "PO token extractor args applied.", Toast.LENGTH_SHORT).show();
+    }
+
+    private String inferPoTokenClient(String selectedClient, String tokenInput) {
+        String normalizedToken = tokenInput == null ? "" : tokenInput.trim().toLowerCase(java.util.Locale.US);
+        int markerIndex = normalizedToken.indexOf(".gvs+");
+
+        if (markerIndex > 0) {
+            return normalizedToken.substring(0, markerIndex);
+        }
+
+        return selectedClient;
     }
 
     private void saveSettings() {
@@ -277,6 +328,13 @@ public class SettingsActivity extends AppCompatActivity {
         settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
         settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
         settings.setYtDlpExtractorArgs(ytDlpExtractorArgsInput.getText().toString());
+        String poTokenInput = ytDlpPoTokenValueInput.getText().toString();
+        String poTokenClient = inferPoTokenClient(
+            ytDlpPoTokenClientInput.getText().toString(),
+            poTokenInput
+        );
+        settings.setYtDlpPoTokenClient(poTokenClient);
+        settings.setYtDlpPoTokenValue(poTokenInput);
         settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
         settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
         settings.setRequestBatteryOptimizationExemption(
