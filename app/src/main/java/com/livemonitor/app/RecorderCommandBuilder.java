@@ -128,7 +128,7 @@ public class RecorderCommandBuilder {
          * Remote config driven request headers/client behavior.
          */
         addRemoteConfigArgs(args, remoteConfig);
-        addSettingsCookieArgs(args, settings);
+        addSettingsYtDlpArgs(args, settings);
 
         args.add(videoUrl);
 
@@ -267,7 +267,7 @@ public class RecorderCommandBuilder {
         }
 
         addRemoteConfigArgs(args, remoteConfig, extractorArgsOverride);
-        addSettingsCookieArgs(args, settings);
+        addSettingsYtDlpArgs(args, settings, isBlank(extractorArgsOverride));
 
         args.add("--get-url");
         args.add(videoUrl);
@@ -436,9 +436,26 @@ public class RecorderCommandBuilder {
         return normalized;
     }
 
-    private void addSettingsCookieArgs(List<String> args, AppSettings settings) {
+    private void addSettingsYtDlpArgs(List<String> args, AppSettings settings) {
+        addSettingsYtDlpArgs(args, settings, true);
+    }
+
+    private void addSettingsYtDlpArgs(
+        List<String> args,
+        AppSettings settings,
+        boolean allowExtractorArgs
+    ) {
         if (args == null || settings == null) {
             return;
+        }
+
+        String extractorArgs = settings.getYtDlpExtractorArgs();
+
+        if (allowExtractorArgs && !isBlank(extractorArgs)) {
+            removeOptionAndValue(args, "--extractor-args");
+            int insertIndex = Math.max(1, args.size() - 1);
+            args.add(insertIndex, "--extractor-args");
+            args.add(insertIndex + 1, extractorArgs.trim());
         }
 
         String cookieHeader = settings.getYtDlpCookieHeader();

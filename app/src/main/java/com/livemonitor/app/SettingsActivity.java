@@ -12,6 +12,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,6 +49,7 @@ public class SettingsActivity extends AppCompatActivity {
     private CheckBox skipUnavailableFragmentsCheckBox;
     private EditText ytDlpCookieHeaderInput;
     private EditText ytDlpCookiesPathInput;
+    private EditText ytDlpExtractorArgsInput;
     private CheckBox convertTsToMp4CheckBox;
     private CheckBox restoreBootCheckBox;
     private CheckBox batteryOptimizationCheckBox;
@@ -68,11 +70,25 @@ public class SettingsActivity extends AppCompatActivity {
         bindSettingsToViews();
     }
 
-    private LinearLayout buildContentView() {
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (storage != null && ytDlpCookieHeaderInput != null) {
+            settings = storage.loadSettings();
+            bindSettingsToViews();
+        }
+    }
+
+    private ViewGroup buildContentView() {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
         root.setBackgroundColor(Color.rgb(15, 15, 15));
+        scrollView.addView(root);
 
         TextView title = new TextView(this);
         title.setText("Settings");
@@ -151,6 +167,18 @@ public class SettingsActivity extends AppCompatActivity {
             "yt-dlp cookies.txt path (optional)",
             "/data/user/0/com.livemonitor.app/files/youtube-cookies.txt"
         );
+
+        Button youtubeSignInButton = new Button(this);
+        youtubeSignInButton.setAllCaps(false);
+        youtubeSignInButton.setText("Sign in to YouTube WebView");
+        youtubeSignInButton.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
+        root.addView(youtubeSignInButton);
+
+        ytDlpExtractorArgsInput = addEditText(
+            root,
+            "yt-dlp extractor args / PO token args (optional)",
+            "youtube:player_client=mweb;po_token=mweb.gvs+TOKEN"
+        );
         convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
 
         restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
@@ -178,7 +206,7 @@ public class SettingsActivity extends AppCompatActivity {
         saveButton.setOnClickListener(v -> saveSettings());
         root.addView(saveButton);
 
-        return root;
+        return scrollView;
     }
 
     private void bindSettingsToViews() {
@@ -215,6 +243,7 @@ public class SettingsActivity extends AppCompatActivity {
         skipUnavailableFragmentsCheckBox.setChecked(settings.isSkipUnavailableFragmentsEnabled());
         ytDlpCookieHeaderInput.setText(settings.getYtDlpCookieHeader());
         ytDlpCookiesPathInput.setText(settings.getYtDlpCookiesPath());
+        ytDlpExtractorArgsInput.setText(settings.getYtDlpExtractorArgs());
         convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
         restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
         batteryOptimizationCheckBox.setChecked(
@@ -247,6 +276,7 @@ public class SettingsActivity extends AppCompatActivity {
         settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
         settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
         settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
+        settings.setYtDlpExtractorArgs(ytDlpExtractorArgsInput.getText().toString());
         settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
         settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
         settings.setRequestBatteryOptimizationExemption(
