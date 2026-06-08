@@ -1048,14 +1048,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 );
 
                 if (isHttp429Error(lastFailureReason)) {
-                    startHttp429Cooldown(channel, lastFailureReason);
-                    return startFfmpegFallbackAfterYtDlpFailure(
-                        channelId,
-                        channel,
-                        recording,
-                        liveInfo,
-                        lastFailureReason
-                    );
+                    return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
                 }
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
@@ -1067,14 +1060,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 lastFailureReason = addYtDlpAccessGuidance(errorMessage + " (" + attempt.describe() + ")");
 
                 if (isHttp429Error(lastFailureReason)) {
-                    startHttp429Cooldown(channel, lastFailureReason);
-                    return startFfmpegFallbackAfterYtDlpFailure(
-                        channelId,
-                        channel,
-                        recording,
-                        liveInfo,
-                        lastFailureReason
-                    );
+                    return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
                 }
             }
 
@@ -1324,6 +1310,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return request;
+    }
+
+    private boolean stopRecordingForHttp429Cooldown(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String reason
+    ) {
+        if (recording == null) {
+            startHttp429Cooldown(channel, reason);
+            return true;
+        }
+
+        ChannelItem latestChannel = channel;
+
+        if (latestChannel == null && !isBlank(channelId)) {
+            latestChannel = storage.findChannelById(channelId);
+        }
+
+        if (latestChannel == null && !isBlank(recording.getChannelId())) {
+            latestChannel = storage.findChannelById(recording.getChannelId());
+        }
+
+        startHttp429Cooldown(latestChannel, reason);
+        restartingRecordings.remove(recording.getId());
+        activeRecordings.remove(recording.getId());
+        activeRecordings.remove(recording.getChannelId());
+
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
+
+        progressTracker.untrack(recording);
+        cancelActiveRecording(recording);
+
+        if (currentRecordingSegmentHasData(recording)) {
+            recording.markRecoverable("YouTube HTTP 429 rate limit detected; recording paused during cooldown. " + reason);
+            storage.upsertRecording(recording);
+        } else {
+            discardUnstartedRecording(recording);
+        }
+
+        broadcastRecordingUpdated("YouTube rate-limit cooldown active; recorder attempts paused.");
+        return true;
     }
 
     private boolean startFfmpegFallbackAfterYtDlpFailure(
@@ -2423,6 +2453,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel);
                 } catch (Exception e) {
                     ytDlpError = e;
+
+                    if (isHttp429Error(normalizeErrorMessage(e))) {
+                        throw e;
+                    }
+
                     logExtractorFallback(
                         channel,
                         remoteConfig.isJavaHlsEnabled()
@@ -2464,6 +2499,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel);
                 } catch (Exception e) {
                     ytDlpError = e;
+
+                    if (isHttp429Error(normalizeErrorMessage(e))) {
+                        throw e;
+                    }
+
                     log(
                         LogItem.LEVEL_WARNING,
                         LogItem.SOURCE_RECORDER,
@@ -2649,6 +2689,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return new ResolvedInput(url, videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
             } catch (Exception e) {
                 lastError = e;
+
+                if (isHttp429Error(normalizeErrorMessage(e))) {
+                    startHttp429Cooldown(channel, normalizeErrorMessage(e));
+                    throw e;
+                }
 
                 if (refreshYoutubedlAndroidAfterExtractorFailure(e, videoId, channel)) {
                     attempts = buildYtDlpResolveAttempts(builder, videoUrl);
