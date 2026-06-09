@@ -232,6 +232,44 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         });
 
         webView.setWebViewClient(new WebViewClient() {
+            /*
+             * YouTube's mobile site emits intent:// URLs to deep-link into the native
+             * YouTube app. The default WebViewClient cannot handle the intent:// scheme,
+             * which produces net::ERR_UNKNOWN_URL_SCHEME and breaks the sign-in flow.
+             * We intercept these here: if a browser_fallback_url is embedded in the
+             * intent extras we load that instead; otherwise we stay on the current page.
+             */
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                if (request == null) return false;
+                String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                return handleSpecialUrlScheme(view, url);
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleSpecialUrlScheme(view, url == null ? "" : url);
+            }
+
+            private boolean handleSpecialUrlScheme(WebView view, String url) {
+                if (url.startsWith("intent://")) {
+                    try {
+                        android.content.Intent parsed = android.content.Intent.parseUri(
+                            url, android.content.Intent.URI_INTENT_SCHEME);
+                        String fallback = parsed.getStringExtra("browser_fallback_url");
+                        if (fallback != null && !fallback.trim().isEmpty()) {
+                            view.loadUrl(fallback.trim());
+                        }
+                        // No fallback — just stay on the current page; do not crash.
+                    } catch (Exception ignored) {
+                        // Malformed intent URI; stay on current page.
+                    }
+                    return true;
+                }
+                return false;
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);

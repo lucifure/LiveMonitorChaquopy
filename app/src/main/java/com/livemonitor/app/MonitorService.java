@@ -1019,6 +1019,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     recording = latest;
                 }
 
+                /*
+                 * Guard against re-entry after the user has already stopped or saved the
+                 * recording. handleStopRecording() marks the recording as COMPLETED (when a
+                 * file exists) or STOPPED_BY_USER before killing the process, so we must
+                 * check all finished states — not only PAUSED_BY_USER / STOPPED_BY_USER —
+                 * to prevent startFfmpegFallbackAfterYtDlpFailure from restarting a
+                 * recording the user has already cancelled.
+                 */
+                if (recording.isFinished()) {
+                    return true;
+                }
+
                 if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
                     storage.upsertRecording(recording);
                     broadcastRecordingUpdated("Recording paused.");
@@ -1103,6 +1115,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
     }
 
+    private static final int MAX_LIVE_FROM_START_ATTEMPTS = 5;
+
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
         RecorderCommandBuilder builder,
         String videoUrl,
@@ -1114,9 +1128,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
 
-        boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
-
+        /*
+         * Only attempt live-from-start variants, capped at MAX_LIVE_FROM_START_ATTEMPTS.
+         * Retrying all clients a second time without --live-from-start doubles the attempt
+         * count (e.g. 14 × 2 = 28) with no meaningful benefit — if live-from-start is
+         * unavailable for a client it will also fail without the flag for the same reason.
+         * The FFmpeg fallback (live-edge) runs automatically after all attempts here fail,
+         * which is the correct fallback path.
+         */
+        int added = 0;
         for (String extractorArg : extractorArgs) {
+            if (added >= MAX_LIVE_FROM_START_ATTEMPTS) {
+                break;
+            }
             attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
                 videoUrl,
@@ -1127,21 +1151,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 true,
                 allowWaitForVideo
             ));
-        }
-
-        if (retryWithoutLiveFromStart) {
-            for (String extractorArg : extractorArgs) {
-                attempts.add(buildYtDlpPrimaryRecordAttempt(
-                    builder,
-                    videoUrl,
-                    outputPath,
-                    appSettings,
-                    config,
-                    extractorArg,
-                    false,
-                    allowWaitForVideo
-                ));
-            }
+            added++;
         }
 
         return attempts;
@@ -1407,6 +1417,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (latest != null) {
             recording = latest;
+        }
+
+        /*
+         * Same finished-state guard as in tryYtDlpPrimaryRecording: the user may
+         * have stopped the recording while yt-dlp attempts were running, which
+         * marks the recording as COMPLETED (if a file exists) before killing the
+         * process. Check all finished states so we never start a fallback recorder
+         * for a recording that has already been saved/cancelled.
+         */
+        if (recording.isFinished()) {
+            return true;
         }
 
         if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
