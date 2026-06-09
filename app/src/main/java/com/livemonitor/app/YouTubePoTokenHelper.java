@@ -1,0 +1,158 @@
+package com.livemonitor.app;
+
+import android.net.Uri;
+
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+import java.util.Locale;
+
+/**
+ * Shared utilities for GVS PO token extraction.
+ * Used by both YouTubeSignInActivity (visible WebView) and
+ * PoTokenRefreshWorker (headless background WebView).
+ */
+public final class YouTubePoTokenHelper {
+
+    private YouTubePoTokenHelper() {}
+
+    /**
+     * JavaScript injected into a YouTube watch page to extract the GVS PO token.
+     * Walks ytcfg, ytInitialPlayerResponse, and various player globals.
+     * Returns a JSON string: {token, tokenType, source, clientName, clientVersion,
+     * visitorData, videoId, playerUrl}.
+     */
+    public static final String PO_TOKEN_SCRIPT = "(function(){"
+        + "function readCfg(name){try{return window.ytcfg&&window.ytcfg.get?window.ytcfg.get(name):null;}catch(e){return null;}}"
+        + "function isTokenKey(key){return /po[_-]?token|potoken/i.test(String(key||''));}"
+        + "function validToken(value){return typeof value==='string'&&value.length>10&&value.indexOf('TOKEN')<0&&value.indexOf('...')<0;}"
+        + "var found={token:'',source:''};"
+        + "function remember(token,source){if(!found.token&&validToken(token)){found.token=token;found.source=source;}}"
+        + "function readPotFromUrl(value,path){if(found.token||typeof value!=='string'||value.indexOf('pot=')<0){return;}"
+        + "try{remember(new URL(value,location.href).searchParams.get('pot'),path+'.url.pot');}catch(e){"
+        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){remember(decodeURIComponent(match[1].replace(/\\+/g,'%20')),path+'.url.pot');}}}"
+        + "function walk(value,path,depth){"
+        + "if(found.token||!value||depth>8){return;}"
+        + "readPotFromUrl(value,path);if(found.token){return;}"
+        + "if(Array.isArray(value)){for(var i=0;i<value.length&&!found.token;i++){walk(value[i],path+'['+i+']',depth+1);}return;}"
+        + "if(typeof value==='object'){var keys=Object.keys(value);for(var k=0;k<keys.length&&!found.token;k++){"
+        + "var key=keys[k];var next=value[key];var nextPath=path+'.'+key;"
+        + "if(isTokenKey(key)&&validToken(next)){remember(next,nextPath);return;}"
+        + "walk(next,nextPath,depth+1);}}}"
+        + "try{walk(readCfg('WEB_PLAYER_CONTEXT_CONFIGS'),'ytcfg.WEB_PLAYER_CONTEXT_CONFIGS',0);}catch(e){}"
+        + "try{walk(window.ytInitialPlayerResponse,'ytInitialPlayerResponse',0);}catch(e){}"
+        + "try{walk(readCfg('PLAYER_VARS'),'ytcfg.PLAYER_VARS',0);}catch(e){}"
+        + "try{walk(readCfg('PLAYER_CONFIG'),'ytcfg.PLAYER_CONFIG',0);}catch(e){}"
+        + "try{walk(window.ytplayer&&window.ytplayer.config,'ytplayer.config',0);}catch(e){}"
+        + "try{walk(window.yt&&window.yt.config_,'yt.config_',0);}catch(e){}"
+        + "try{walk(window._yt_player,'_yt_player',0);}catch(e){}"
+        + "try{walk(document.documentElement.innerHTML,'document.html',0);}catch(e){}"
+        + "var clientName=readCfg('INNERTUBE_CONTEXT_CLIENT_NAME')||readCfg('INNERTUBE_CLIENT_NAME')||'MWEB';"
+        + "var clientVersion=readCfg('INNERTUBE_CONTEXT_CLIENT_VERSION')||readCfg('INNERTUBE_CLIENT_VERSION')||'';"
+        + "var visitorData=readCfg('VISITOR_DATA')||'';"
+        + "var videoId=(window.ytInitialPlayerResponse&&window.ytInitialPlayerResponse.videoDetails&&window.ytInitialPlayerResponse.videoDetails.videoId)||'';"
+        + "if(!videoId){try{videoId=new URL(location.href).searchParams.get('v')||'';}catch(e){}}"
+        + "return JSON.stringify({token:found.token,tokenType:'gvs',source:found.source,clientName:clientName,clientVersion:clientVersion,visitorData:visitorData,videoId:videoId,playerUrl:location.href});"
+        + "})()";
+
+    /**
+     * Returns true if the URL looks like a YouTube watch page that will have
+     * player context loaded (i.e. contains a video ID parameter or path segment).
+     */
+    public static boolean looksLikePlayerUrl(String url) {
+        return !isBlank(extractVideoId(url));
+    }
+
+    /**
+     * Parses the raw JavaScript result string, extracts the PO token, and saves
+     * it to AppSettings via the provided AppStorage.
+     *
+     * @param jsResult   raw value from WebView.evaluateJavascript (may be JSON-wrapped string)
+     * @param storage    AppStorage for loading and persisting settings
+     * @param pageUrl    the URL of the page where the script ran (used as fallback videoId source)
+     * @return true if a valid token was found and saved
+     */
+    public static boolean parseAndSaveToken(String jsResult, AppStorage storage, String pageUrl) {
+        if (isBlank(jsResult) || "null".equals(jsResult.trim())) {
+            return false;
+        }
+
+        try {
+            Object unwrapped = new JSONTokener(jsResult).nextValue();
+            String jsonText = unwrapped instanceof String ? (String) unwrapped : String.valueOf(unwrapped);
+            JSONObject json = new JSONObject(jsonText);
+            String token = json.optString("token", "").trim();
+
+            if (isBlank(token)) {
+                return false;
+            }
+
+            String client = normalizeClientForYtDlp(json.optString("clientName", "mweb"));
+            String tokenType = json.optString("tokenType", "gvs");
+            String videoId = json.optString("videoId", extractVideoId(pageUrl));
+            String playerUrl = json.optString("playerUrl", pageUrl == null ? "" : pageUrl);
+            String source = "background-webview:" + json.optString("source", "auto-refresh");
+
+            AppSettings appSettings = storage.loadSettings();
+            appSettings.setYtDlpPoTokenClient(client);
+            appSettings.setYtDlpPoTokenValue(token);
+            appSettings.setYtDlpPoTokenMetadata(
+                tokenType,
+                System.currentTimeMillis(),
+                source,
+                "",
+                videoId,
+                playerUrl
+            );
+            storage.saveSettings(appSettings);
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "Auto-refreshed GVS PO token from background WebView. client="
+                    + client + ", type=" + tokenType + ", videoId=" + videoId
+            ));
+            return true;
+
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static String extractVideoId(String url) {
+        if (isBlank(url)) {
+            return "";
+        }
+
+        try {
+            Uri uri = Uri.parse(url.trim());
+            String queryVideoId = uri.getQueryParameter("v");
+
+            if (!isBlank(queryVideoId)) {
+                return queryVideoId.trim();
+            }
+
+            String lastPathSegment = uri.getLastPathSegment();
+
+            if (!isBlank(lastPathSegment) && lastPathSegment.matches("^[A-Za-z0-9_-]{11}$")) {
+                return lastPathSegment;
+            }
+        } catch (RuntimeException ignored) {
+        }
+
+        return "";
+    }
+
+    private static String normalizeClientForYtDlp(String clientName) {
+        String normalized = clientName == null ? "" : clientName.trim().toLowerCase(Locale.US);
+
+        if (normalized.contains("mweb")) return "mweb";
+        if (normalized.contains("web"))  return "web";
+        if (normalized.contains("android")) return "android";
+        if (normalized.contains("ios")) return "ios";
+
+        return "mweb";
+    }
+
+    public static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+}
