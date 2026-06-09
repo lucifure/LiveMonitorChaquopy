@@ -280,8 +280,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.details.setText(buildDetails(recording));
         long durSec = recording.getDurationSeconds();
         long bytesRec = recording.getBytesRecorded();
-        boolean hasRecordedData = durSec > 0 || bytesRec > 0;
-        holder.durationStat.setText(hasRecordedData
+        holder.durationStat.setText(bytesRec > 0
             ? "⏱ " + RecordingProgressTracker.formatDuration(durSec)
             : "⏱ Waiting...");
         holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(bytesRec));
