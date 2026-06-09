@@ -2883,6 +2883,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!isBlank(poTokenExtractorArgs)) {
             extractorArgs.add(poTokenExtractorArgs.trim());
             logYtDlpPoTokenCacheState();
+        } else {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "No PO token cached. Some YouTube clients will be blocked.",
+                "Open 'YouTube PO Token Setup', load a live video page, then tap 'Generate/Refresh PO token'."
+            );
         }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
@@ -2921,6 +2929,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         addPreferredYtDlpClient(extractorArgs, "ANDROID");
         addPreferredYtDlpClient(extractorArgs, "IOS");
         addPreferredYtDlpClient(extractorArgs, "MEDIACONNECT");
+        /*
+         * TV_EMBEDDED (TVHTML5_SIMPLY_EMBEDDED_PLAYER) provides HLS streams and
+         * has historically been more lenient about PO token enforcement on live
+         * streams, making it a reliable fallback when other clients are blocked.
+         */
+        addPreferredYtDlpClient(extractorArgs, "TV_EMBEDDED");
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {

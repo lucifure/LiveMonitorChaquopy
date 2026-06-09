@@ -109,8 +109,8 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(
-            "Use this visible WebView to sign in, load a real YouTube player, then tap Generate/Refresh PO token. "
-                + "The app does not run hidden token scraping."
+            "Sign in, then navigate to a live video — the PO token is extracted automatically when a watch page loads. "
+                + "Tap Generate/Refresh PO token to retry manually. Tap Save session to store cookies."
         );
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
@@ -202,7 +202,24 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                statusText.setText("Loaded player context: " + safeUrlForStatus(url));
+
+                if (looksLikePlayerUrl(url)) {
+                    /*
+                     * Auto-check for a PO token whenever a YouTube watch page
+                     * finishes loading in the visible WebView. This removes the
+                     * need to manually tap "Generate/Refresh PO token" after
+                     * navigating to a live video — the token is saved silently
+                     * if found, and a toast is shown on success.
+                     *
+                     * This is NOT hidden background scraping: the WebView is
+                     * fully visible to the user and the script only reads data
+                     * that the YouTube player has already loaded into the page.
+                     */
+                    statusText.setText("Watch page loaded — auto-checking for PO token...");
+                    view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, false));
+                } else {
+                    statusText.setText("Loaded: " + safeUrlForStatus(url));
+                }
             }
         });
     }
@@ -224,10 +241,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         }
 
         statusText.setText("Checking visible player context for an observable GVS PO token...");
-        webView.evaluateJavascript(PO_TOKEN_SCRIPT, this::handlePoTokenScriptResult);
+        webView.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, true));
     }
 
-    private void handlePoTokenScriptResult(String value) {
+    private void handlePoTokenScriptResult(String value, boolean isManual) {
         try {
             Object unwrapped = new JSONTokener(value == null ? "null" : value).nextValue();
             String jsonText = unwrapped instanceof String ? (String) unwrapped : String.valueOf(unwrapped);
@@ -235,9 +252,13 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             String token = json.optString("token", "").trim();
 
             if (isBlank(token)) {
-                String message = "No GVS PO token was observable on this loaded player page. Try playing the video, sign in, or open another video.";
+                String message = "No GVS PO token found on this page. Try playing the video, sign in, or open another video.";
                 statusText.setText(message);
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+
+                if (isManual) {
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                }
+
                 return;
             }
 
@@ -245,7 +266,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         } catch (Exception e) {
             String message = "Unable to read PO-token data from the visible player: " + e.getMessage();
             statusText.setText(message);
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+
+            if (isManual) {
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            }
         }
     }
 
