@@ -2917,8 +2917,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI");
         addPreferredYtDlpClient(extractorArgs, "MWEB");
         addPreferredYtDlpClient(extractorArgs, "WEB");
+        addPreferredYtDlpClient(extractorArgs, "WEB_CREATOR");
         addPreferredYtDlpClient(extractorArgs, "ANDROID");
         addPreferredYtDlpClient(extractorArgs, "IOS");
+        addPreferredYtDlpClient(extractorArgs, "MEDIACONNECT");
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
@@ -3007,6 +3009,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
         if (extractorArgs == null || isBlank(clientName)) {
             return;
+        }
+
+        String normalizedClient = clientName.trim().toLowerCase();
+
+        /*
+         * When a PO token is cached, add a variant with the token injected for
+         * this specific client prefix first. GVS tokens are session-bound rather
+         * than strictly client-bound, so applying the same token value under
+         * each client's prefix gives yt-dlp the best chance of finding a working
+         * combination without requiring a fresh token per client.
+         */
+        if (settings != null && settings.hasYtDlpPoToken()) {
+            String tokenValue = settings.getYtDlpPoTokenValue();
+            String tokenType = settings.getYtDlpPoTokenType();
+
+            if (!isBlank(tokenValue) && !isBlank(tokenType)) {
+                extractorArgs.add(
+                    "youtube:player_client=" + normalizedClient
+                        + ";po_token=" + normalizedClient + "." + tokenType + "+" + tokenValue
+                );
+            }
         }
 
         extractorArgs.add(buildYtDlpPlayerClientArg(clientName));
