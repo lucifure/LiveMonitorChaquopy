@@ -1069,6 +1069,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
 
+                /*
+                 * Reload the latest recording state immediately after an exception.
+                 * handleStopRecording() removes the recording from activeRecordings
+                 * and marks it COMPLETED/STOPPED_BY_USER before sending the kill
+                 * signal — which surfaces here as a CanceledException or similar.
+                 * Without this check, the catch block falls through to the "continue"
+                 * below and launches the next attempt even though the user cancelled.
+                 */
+                RecordingItem cancelCheck = storage.findRecordingById(recording.getId());
+                if (cancelCheck != null) recording = cancelCheck;
+                if (recording.isFinished()) return true;
+
                 if (isLiveNotReadyError(errorMessage)) {
                     return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
                 }
@@ -1081,6 +1093,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
+                /*
+                 * Race-condition guard: the user may have stopped the recording at
+                 * the same instant this attempt failed naturally (no CanceledException,
+                 * just "No video formats found"). Reload from storage one more time
+                 * before starting the next attempt.
+                 */
+                RecordingItem retryCheck = storage.findRecordingById(recording.getId());
+                if (retryCheck != null) recording = retryCheck;
+                if (recording.isFinished()) return true;
+
                 log(
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
