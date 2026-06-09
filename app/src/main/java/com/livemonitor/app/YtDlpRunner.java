@@ -260,7 +260,14 @@ public class YtDlpRunner {
             || lower.contains("premiere")
             || lower.contains("live event")
             || lower.contains("destination")
-            || lower.contains("merging formats");
+            || lower.contains("merging formats")
+            || lower.contains("po_token")
+            || lower.contains("po token")
+            || lower.contains("gvs")
+            || lower.contains("bot")
+            || lower.contains("token required")
+            || lower.contains("precondition")
+            || lower.contains("http error 403");
     }
 
     private static void ensureParentDirectory(String outputPath) {
