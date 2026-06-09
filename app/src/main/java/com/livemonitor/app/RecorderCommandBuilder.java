@@ -392,18 +392,18 @@ public class RecorderCommandBuilder {
             args.add("X-Goog-Api-Key:" + apiKey);
         }
 
-        String cookieHeader = remoteConfig.getYtDlpCookieHeader();
-
-        if (!isBlank(cookieHeader)) {
-            args.add("--add-header");
-            args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
-        }
-
         String cookiesPath = remoteConfig.getYtDlpCookiesPath();
 
         if (!isBlank(cookiesPath)) {
             args.add("--cookies");
             args.add(cookiesPath.trim());
+        } else {
+            String cookieHeader = remoteConfig.getYtDlpCookieHeader();
+
+            if (!isBlank(cookieHeader)) {
+                args.add("--add-header");
+                args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
+            }
         }
 
         String cookiesFromBrowser = remoteConfig.getYtDlpCookiesFromBrowser();
@@ -462,18 +462,18 @@ public class RecorderCommandBuilder {
             args.add(insertIndex + 1, extractorArgs.trim());
         }
 
-        String cookieHeader = settings.getYtDlpCookieHeader();
-
-        if (!isBlank(cookieHeader)) {
-            args.add("--add-header");
-            args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
-        }
-
         String cookiesPath = settings.getYtDlpCookiesPath();
 
         if (!isBlank(cookiesPath)) {
             args.add("--cookies");
             args.add(cookiesPath.trim());
+        } else {
+            String cookieHeader = settings.getYtDlpCookieHeader();
+
+            if (!isBlank(cookieHeader)) {
+                args.add("--add-header");
+                args.add("Cookie:" + normalizeCookieHeader(cookieHeader));
+            }
         }
     }
 

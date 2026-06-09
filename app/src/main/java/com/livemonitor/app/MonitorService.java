@@ -2914,10 +2914,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          * yt-dlp-first and the primary recorder so a stale default client does
          * not immediately force FFmpeg fallback.
          */
-        addPreferredYtDlpClient(extractorArgs, "ANDROID");
-        addPreferredYtDlpClient(extractorArgs, "IOS");
+        addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI");
         addPreferredYtDlpClient(extractorArgs, "MWEB");
         addPreferredYtDlpClient(extractorArgs, "WEB");
+        addPreferredYtDlpClient(extractorArgs, "ANDROID");
+        addPreferredYtDlpClient(extractorArgs, "IOS");
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
