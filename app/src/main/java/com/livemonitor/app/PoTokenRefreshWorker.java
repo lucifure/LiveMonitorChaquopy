@@ -15,7 +15,9 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 import androidx.work.Worker;
@@ -66,6 +68,30 @@ public class PoTokenRefreshWorker extends Worker {
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
+            request
+        );
+    }
+
+    /**
+     * Enqueues a one-shot immediate refresh — used when a recording is about
+     * to start and no po_token is cached yet. Runs alongside the periodic job
+     * without disturbing its schedule. Uses a unique name so rapid repeated
+     * calls (e.g. multiple channels starting at the same time) collapse into
+     * a single work unit.
+     */
+    public static void triggerNow(Context context) {
+        Constraints constraints = new Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build();
+
+        OneTimeWorkRequest request =
+            new OneTimeWorkRequest.Builder(PoTokenRefreshWorker.class)
+                .setConstraints(constraints)
+                .build();
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            WORK_NAME + "_immediate",
+            ExistingWorkPolicy.KEEP,
             request
         );
     }

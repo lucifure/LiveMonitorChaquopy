@@ -2920,34 +2920,48 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!isBlank(poTokenExtractorArgs)) {
             extractorArgs.add(poTokenExtractorArgs.trim());
             logYtDlpPoTokenCacheState();
+            // With a po_token, follow immediately with the yt-dlp default so that
+            // if the token is rejected the default client selection still gets a
+            // chance without the caller needing to enumerate every client.
+            extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
         } else {
             boolean hasCookies = settings != null && settings.hasYtDlpCookies();
+
+            /*
+             * No po_token is cached. Trigger an immediate silent background
+             * refresh via the headless WebView so the token is available for
+             * the next recording (or a retry if this one fails).
+             */
+            PoTokenRefreshWorker.triggerNow(this);
+
             log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 null,
                 "No PO token cached. YouTube now enforces po_token for live streams.",
-                hasCookies
-                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
-                        + "For best results open 'YouTube PO Token Setup', load a live video page, "
-                        + "then tap 'Generate/Refresh PO token'."
-                    : "Open 'YouTube PO Token Setup', load a live video page, then tap "
-                        + "'Generate/Refresh PO token'. Optionally tap 'Save session' to store cookies."
+                "Triggering automatic background PO token refresh. "
+                    + "Recording will start now using yt-dlp's default client — "
+                    + "future recordings will use the token once the refresh completes. "
+                    + (hasCookies
+                        ? "Cookies are available and will be used as a fallback."
+                        : "For fastest results, open 'YouTube PO Token Setup' and sign in once.")
             );
             notificationHelper.showPoTokenSetupNotification();
 
             /*
-             * When no po_token is cached, prioritise clients that are still
-             * accessible without a token.
+             * Put EXTRACTOR_ARGS_NONE (yt-dlp default client selection) FIRST.
+             * In practice yt-dlp's own client picker (currently android_vr / web)
+             * succeeds on most live streams even without a po_token, while
+             * hardcoded HLS-only clients (tv_embedded;skip=dash, web;skip=dash)
+             * are increasingly blocked by YouTube. Placing the default first means
+             * the very first attempt usually succeeds, matching the observed
+             * behaviour in logs where attempt 3 (default) always worked.
              *
-             * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
-             * YouTube client regarding po_token enforcement on live streams.
-             * Adding skip=dash forces HLS-only output which is required for
-             * --live-from-start to walk the DVR fragment index from the beginning.
-             *
-             * web;skip=dash is the next best option when cookies are present
-             * because an authenticated web session avoids most bot-check blocks.
+             * tv_embedded;skip=dash is kept as a secondary option because it
+             * provides HLS output which is the only format compatible with
+             * --live-from-start when DASH is unavailable.
              */
+            extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
             extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
 
             if (hasCookies) {
@@ -2961,9 +2975,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             extractorArgs.add(localExtractorArgs.trim());
         }
 
-        // Let yt-dlp choose its own current YouTube clients after explicit app
-        // settings. Forced clients can become stale faster than yt-dlp defaults.
-        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
+        // Remote config and per-client fallbacks follow the opening set above.
+        // EXTRACTOR_ARGS_NONE was already added; LinkedHashSet deduplication
+        // ensures it is not repeated if the remote config echoes the same value.
 
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
