@@ -3,12 +3,14 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.webkit.CookieManager;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.CookieManager;
 
 import androidx.annotation.NonNull;
 import androidx.work.Constraints;
@@ -96,10 +98,31 @@ public class PoTokenRefreshWorker extends Worker {
                 webSettings.setJavaScriptEnabled(true);
                 webSettings.setDomStorageEnabled(true);
                 webSettings.setDatabaseEnabled(true);
+                // Same Chrome mobile UA as YouTubeSignInActivity — strips the
+                // "wv" WebView marker that causes Google to serve a degraded page.
+                webSettings.setUserAgentString(
+                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                );
+                // Required for the YouTube player to render and populate its JS globals.
+                webSettings.setLoadWithOverviewMode(true);
+                webSettings.setUseWideViewPort(true);
+                webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                webSettings.setMediaPlaybackRequiresUserGesture(false);
+                webSettings.setAllowContentAccess(true);
 
                 CookieManager cookieManager = CookieManager.getInstance();
                 cookieManager.setAcceptCookie(true);
                 cookieManager.setAcceptThirdPartyCookies(webView, true);
+
+                // Grant media/DRM permission requests so the player JS initialises
+                // fully and its globals (ytcfg, ytInitialPlayerResponse) are populated.
+                webView.setWebChromeClient(new WebChromeClient() {
+                    @Override
+                    public void onPermissionRequest(PermissionRequest request) {
+                        request.grant(request.getResources());
+                    }
+                });
 
                 webView.setWebViewClient(new WebViewClient() {
                     private volatile boolean handled = false;
@@ -126,10 +149,29 @@ public class PoTokenRefreshWorker extends Worker {
                             return;
                         }
 
-                        view.evaluateJavascript(YouTubePoTokenHelper.PO_TOKEN_SCRIPT, result -> {
-                            boolean saved = YouTubePoTokenHelper.parseAndSaveToken(result, storage, url);
-                            finish(saved);
-                        });
+                        // Delay extraction by 3 s — onPageFinished fires when the
+                        // HTML document is parsed, but YouTube's player JS (which
+                        // populates ytcfg and the PO token) loads asynchronously
+                        // after that. Running the script immediately returns empty
+                        // globals. A second attempt fires 5 s later if the first
+                        // finds no token.
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                            if (handled) return;
+                            view.evaluateJavascript(YouTubePoTokenHelper.PO_TOKEN_SCRIPT, result -> {
+                                boolean saved = YouTubePoTokenHelper.parseAndSaveToken(result, storage, url);
+                                if (saved) {
+                                    finish(true);
+                                } else if (!handled) {
+                                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                        if (handled) return;
+                                        view.evaluateJavascript(YouTubePoTokenHelper.PO_TOKEN_SCRIPT, retry -> {
+                                            boolean retrySaved = YouTubePoTokenHelper.parseAndSaveToken(retry, storage, url);
+                                            finish(retrySaved);
+                                        });
+                                    }, 5000);
+                                }
+                            });
+                        }, 3000);
                     }
 
                     @Override
