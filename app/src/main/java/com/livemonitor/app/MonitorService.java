@@ -43,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 
 public class MonitorService extends Service implements NetworkMonitor.Listener {
@@ -112,6 +113,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
+        PoTokenRefreshWorker.scheduleIfNeeded(this);
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
 
