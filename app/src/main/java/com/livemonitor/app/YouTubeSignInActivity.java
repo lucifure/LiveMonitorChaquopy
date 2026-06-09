@@ -8,6 +8,8 @@ import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
@@ -196,7 +198,38 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
-        settings.setUserAgentString(settings.getUserAgentString());
+        /*
+         * Fix 1: Use a standard mobile Chrome UA instead of the default Android
+         * WebView UA. The default UA contains a "wv" token that Google's sign-in
+         * pages detect and use to block sign-in with "This browser or app may not
+         * be secure." A plain Chrome mobile UA bypasses this check.
+         */
+        settings.setUserAgentString(
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        );
+        /*
+         * Fix 2: Additional settings required for YouTube to render the player
+         * fully. Without these the player area can show as a black rectangle.
+         */
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setAllowContentAccess(true);
+
+        /*
+         * Fix 3: Grant media/DRM permission requests so the YouTube player
+         * initialises fully inside the visible WebView. Without a WebChromeClient
+         * these requests are silently denied and the player JS globals
+         * (ytcfg, ytInitialPlayerResponse) are never populated.
+         */
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                request.grant(request.getResources());
+            }
+        });
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -214,9 +247,36 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                      * This is NOT hidden background scraping: the WebView is
                      * fully visible to the user and the script only reads data
                      * that the YouTube player has already loaded into the page.
+                     *
+                     * Fix 4: Delay the first extraction attempt by 3 s.
+                     * onPageFinished fires when the HTML document finishes
+                     * parsing, but YouTube's player JS (which populates ytcfg,
+                     * ytInitialPlayerResponse, and the PO token) continues
+                     * loading asynchronously via XHR/fetch after that event.
+                     * Running the script immediately returns empty globals.
+                     * A second attempt fires 5 s later if the first finds nothing.
                      */
-                    statusText.setText("Watch page loaded — auto-checking for PO token...");
-                    view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, false));
+                    statusText.setText("Watch page loaded \u2014 waiting for player to initialise...");
+                    webView.postDelayed(() -> {
+                        if (isDestroyed()) {
+                            return;
+                        }
+                        statusText.setText("Watch page loaded \u2014 checking for PO token...");
+                        view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> {
+                            handlePoTokenScriptResult(result, false);
+                            boolean tokenFound = result != null
+                                && result.contains("\"token\":\"")
+                                && !result.matches("(?s).*\"token\":\"\".*");
+                            if (!tokenFound) {
+                                webView.postDelayed(() -> {
+                                    if (!isDestroyed()) {
+                                        view.evaluateJavascript(PO_TOKEN_SCRIPT,
+                                            retry -> handlePoTokenScriptResult(retry, false));
+                                    }
+                                }, 5000);
+                            }
+                        });
+                    }, 3000);
                 } else {
                     statusText.setText("Loaded: " + safeUrlForStatus(url));
                 }
