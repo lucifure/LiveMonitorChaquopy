@@ -156,7 +156,7 @@ public final class YouTubePoTokenHelper {
         + "LiveMonitorApp.onApiRequestSeen(p2,'','intercepted','xhr');}catch(e){}}"
         + "return _s.apply(this,arguments);};"
         + "try{LiveMonitorApp.onApiRequestSeen('interceptor-installed','','ok','init');}catch(e){}"
-        + "})()";}
+        + "})()";
 
     /**
      * Returns true if the URL looks like a YouTube watch page that will have
