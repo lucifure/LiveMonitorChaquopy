@@ -102,17 +102,19 @@ on-device testing, the important checks are simply that initialization logs
 
 The app uses a visible, user-approved token setup flow instead of hidden WebView
 scraping. Open **Settings → YouTube session / PO token setup**, sign in if needed,
-load a real YouTube watch/player URL, and tap **Generate/Refresh PO token**. The
-button evaluates the currently visible player context and only caches a token if
-one is observable from player configuration/response data already available to
-that WebView page.
+load a real YouTube watch/player URL, and tap **Generate/Refresh PO token** if a
+token has not already been detected. The visible WebView observes `pot=` query
+parameters from its own resource requests and also runs a lightweight player
+context scan after page load or when the refresh button is tapped. It only caches
+a token if one is observable from the visible player page; it does not install a
+global fetch/XHR monkey patch or scrape in a hidden WebView.
 
 Cached PO-token metadata includes:
 
 - yt-dlp player client (`mweb`, `web`, `android`, or `ios` when detected);
 - token type (`gvs`);
 - refresh timestamp;
-- source path in the visible player context;
+- source path in the visible player context or visible WebView resource URL;
 - a short hash of the current YouTube cookie session;
 - player video ID and player URL.
 
@@ -130,8 +132,10 @@ youtube:player_client=<client>;po_token=<client>.<type>+<TOKEN>
 ```
 
 A cached token attempt is tried before yt-dlp defaults, remote-config clients,
-and the generic Android/iOS/MWeb/Web fallback clients. Placeholder values such as
-`TOKEN` or `...` are ignored.
+and the generic Web Safari/MWeb/Web/Android/iOS fallback clients. Web Safari is
+included as an early no-token fallback because current yt-dlp guidance notes that
+its HLS formats may remain playable without a GVS token. Placeholder values such
+as `TOKEN` or `...` are ignored.
 
 ## Remote config fallback
 
