@@ -970,28 +970,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 ? "yt-dlp recorder starting from DVR beginning."
                 : "yt-dlp recorder starting from live edge.");
 
-            // Build a readable summary of the exact flags being passed so the
-            // log makes it obvious what yt-dlp will try to do.
-            boolean hasLiveFromStart = attempt.args != null
-                && attempt.args.contains("--live-from-start");
-            boolean hasPoToken = attempt.args != null
-                && attempt.args.stream().anyMatch(a -> a != null && a.contains("po_token"));
-            boolean hasCookieArg = attempt.args != null
-                && attempt.args.stream().anyMatch(a -> a != null
-                    && (a.equals("--cookies") || a.equals("-c")));
-            String fullCommand = builder.toLogString(attempt.args);
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "[yt-dlp] Starting recorder — attempt "
-                    + (attemptIndex + 1) + "/" + attempts.size()
-                    + " | liveFromStart=" + hasLiveFromStart
-                    + " | poToken=" + hasPoToken
-                    + " | cookies=" + hasCookieArg
-                    + " | recorder=" + primaryRecorderDecision.getRecorderName()
-                    + " | videoId=" + recording.getVideoId(),
-                "cmd=" + fullCommand
+                "Starting yt-dlp primary recorder.",
+                "videoId="
+                    + recording.getVideoId()
+                    + ", primaryRecorder="
+                    + primaryRecorderDecision.getRecorderName()
+                    + ", attempt="
+                    + (attemptIndex + 1)
+                    + "/"
+                    + attempts.size()
+                    + ", "
+                    + attempt.describe()
+                    + ", retries=10, command="
+                    + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
             try {
@@ -1010,11 +1005,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         attempt.args,
                         recording.getCurrentTempSegmentPath(),
                         message -> log(
-                            LogItem.LEVEL_INFO,
+                            LogItem.LEVEL_DEBUG,
                             LogItem.SOURCE_RECORDER,
                             channel,
-                            "[yt-dlp] " + shortenForLog(message, 600),
-                            null
+                            "yt-dlp recorder output.",
+                            shortenForLog(message, 500)
                         )
                     );
 
@@ -1022,18 +1017,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
                 if (latest != null) {
                     recording = latest;
-                }
-
-                /*
-                 * Guard against re-entry after the user has already stopped or saved the
-                 * recording. handleStopRecording() marks the recording as COMPLETED (when a
-                 * file exists) or STOPPED_BY_USER before killing the process, so we must
-                 * check all finished states — not only PAUSED_BY_USER / STOPPED_BY_USER —
-                 * to prevent startFfmpegFallbackAfterYtDlpFailure from restarting a
-                 * recording the user has already cancelled.
-                 */
-                if (recording.isFinished()) {
-                    return true;
                 }
 
                 if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
@@ -1074,18 +1057,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
 
-                /*
-                 * Reload the latest recording state immediately after an exception.
-                 * handleStopRecording() removes the recording from activeRecordings
-                 * and marks it COMPLETED/STOPPED_BY_USER before sending the kill
-                 * signal — which surfaces here as a CanceledException or similar.
-                 * Without this check, the catch block falls through to the "continue"
-                 * below and launches the next attempt even though the user cancelled.
-                 */
-                RecordingItem cancelCheck = storage.findRecordingById(recording.getId());
-                if (cancelCheck != null) recording = cancelCheck;
-                if (recording.isFinished()) return true;
-
                 if (isLiveNotReadyError(errorMessage)) {
                     return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
                 }
@@ -1098,16 +1069,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
-                /*
-                 * Race-condition guard: the user may have stopped the recording at
-                 * the same instant this attempt failed naturally (no CanceledException,
-                 * just "No video formats found"). Reload from storage one more time
-                 * before starting the next attempt.
-                 */
-                RecordingItem retryCheck = storage.findRecordingById(recording.getId());
-                if (retryCheck != null) recording = retryCheck;
-                if (recording.isFinished()) return true;
-
                 log(
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
@@ -1142,8 +1103,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
     }
 
-    private static final int MAX_LIVE_FROM_START_ATTEMPTS = 5;
-
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
         RecorderCommandBuilder builder,
         String videoUrl,
@@ -1155,19 +1114,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
 
-        /*
-         * Only attempt live-from-start variants, capped at MAX_LIVE_FROM_START_ATTEMPTS.
-         * Retrying all clients a second time without --live-from-start doubles the attempt
-         * count (e.g. 14 × 2 = 28) with no meaningful benefit — if live-from-start is
-         * unavailable for a client it will also fail without the flag for the same reason.
-         * The FFmpeg fallback (live-edge) runs automatically after all attempts here fail,
-         * which is the correct fallback path.
-         */
-        int added = 0;
+        boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
+
         for (String extractorArg : extractorArgs) {
-            if (added >= MAX_LIVE_FROM_START_ATTEMPTS) {
-                break;
-            }
             attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
                 videoUrl,
@@ -1178,7 +1127,21 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 true,
                 allowWaitForVideo
             ));
-            added++;
+        }
+
+        if (retryWithoutLiveFromStart) {
+            for (String extractorArg : extractorArgs) {
+                attempts.add(buildYtDlpPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    outputPath,
+                    appSettings,
+                    config,
+                    extractorArg,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
         }
 
         return attempts;
@@ -1268,13 +1231,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
             @Override
             public Unit invoke(Float progress, Long etaSeconds, String line) {
-                if (!isBlank(line) && YtDlpRunner.isImportantYtDlpLinePublic(line)) {
+                if (!isBlank(line)) {
                     log(
-                        LogItem.LEVEL_INFO,
+                        LogItem.LEVEL_DEBUG,
                         LogItem.SOURCE_RECORDER,
                         channel,
-                        "[yt-dlp] " + shortenForLog(line, 600),
-                        null
+                        "youtubedl-android recorder output.",
+                        shortenForLog(line, 500)
                     );
                 }
                 return Unit.INSTANCE;
@@ -1444,17 +1407,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (latest != null) {
             recording = latest;
-        }
-
-        /*
-         * Same finished-state guard as in tryYtDlpPrimaryRecording: the user may
-         * have stopped the recording while yt-dlp attempts were running, which
-         * marks the recording as COMPLETED (if a file exists) before killing the
-         * process. Check all finished states so we never start a fallback recorder
-         * for a recording that has already been saved/cancelled.
-         */
-        if (recording.isFinished()) {
-            return true;
         }
 
         if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
@@ -2947,48 +2899,34 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!isBlank(poTokenExtractorArgs)) {
             extractorArgs.add(poTokenExtractorArgs.trim());
             logYtDlpPoTokenCacheState();
-            // With a po_token, follow immediately with the yt-dlp default so that
-            // if the token is rejected the default client selection still gets a
-            // chance without the caller needing to enumerate every client.
-            extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
         } else {
             boolean hasCookies = settings != null && settings.hasYtDlpCookies();
-
-            /*
-             * No po_token is cached. Trigger an immediate silent background
-             * refresh via the headless WebView so the token is available for
-             * the next recording (or a retry if this one fails).
-             */
-            PoTokenRefreshWorker.triggerNow(this);
-
             log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 null,
                 "No PO token cached. YouTube now enforces po_token for live streams.",
-                "Triggering automatic background PO token refresh. "
-                    + "Recording will start now using yt-dlp's default client — "
-                    + "future recordings will use the token once the refresh completes. "
-                    + (hasCookies
-                        ? "Cookies are available and will be used as a fallback."
-                        : "For fastest results, open 'YouTube PO Token Setup' and sign in once.")
+                hasCookies
+                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
+                        + "For best results open 'YouTube PO Token Setup', load a live video page, "
+                        + "then tap 'Generate/Refresh PO token'."
+                    : "Open 'YouTube PO Token Setup', load a live video page, then tap "
+                        + "'Generate/Refresh PO token'. Optionally tap 'Save session' to store cookies."
             );
             notificationHelper.showPoTokenSetupNotification();
 
             /*
-             * Put EXTRACTOR_ARGS_NONE (yt-dlp default client selection) FIRST.
-             * In practice yt-dlp's own client picker (currently android_vr / web)
-             * succeeds on most live streams even without a po_token, while
-             * hardcoded HLS-only clients (tv_embedded;skip=dash, web;skip=dash)
-             * are increasingly blocked by YouTube. Placing the default first means
-             * the very first attempt usually succeeds, matching the observed
-             * behaviour in logs where attempt 3 (default) always worked.
+             * When no po_token is cached, prioritise clients that are still
+             * accessible without a token.
              *
-             * tv_embedded;skip=dash is kept as a secondary option because it
-             * provides HLS output which is the only format compatible with
-             * --live-from-start when DASH is unavailable.
+             * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
+             * YouTube client regarding po_token enforcement on live streams.
+             * Adding skip=dash forces HLS-only output which is required for
+             * --live-from-start to walk the DVR fragment index from the beginning.
+             *
+             * web;skip=dash is the next best option when cookies are present
+             * because an authenticated web session avoids most bot-check blocks.
              */
-            extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
             extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
 
             if (hasCookies) {
@@ -3002,9 +2940,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             extractorArgs.add(localExtractorArgs.trim());
         }
 
-        // Remote config and per-client fallbacks follow the opening set above.
-        // EXTRACTOR_ARGS_NONE was already added; LinkedHashSet deduplication
-        // ensures it is not repeated if the remote config echoes the same value.
+        // Let yt-dlp choose its own current YouTube clients after explicit app
+        // settings. Forced clients can become stale faster than yt-dlp defaults.
+        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
 
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
