@@ -115,6 +115,13 @@ public class PoTokenRefreshWorker extends Worker {
             videoId = FALLBACK_VIDEO_ID;
         }
 
+        storage.appendLog(LogItem.info(
+            LogItem.SOURCE_REMOTE_CONFIG,
+            "[PoToken/BgWorker] Background refresh worker started"
+                + " | videoId=" + videoId
+                + " | using fetch+XHR intercept strategy"
+        ));
+
         CountDownLatch latch = new CountDownLatch(1);
         AtomicBoolean tokenSaved = new AtomicBoolean(false);
         String finalVideoId = videoId;
@@ -155,24 +162,64 @@ public class PoTokenRefreshWorker extends Worker {
                     @JavascriptInterface
                     public void onPoTokenIntercepted(String token, String clientName,
                             String videoId, String src) {
+                        String safeToken  = token == null ? "" : token.trim();
+                        String safeClient = (clientName == null || clientName.isEmpty()) ? "WEB" : clientName;
+                        String safeVideo  = (videoId == null || videoId.isEmpty()) ? finalVideoId : videoId;
+                        String safeSrc    = src == null ? "?" : src;
+
+                        storage.appendLog(LogItem.debug(
+                            LogItem.SOURCE_REMOTE_CONFIG,
+                            "[PoToken/BgIntercept] fetch/XHR bridge fired"
+                                + " | source=" + safeSrc
+                                + " | client=" + safeClient
+                                + " | videoId=" + safeVideo
+                                + " | tokenLen=" + safeToken.length()
+                                + (safeToken.length() >= 8
+                                    ? " | token=" + safeToken.substring(0, 8) + "..."
+                                    : " | token=<too short, ignored>")
+                        ));
+
+                        if (safeToken.length() < 16) {
+                            storage.appendLog(LogItem.warning(
+                                LogItem.SOURCE_REMOTE_CONFIG,
+                                "[PoToken/BgIntercept] Token rejected — too short (len="
+                                    + safeToken.length() + ")"
+                            ));
+                            return;
+                        }
+
                         try {
-                            if (token == null || token.trim().length() < 16) return;
                             JSONObject json = new JSONObject();
-                            json.put("token", token.trim());
+                            json.put("token", safeToken);
                             json.put("tokenType", "gvs");
-                            json.put("clientName",
-                                (clientName == null || clientName.isEmpty()) ? "WEB" : clientName);
-                            json.put("videoId",
-                                (videoId == null || videoId.isEmpty()) ? finalVideoId : videoId);
-                            json.put("source", "intercept:" + (src == null ? "fetch" : src));
+                            json.put("clientName", safeClient);
+                            json.put("videoId", safeVideo);
+                            json.put("source", "intercept:" + safeSrc);
                             json.put("playerUrl", "");
                             boolean saved = YouTubePoTokenHelper.parseAndSaveToken(
                                 json.toString(), storage, finalVideoId);
                             if (saved) {
+                                storage.appendLog(LogItem.success(
+                                    LogItem.SOURCE_REMOTE_CONFIG,
+                                    "[PoToken/BgIntercept] Token saved successfully via background intercept."
+                                        + " client=" + safeClient
+                                        + " | videoId=" + safeVideo
+                                ));
                                 tokenSaved.set(true);
                                 latch.countDown();
+                            } else {
+                                storage.appendLog(LogItem.warning(
+                                    LogItem.SOURCE_REMOTE_CONFIG,
+                                    "[PoToken/BgIntercept] parseAndSaveToken rejected the intercepted token"
+                                ));
                             }
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) {
+                            storage.appendLog(LogItem.error(
+                                LogItem.SOURCE_REMOTE_CONFIG,
+                                "[PoToken/BgIntercept] Exception saving token: " + e.getMessage(),
+                                null
+                            ));
+                        }
                     }
                 }, "LiveMonitorApp");
 
@@ -198,6 +245,12 @@ public class PoTokenRefreshWorker extends Worker {
                          */
                         view.evaluateJavascript(
                             YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                        storage.appendLog(LogItem.debug(
+                            LogItem.SOURCE_REMOTE_CONFIG,
+                            "[PoToken/BgWorker] Background WebView page loading: "
+                                + (url == null ? "null" : url)
+                                + " | fetch+XHR interceptor injected"
+                        ));
                     }
 
                     private void finish(boolean saved) {

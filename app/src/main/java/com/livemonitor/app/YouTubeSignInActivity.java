@@ -298,6 +298,11 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                  * fires more than once (e.g. SPA navigation).
                  */
                 view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                storage.appendLog(LogItem.debug(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/WebView] Page loading: " + safeUrlForStatus(url)
+                        + " | fetch+XHR interceptor injected"
+                ));
             }
 
             @Override
@@ -313,14 +318,29 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                      * legacy globals scan once after 4 s as a secondary fallback.
                      */
                     view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                    String videoId = extractVideoId(url);
+                    storage.appendLog(LogItem.info(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/WebView] Player page loaded: videoId=" + videoId
+                            + " | interceptor active — watching for /youtubei/v1/player requests"
+                            + " | globals fallback scan scheduled in 4 s"
+                    ));
                     statusText.setText("Watch page loaded \u2014 waiting for YouTube player API call...");
                     webView.postDelayed(() -> {
                         if (!isDestroyed()) {
+                            storage.appendLog(LogItem.debug(
+                                LogItem.SOURCE_UI,
+                                "[PoToken/WebView] Running globals fallback scan (ytcfg / ytInitialPlayerResponse)"
+                            ));
                             view.evaluateJavascript(PO_TOKEN_SCRIPT,
                                 result -> handlePoTokenScriptResult(result, false));
                         }
                     }, 4000);
                 } else {
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/WebView] Non-player page loaded: " + safeUrlForStatus(url)
+                    ));
                     statusText.setText("Loaded: " + safeUrlForStatus(url));
                 }
             }
@@ -357,6 +377,12 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             if (isBlank(token)) {
                 String message = "No GVS PO token found on this page. Try playing the video, sign in, or open another video.";
                 statusText.setText(message);
+                storage.appendLog(LogItem.debug(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/Globals] Globals scan: no token in ytcfg/ytInitialPlayerResponse"
+                        + (isManual ? " (manual scan)" : " (auto fallback scan)")
+                        + " — normal if fetch interceptor already captured it"
+                ));
 
                 if (isManual) {
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
@@ -649,21 +675,58 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         public void onPoTokenIntercepted(String token, String clientName,
                 String videoId, String source) {
             if (isDestroyed()) return;
+
+            String safeToken = token == null ? "" : token.trim();
+            String safeClient = (clientName == null || clientName.isEmpty()) ? "WEB" : clientName;
+            String safeVideo = videoId == null ? "" : videoId;
+            String safeSrc = source == null ? "" : source;
+
+            // Log from the JS thread immediately (storage.appendLog is thread-safe).
+            storage.appendLog(LogItem.debug(
+                LogItem.SOURCE_UI,
+                "[PoToken/Intercept] fetch/XHR bridge fired"
+                    + " | source=" + safeSrc
+                    + " | client=" + safeClient
+                    + " | videoId=" + safeVideo
+                    + " | tokenLen=" + safeToken.length()
+                    + (safeToken.length() >= 8
+                        ? " | token=" + safeToken.substring(0, 8) + "..."
+                        : " | token=<too short, ignored>")
+            ));
+
+            if (safeToken.length() < 16) {
+                storage.appendLog(LogItem.warning(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/Intercept] Token rejected — too short (len=" + safeToken.length() + ")"
+                ));
+                return;
+            }
+
             runOnUiThread(() -> {
                 if (isDestroyed()) return;
                 try {
-                    if (token == null || token.trim().length() < 16) return;
                     JSONObject json = new JSONObject();
-                    json.put("token", token.trim());
+                    json.put("token", safeToken);
                     json.put("tokenType", "gvs");
-                    json.put("source", "intercept:" + (source == null ? "" : source));
-                    json.put("clientName",
-                        (clientName == null || clientName.isEmpty()) ? "WEB" : clientName);
-                    json.put("videoId", videoId == null ? "" : videoId);
+                    json.put("source", "intercept:" + safeSrc);
+                    json.put("clientName", safeClient);
+                    json.put("videoId", safeVideo);
                     json.put("playerUrl",
                         webView != null && webView.getUrl() != null ? webView.getUrl() : "");
-                    saveGeneratedPoToken(json, token.trim());
-                } catch (Exception ignored) {}
+                    storage.appendLog(LogItem.info(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/Intercept] Saving intercepted token. client=" + safeClient
+                            + " | videoId=" + safeVideo
+                            + " | source=" + safeSrc
+                    ));
+                    saveGeneratedPoToken(json, safeToken);
+                } catch (Exception e) {
+                    storage.appendLog(LogItem.error(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/Intercept] Failed to save intercepted token: " + e.getMessage(),
+                        null
+                    ));
+                }
             });
         }
     }
