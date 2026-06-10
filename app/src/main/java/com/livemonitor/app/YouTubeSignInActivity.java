@@ -87,6 +87,64 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "return JSON.stringify({token:found.token,tokenType:'gvs',source:found.source,clientName:clientName,clientVersion:clientVersion,visitorData:visitorData,videoId:videoId,playerUrl:location.href});"
         + "})()";
 
+    /**
+     * Injected 5 seconds after a YouTube watch page finishes loading.
+     *
+     * <p>YouTube watch pages use server-side rendering — the player response
+     * ({@code ytInitialPlayerResponse}) arrives inside the initial HTML, so
+     * YouTube's own JavaScript never makes a separate {@code /youtubei/v1/player}
+     * network request.  As a result there is nothing for {@link
+     * YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} to intercept.
+     *
+     * <p>This script works around that by firing a {@code /youtubei/v1/player}
+     * {@code fetch()} call ourselves, using the page's own InnerTube context
+     * ({@code INNERTUBE_API_KEY} + {@code INNERTUBE_CONTEXT} from {@code ytcfg}).
+     * That request goes through our overridden {@code window.fetch}, so
+     * {@code checkBody} is called on both the request body and the response body.
+     * YouTube's server returns {@code serviceIntegrityDimensions.poToken} in the
+     * response for authenticated sessions — {@code onPoTokenIntercepted} fires
+     * automatically when {@code checkBody} finds it.
+     */
+    private static final String MANUAL_PLAYER_FETCH_SCRIPT = "(function(){"
+        + "try{"
+        + "var get=function(k){try{return window.ytcfg&&window.ytcfg.get?window.ytcfg.get(k):null;}catch(e){return null;}};"
+        + "var apiKey=get('INNERTUBE_API_KEY')||'';"
+        + "var ctx=get('INNERTUBE_CONTEXT')||null;"
+        + "var vid='';"
+        + "try{vid=new URL(location.href).searchParams.get('v')||'';}catch(e){}"
+        + "try{LiveMonitorApp.onApiRequestSeen('manual-player',vid||'?',"
+        + "  'apiKey='+(apiKey?'ok':'missing')+',ctx='+(ctx?'ok':'missing')+',vid='+(vid?'ok':'missing'),'manual');}catch(e){}"
+        + "if(!apiKey||!ctx||!vid)return;"
+        + "window.fetch('/youtubei/v1/player?key='+apiKey+'&prettyPrint=false',{"
+        + "  method:'POST',"
+        + "  credentials:'include',"
+        + "  headers:{'Content-Type':'application/json'},"
+        + "  body:JSON.stringify({"
+        + "    context:ctx,"
+        + "    videoId:vid,"
+        + "    playbackContext:{contentPlaybackContext:{html5Preference:'HTML5_PREF_WANTS'}},"
+        + "    racyCheckOk:true,"
+        + "    contentCheckOk:true"
+        + "  })"
+        + "}).then(function(r){"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-status',vid,'http='+r.status,'manual');}catch(e){}"
+        + "  return r.text();"
+        + "}).then(function(txt){"
+        + "  var preview='';"
+        + "  try{"
+        + "    var d=JSON.parse(txt);"
+        + "    var sid=d&&d.serviceIntegrityDimensions;"
+        + "    var errCode=(d&&d.error&&d.error.code)||'';"
+        + "    preview='hasPoToken='+(!!( sid&&sid.poToken))+(errCode?',err='+errCode:'');"
+        + "  }catch(e){preview='parse-err:'+String(e).substring(0,60);}"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-done',vid,preview,'manual');}catch(e){}"
+        + "}).catch(function(e){"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-fail',vid,String(e).substring(0,100),'manual');}catch(e2){}"
+        + "});"
+        + "}catch(e){"
+        + "try{LiveMonitorApp.onApiRequestSeen('manual-player-exc','',String(e).substring(0,100),'manual');}catch(e2){}}"
+        + "})()";
+
     private AppStorage storage;
     private WebView webView;
     private TextView statusText;
@@ -427,16 +485,25 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                             + " | globals fallback scan scheduled in 4 s"
                     ));
                     statusText.setText("Watch page loaded \u2014 waiting for YouTube player API call...");
+                    // Delay 5 s so BotGuard has time to finish its challenge
+                    // before we fire our manual player request.
                     webView.postDelayed(() -> {
-                        if (!isDestroyed()) {
-                            storage.appendLog(LogItem.debug(
-                                LogItem.SOURCE_UI,
-                                "[PoToken/WebView] Running globals fallback scan (ytcfg / ytInitialPlayerResponse)"
-                            ));
-                            view.evaluateJavascript(PO_TOKEN_SCRIPT,
-                                result -> handlePoTokenScriptResult(result, false));
-                        }
-                    }, 4000);
+                        if (isDestroyed()) return;
+                        storage.appendLog(LogItem.debug(
+                            LogItem.SOURCE_UI,
+                            "[PoToken/WebView] Running globals scan + manual player fetch"
+                        ));
+                        // 1. Legacy globals scan (ytcfg / ytInitialPlayerResponse)
+                        view.evaluateJavascript(PO_TOKEN_SCRIPT,
+                            result -> handlePoTokenScriptResult(result, false));
+                        // 2. Fire a /youtubei/v1/player fetch using the page's own
+                        //    InnerTube session.  YouTube uses server-side rendering for
+                        //    watch pages so its own player never makes a separate API
+                        //    call — we must trigger one ourselves so the response body
+                        //    (which contains serviceIntegrityDimensions.poToken) passes
+                        //    through our FETCH_INTERCEPTOR_SCRIPT and is captured.
+                        view.evaluateJavascript(MANUAL_PLAYER_FETCH_SCRIPT, null);
+                    }, 5000);
                 } else {
                     storage.appendLog(LogItem.debug(
                         LogItem.SOURCE_UI,
@@ -449,19 +516,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     }
 
     private void openPlayerContext() {
-        String inputUrl = normalizePlayerUrl(playerUrlInput.getText().toString());
-        // The regular YouTube watch page detects Android WebView and does not
-        // initialise the video player, so /youtubei/v1/player is never called
-        // and the po_token cannot be intercepted.  The embed URL
-        // (youtube.com/embed/ID) is designed for embedding and reliably fires
-        // the player API request our FETCH_INTERCEPTOR_SCRIPT catches.
-        String videoId = extractVideoId(inputUrl);
-        String embedUrl = isBlank(videoId)
-            ? inputUrl
-            : "https://www.youtube.com/embed/" + videoId + "?autoplay=1&enablejsapi=1";
-        playerUrlInput.setText(embedUrl);
-        statusText.setText("Loading embed player — waiting for PO token from /youtubei/v1/player...");
-        webView.loadUrl(embedUrl);
+        String playerUrl = normalizePlayerUrl(playerUrlInput.getText().toString());
+        playerUrlInput.setText(playerUrl);
+        statusText.setText("Loading YouTube player — will trigger player API request in 5 s...");
+        webView.loadUrl(playerUrl);
     }
 
     private void generatePoTokenFromVisiblePlayer() {
