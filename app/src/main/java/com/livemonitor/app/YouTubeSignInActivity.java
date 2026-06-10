@@ -348,10 +348,19 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     }
 
     private void openPlayerContext() {
-        String playerUrl = normalizePlayerUrl(playerUrlInput.getText().toString());
-        playerUrlInput.setText(playerUrl);
-        statusText.setText("Loading visible YouTube player context...");
-        webView.loadUrl(playerUrl);
+        String inputUrl = normalizePlayerUrl(playerUrlInput.getText().toString());
+        // The regular YouTube watch page detects Android WebView and does not
+        // initialise the video player, so /youtubei/v1/player is never called
+        // and the po_token cannot be intercepted.  The embed URL
+        // (youtube.com/embed/ID) is designed for embedding and reliably fires
+        // the player API request our FETCH_INTERCEPTOR_SCRIPT catches.
+        String videoId = extractVideoId(inputUrl);
+        String embedUrl = isBlank(videoId)
+            ? inputUrl
+            : "https://www.youtube.com/embed/" + videoId + "?autoplay=1&enablejsapi=1";
+        playerUrlInput.setText(embedUrl);
+        statusText.setText("Loading embed player — waiting for PO token from /youtubei/v1/player...");
+        webView.loadUrl(embedUrl);
     }
 
     private void generatePoTokenFromVisiblePlayer() {
@@ -597,6 +606,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         if (normalized.contains("mweb")) {
             return "mweb";
+        }
+
+        if (normalized.contains("embedded")) {
+            return "web_embedded";
         }
 
         if (normalized.contains("web")) {
