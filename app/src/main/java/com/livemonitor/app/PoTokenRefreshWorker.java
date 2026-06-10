@@ -160,6 +160,22 @@ public class PoTokenRefreshWorker extends Worker {
                  */
                 webView.addJavascriptInterface(new Object() {
                     @JavascriptInterface
+                    public void onApiRequestSeen(String apiPath, String videoId,
+                            String tokenStatus, String source) {
+                        String path  = apiPath     == null ? "" : apiPath.trim();
+                        String vid   = videoId     == null ? "" : videoId.trim();
+                        String tstat = tokenStatus == null ? "" : tokenStatus.trim();
+                        String src2  = source      == null ? "" : source.trim();
+                        storage.appendLog(LogItem.info(
+                            LogItem.SOURCE_REMOTE_CONFIG,
+                            "[PoToken/BgJS] api=" + path
+                                + " | vid=" + (vid.isEmpty() ? "—" : vid)
+                                + " | token=" + tstat
+                                + " | via=" + src2
+                        ));
+                    }
+
+                    @JavascriptInterface
                     public void onPoTokenIntercepted(String token, String clientName,
                             String videoId, String src) {
                         String safeToken  = token == null ? "" : token.trim();
@@ -167,7 +183,7 @@ public class PoTokenRefreshWorker extends Worker {
                         String safeVideo  = (videoId == null || videoId.isEmpty()) ? finalVideoId : videoId;
                         String safeSrc    = src == null ? "?" : src;
 
-                        storage.appendLog(LogItem.debug(
+                        storage.appendLog(LogItem.info(
                             LogItem.SOURCE_REMOTE_CONFIG,
                             "[PoToken/BgIntercept] fetch/XHR bridge fired"
                                 + " | source=" + safeSrc

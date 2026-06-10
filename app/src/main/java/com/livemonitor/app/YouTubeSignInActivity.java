@@ -377,7 +377,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             if (isBlank(token)) {
                 String message = "No GVS PO token found on this page. Try playing the video, sign in, or open another video.";
                 statusText.setText(message);
-                storage.appendLog(LogItem.debug(
+                storage.appendLog(LogItem.info(
                     LogItem.SOURCE_UI,
                     "[PoToken/Globals] Globals scan: no token in ytcfg/ytInitialPlayerResponse"
                         + (isManual ? " (manual scan)" : " (auto fallback scan)")
@@ -671,6 +671,28 @@ public class YouTubeSignInActivity extends AppCompatActivity {
      * all UI and storage work is dispatched to the main thread.
      */
     private final class PoTokenJsBridge {
+
+        /**
+         * Called by the JS interceptor whenever a /youtubei/v1/* request or
+         * the interceptor-installed confirmation fires.  Logged at INFO so it
+         * always appears in the Logs screen regardless of debug-filter settings.
+         */
+        @JavascriptInterface
+        public void onApiRequestSeen(String apiPath, String videoId,
+                String tokenStatus, String source) {
+            String path  = apiPath    == null ? "" : apiPath.trim();
+            String vid   = videoId    == null ? "" : videoId.trim();
+            String tstat = tokenStatus == null ? "" : tokenStatus.trim();
+            String src   = source     == null ? "" : source.trim();
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_UI,
+                "[PoToken/JS] api=" + path
+                    + " | vid=" + (vid.isEmpty() ? "—" : vid)
+                    + " | token=" + tstat
+                    + " | via=" + src
+            ));
+        }
+
         @JavascriptInterface
         public void onPoTokenIntercepted(String token, String clientName,
                 String videoId, String source) {
@@ -681,8 +703,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             String safeVideo = videoId == null ? "" : videoId;
             String safeSrc = source == null ? "" : source;
 
-            // Log from the JS thread immediately (storage.appendLog is thread-safe).
-            storage.appendLog(LogItem.debug(
+            storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
                 "[PoToken/Intercept] fetch/XHR bridge fired"
                     + " | source=" + safeSrc
