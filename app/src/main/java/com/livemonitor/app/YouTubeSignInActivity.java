@@ -10,6 +10,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
@@ -227,6 +228,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         settings.setAllowContentAccess(true);
 
         /*
+         * Register the JavaScript bridge before the WebView loads any page.
+         * This makes the LiveMonitorApp object available in the page's JS context
+         * from the very first frame, which is required for the fetch/XHR interceptor
+         * (FETCH_INTERCEPTOR_SCRIPT) to be able to call back into Java as soon as
+         * YouTube's player requests the /youtubei/v1/player endpoint.
+         */
+        webView.addJavascriptInterface(new PoTokenJsBridge(), "LiveMonitorApp");
+
+        /*
          * Fix 3: Grant media/DRM permission requests so the YouTube player
          * initialises fully inside the visible WebView. Without a WebChromeClient
          * these requests are silently denied and the player JS globals
@@ -279,79 +289,42 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                /*
+                 * Inject the fetch/XHR interceptor as early as possible — before
+                 * YouTube's player JS executes and makes the /youtubei/v1/player
+                 * request that contains the po_token in its body.
+                 * The guard in the script prevents double-installation if this
+                 * fires more than once (e.g. SPA navigation).
+                 */
+                view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
                 if (looksLikePlayerUrl(url)) {
                     /*
-                     * Auto-check for a PO token whenever a YouTube watch page
-                     * finishes loading in the visible WebView. This removes the
-                     * need to manually tap "Generate/Refresh PO token" after
-                     * navigating to a live video — the token is saved silently
-                     * if found, and a toast is shown on success.
-                     *
-                     * This is NOT hidden background scraping: the WebView is
-                     * fully visible to the user and the script only reads data
-                     * that the YouTube player has already loaded into the page.
-                     *
-                     * Fix 4: Delay the first extraction attempt by 3 s.
-                     * onPageFinished fires when the HTML document finishes
-                     * parsing, but YouTube's player JS (which populates ytcfg,
-                     * ytInitialPlayerResponse, and the PO token) continues
-                     * loading asynchronously via XHR/fetch after that event.
-                     * Running the script immediately returns empty globals.
-                     * A second attempt fires 5 s later if the first finds nothing.
+                     * Primary mechanism: the PoTokenJsBridge receives the token
+                     * automatically when YouTube's player calls /youtubei/v1/player.
+                     * No polling needed.  Re-inject the interceptor here as a backup
+                     * in case it was wiped by a client-side navigation, then run the
+                     * legacy globals scan once after 4 s as a secondary fallback.
                      */
-                    statusText.setText("Watch page loaded \u2014 waiting for player to initialise...");
-                    /*
-                     * Poll for the PO token up to MAX_AUTO_EXTRACT_ATTEMPTS times.
-                     * onPageFinished fires when the HTML document is parsed, but
-                     * YouTube's player JS loads asynchronously — the globals are
-                     * often not populated for 5-15 seconds after the page event.
-                     * Two attempts at 3 s and 8 s was not enough; polling every
-                     * POLL_INTERVAL_MS for up to MAX_AUTO_EXTRACT_ATTEMPTS gives
-                     * the player enough time to fully initialise.
-                     */
-                    final int MAX_AUTO_EXTRACT_ATTEMPTS = 8;
-                    final long POLL_INTERVAL_MS = 4000;
-                    schedulePoTokenPoll(view, 0, MAX_AUTO_EXTRACT_ATTEMPTS, POLL_INTERVAL_MS);
+                    view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                    statusText.setText("Watch page loaded \u2014 waiting for YouTube player API call...");
+                    webView.postDelayed(() -> {
+                        if (!isDestroyed()) {
+                            view.evaluateJavascript(PO_TOKEN_SCRIPT,
+                                result -> handlePoTokenScriptResult(result, false));
+                        }
+                    }, 4000);
                 } else {
                     statusText.setText("Loaded: " + safeUrlForStatus(url));
                 }
             }
         });
-    }
-
-    /**
-     * Polls the visible WebView for a GVS PO token every {@code intervalMs} ms,
-     * up to {@code maxAttempts} times. Stops as soon as a token is found.
-     * This replaces the old two-shot (3 s + 8 s) approach which was not enough
-     * time for desktop YouTube's player JS to fully initialise.
-     */
-    private void schedulePoTokenPoll(WebView view, int attempt, int maxAttempts, long intervalMs) {
-        if (isDestroyed() || attempt >= maxAttempts) {
-            return;
-        }
-
-        long delay = attempt == 0 ? 3000L : intervalMs;
-        int displayAttempt = attempt + 1;
-
-        webView.postDelayed(() -> {
-            if (isDestroyed()) return;
-
-            statusText.setText("Checking for PO token (attempt " + displayAttempt + "/" + maxAttempts + ")...");
-            view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> {
-                boolean tokenFound = result != null
-                    && result.contains("\"token\":\"")
-                    && !result.matches("(?s).*\"token\":\"\".*");
-
-                if (tokenFound) {
-                    handlePoTokenScriptResult(result, false);
-                } else {
-                    schedulePoTokenPoll(view, attempt + 1, maxAttempts, intervalMs);
-                }
-            });
-        }, delay);
     }
 
     private void openPlayerContext() {
@@ -661,6 +634,38 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    /**
+     * JavaScript interface exposed to the WebView as {@code LiveMonitorApp}.
+     *
+     * <p>Called by {@link YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} when it
+     * detects a po_token in a {@code /youtubei/v1/player} request body.
+     * Because JavascriptInterface methods are called on a background thread,
+     * all UI and storage work is dispatched to the main thread.
+     */
+    private final class PoTokenJsBridge {
+        @JavascriptInterface
+        public void onPoTokenIntercepted(String token, String clientName,
+                String videoId, String source) {
+            if (isDestroyed()) return;
+            runOnUiThread(() -> {
+                if (isDestroyed()) return;
+                try {
+                    if (token == null || token.trim().length() < 16) return;
+                    JSONObject json = new JSONObject();
+                    json.put("token", token.trim());
+                    json.put("tokenType", "gvs");
+                    json.put("source", "intercept:" + (source == null ? "" : source));
+                    json.put("clientName",
+                        (clientName == null || clientName.isEmpty()) ? "WEB" : clientName);
+                    json.put("videoId", videoId == null ? "" : videoId);
+                    json.put("playerUrl",
+                        webView != null && webView.getUrl() != null ? webView.getUrl() : "");
+                    saveGeneratedPoToken(json, token.trim());
+                } catch (Exception ignored) {}
+            });
+        }
     }
 
     private static class CookieEntry {

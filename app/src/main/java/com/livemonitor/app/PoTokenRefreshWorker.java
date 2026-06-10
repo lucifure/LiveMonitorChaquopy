@@ -10,6 +10,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebViewClient;
 
 import androidx.annotation.NonNull;
@@ -22,6 +23,8 @@ import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
+
+import org.json.JSONObject;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -141,6 +144,38 @@ public class PoTokenRefreshWorker extends Worker {
                 cookieManager.setAcceptCookie(true);
                 cookieManager.setAcceptThirdPartyCookies(webView, true);
 
+                /*
+                 * Register the LiveMonitorApp JavaScript bridge before loading any URL.
+                 * The FETCH_INTERCEPTOR_SCRIPT (injected in onPageStarted) calls
+                 * onPoTokenIntercepted() when it finds a po_token in the body of a
+                 * /youtubei/v1/player network request — which is the primary and most
+                 * reliable way to capture the token without reading page globals.
+                 */
+                webView.addJavascriptInterface(new Object() {
+                    @JavascriptInterface
+                    public void onPoTokenIntercepted(String token, String clientName,
+                            String videoId, String src) {
+                        try {
+                            if (token == null || token.trim().length() < 16) return;
+                            JSONObject json = new JSONObject();
+                            json.put("token", token.trim());
+                            json.put("tokenType", "gvs");
+                            json.put("clientName",
+                                (clientName == null || clientName.isEmpty()) ? "WEB" : clientName);
+                            json.put("videoId",
+                                (videoId == null || videoId.isEmpty()) ? finalVideoId : videoId);
+                            json.put("source", "intercept:" + (src == null ? "fetch" : src));
+                            json.put("playerUrl", "");
+                            boolean saved = YouTubePoTokenHelper.parseAndSaveToken(
+                                json.toString(), storage, finalVideoId);
+                            if (saved) {
+                                tokenSaved.set(true);
+                                latch.countDown();
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }, "LiveMonitorApp");
+
                 // Grant media/DRM permission requests so the player JS initialises
                 // fully and its globals (ytcfg, ytInitialPlayerResponse) are populated.
                 webView.setWebChromeClient(new WebChromeClient() {
@@ -152,6 +187,18 @@ public class PoTokenRefreshWorker extends Worker {
 
                 webView.setWebViewClient(new WebViewClient() {
                     private volatile boolean handled = false;
+
+                    @Override
+                    public void onPageStarted(WebView view, String url,
+                            android.graphics.Bitmap favicon) {
+                        /*
+                         * Inject the fetch/XHR interceptor as early as possible so
+                         * it is installed before YouTube's player JS makes the
+                         * /youtubei/v1/player request that contains the po_token.
+                         */
+                        view.evaluateJavascript(
+                            YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                    }
 
                     private void finish(boolean saved) {
                         if (handled) return;

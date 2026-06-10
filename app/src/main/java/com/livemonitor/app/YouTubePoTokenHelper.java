@@ -56,6 +56,54 @@ public final class YouTubePoTokenHelper {
         + "})()";
 
     /**
+     * Injected into a YouTube page as early as possible (onPageStarted) so that
+     * it is installed before YouTube's player JavaScript executes.
+     *
+     * <p>YouTube's po_token is no longer reliably stored in page globals such as
+     * {@code ytcfg} or {@code ytInitialPlayerResponse}.  Instead it is generated
+     * by BotGuard and sent in the body of the {@code /youtubei/v1/player} API
+     * request.  This script overrides {@code window.fetch} and
+     * {@code XMLHttpRequest} to intercept that request and read the token directly
+     * out of the JSON body before it is sent to YouTube's servers.
+     *
+     * <p>The intercepted token is forwarded to the Android app via the
+     * {@code LiveMonitorApp} JavascriptInterface (method
+     * {@code onPoTokenIntercepted(token, clientName, videoId, source)}).
+     *
+     * <p>The guard {@code window.__lm_pot_interceptor} prevents the script from
+     * installing itself more than once if injected on both {@code onPageStarted}
+     * and {@code onPageFinished}.
+     */
+    public static final String FETCH_INTERCEPTOR_SCRIPT = "(function(){"
+        + "if(window.__lm_pot_interceptor)return;"
+        + "window.__lm_pot_interceptor=true;"
+        + "function isPlayerReq(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/player')>=0;}"
+        + "function getStr(b,k){try{return(b&&b[k])||'';}catch(e){return '';}}"
+        + "function getClient(b){try{return(b&&b.context&&b.context.client&&b.context.client.clientName)||'';}catch(e){return '';}}"
+        + "function tryNotify(token,client,videoId,src){"
+        + "if(!token||typeof token!=='string'||token.length<16||token.indexOf(' ')>=0)return;"
+        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',src||'');}catch(e){}}"
+        + "function checkBody(body,src){"
+        + "try{"
+        + "var b=typeof body==='string'?JSON.parse(body):body;"
+        + "if(!b)return;"
+        + "var sid=b.serviceIntegrityDimensions;"
+        + "if(sid&&sid.poToken){tryNotify(sid.poToken,getClient(b),getStr(b,'videoId'),src+'.req');return;}"
+        + "if(b.poToken){tryNotify(b.poToken,getClient(b),getStr(b,'videoId'),src+'.body');}"
+        + "}catch(e){}}"
+        + "var _f=window.fetch;"
+        + "window.fetch=function(input,init){"
+        + "var u=typeof input==='string'?input:(input&&input.url)||'';"
+        + "if(isPlayerReq(u)&&init&&init.body){checkBody(init.body,'fetch');}"
+        + "return _f.apply(this,arguments);};"
+        + "var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send;"
+        + "XMLHttpRequest.prototype.open=function(m,u){this.__lmu=u;return _o.apply(this,arguments);};"
+        + "XMLHttpRequest.prototype.send=function(body){"
+        + "if(isPlayerReq(this.__lmu)&&body){checkBody(body,'xhr');}"
+        + "return _s.apply(this,arguments);};"
+        + "})()";
+
+    /**
      * Returns true if the URL looks like a YouTube watch page that will have
      * player context loaded (i.e. contains a video ID parameter or path segment).
      */
