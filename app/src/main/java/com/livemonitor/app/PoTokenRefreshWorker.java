@@ -215,7 +215,13 @@ public class PoTokenRefreshWorker extends Worker {
                     }
                 });
 
-                webView.loadUrl("https://m.youtube.com/watch?v=" + finalVideoId);
+                /*
+                 * Use the desktop YouTube URL — m.youtube.com frequently shows a
+                 * black player and does not initialise ytcfg globals in a headless
+                 * WebView, so the PO token script finds nothing. The desktop site
+                 * populates ytcfg / ytInitialPlayerResponse reliably.
+                 */
+                webView.loadUrl("https://www.youtube.com/watch?v=" + finalVideoId);
 
             } catch (Exception e) {
                 latch.countDown();

@@ -36,7 +36,15 @@ import java.util.Map;
  */
 public class YouTubeSignInActivity extends AppCompatActivity {
     private static final String DEFAULT_TOKEN_VIDEO_ID = "dQw4w9WgXcQ";
-    private static final String START_URL = "https://m.youtube.com/watch?v=" + DEFAULT_TOKEN_VIDEO_ID;
+    /*
+     * Use the desktop YouTube URL rather than m.youtube.com.
+     * The mobile site frequently shows a black player and does not fully
+     * initialise the ytcfg / ytInitialPlayerResponse globals inside a
+     * WebView, so the PO token extraction script finds nothing.
+     * The desktop site initialises those globals reliably even when the
+     * video itself does not visually play (which is expected in a WebView).
+     */
+    private static final String START_URL = "https://www.youtube.com/watch?v=" + DEFAULT_TOKEN_VIDEO_ID;
     private static final String[] COOKIE_URLS = new String[] {
         "https://www.youtube.com/",
         "https://m.youtube.com/",
@@ -295,31 +303,55 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                      * A second attempt fires 5 s later if the first finds nothing.
                      */
                     statusText.setText("Watch page loaded \u2014 waiting for player to initialise...");
-                    webView.postDelayed(() -> {
-                        if (isDestroyed()) {
-                            return;
-                        }
-                        statusText.setText("Watch page loaded \u2014 checking for PO token...");
-                        view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> {
-                            handlePoTokenScriptResult(result, false);
-                            boolean tokenFound = result != null
-                                && result.contains("\"token\":\"")
-                                && !result.matches("(?s).*\"token\":\"\".*");
-                            if (!tokenFound) {
-                                webView.postDelayed(() -> {
-                                    if (!isDestroyed()) {
-                                        view.evaluateJavascript(PO_TOKEN_SCRIPT,
-                                            retry -> handlePoTokenScriptResult(retry, false));
-                                    }
-                                }, 5000);
-                            }
-                        });
-                    }, 3000);
+                    /*
+                     * Poll for the PO token up to MAX_AUTO_EXTRACT_ATTEMPTS times.
+                     * onPageFinished fires when the HTML document is parsed, but
+                     * YouTube's player JS loads asynchronously — the globals are
+                     * often not populated for 5-15 seconds after the page event.
+                     * Two attempts at 3 s and 8 s was not enough; polling every
+                     * POLL_INTERVAL_MS for up to MAX_AUTO_EXTRACT_ATTEMPTS gives
+                     * the player enough time to fully initialise.
+                     */
+                    final int MAX_AUTO_EXTRACT_ATTEMPTS = 8;
+                    final long POLL_INTERVAL_MS = 4000;
+                    schedulePoTokenPoll(view, 0, MAX_AUTO_EXTRACT_ATTEMPTS, POLL_INTERVAL_MS);
                 } else {
                     statusText.setText("Loaded: " + safeUrlForStatus(url));
                 }
             }
         });
+    }
+
+    /**
+     * Polls the visible WebView for a GVS PO token every {@code intervalMs} ms,
+     * up to {@code maxAttempts} times. Stops as soon as a token is found.
+     * This replaces the old two-shot (3 s + 8 s) approach which was not enough
+     * time for desktop YouTube's player JS to fully initialise.
+     */
+    private void schedulePoTokenPoll(WebView view, int attempt, int maxAttempts, long intervalMs) {
+        if (isDestroyed() || attempt >= maxAttempts) {
+            return;
+        }
+
+        long delay = attempt == 0 ? 3000L : intervalMs;
+        int displayAttempt = attempt + 1;
+
+        webView.postDelayed(() -> {
+            if (isDestroyed()) return;
+
+            statusText.setText("Checking for PO token (attempt " + displayAttempt + "/" + maxAttempts + ")...");
+            view.evaluateJavascript(PO_TOKEN_SCRIPT, result -> {
+                boolean tokenFound = result != null
+                    && result.contains("\"token\":\"")
+                    && !result.matches("(?s).*\"token\":\"\".*");
+
+                if (tokenFound) {
+                    handlePoTokenScriptResult(result, false);
+                } else {
+                    schedulePoTokenPoll(view, attempt + 1, maxAttempts, intervalMs);
+                }
+            });
+        }, delay);
     }
 
     private void openPlayerContext() {
