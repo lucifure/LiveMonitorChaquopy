@@ -247,9 +247,110 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             public void onPermissionRequest(PermissionRequest request) {
                 request.grant(request.getResources());
             }
+
+            /**
+             * Pipe every JavaScript console message into the app log so we
+             * can see errors, warnings, and any LiveMonitorApp bridge calls
+             * that throw inside the page JS context.
+             */
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                if (cm == null) return false;
+                String msg  = cm.message()  == null ? "" : cm.message();
+                String src2 = cm.sourceId() == null ? "" : cm.sourceId();
+                // Always log errors/warnings; log other messages only if they
+                // mention our bridge so we don't flood the log with YouTube noise.
+                boolean isError = cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR
+                               || cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.WARNING;
+                boolean isBridge = msg.contains("LiveMonitorApp") || msg.contains("lm_pot");
+                if (isError || isBridge) {
+                    String level = cm.messageLevel().name();
+                    String short2 = src2.length() > 60 ? "…" + src2.substring(src2.length() - 60) : src2;
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/JS:" + level + "] " + msg
+                            + (short2.isEmpty() ? "" : "  (" + short2 + ":" + cm.lineNumber() + ")")
+                    ));
+                }
+                return false; // let the default handler run too
+            }
         });
 
         webView.setWebViewClient(new WebViewClient() {
+
+            /**
+             * Ground-truth network-level logging that bypasses JavaScript entirely.
+             * This fires for every HTTP/HTTPS request the WebView makes — including
+             * requests issued by Web Workers, service workers, or any path that
+             * bypasses our fetch/XHR JS hooks.
+             *
+             * We log every /youtubei/v1/ call so we can see definitively:
+             *  - whether /player is ever attempted
+             *  - which HTTP method is used
+             *  - the exact path and query string
+             *
+             * Returning null lets the request proceed normally.
+             */
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView view, android.webkit.WebResourceRequest req) {
+                if (req != null && req.getUrl() != null) {
+                    String reqUrl = req.getUrl().toString();
+                    if (reqUrl.contains("/youtubei/v1/")) {
+                        try {
+                            String[] parts = reqUrl.split("/youtubei/v1/");
+                            String pathAndQuery = parts.length > 1 ? parts[1] : reqUrl;
+                            // Keep path + first 80 chars of query for readability
+                            if (pathAndQuery.length() > 100) {
+                                pathAndQuery = pathAndQuery.substring(0, 100) + "…";
+                            }
+                            String method = req.getMethod() == null ? "?" : req.getMethod();
+                            storage.appendLog(LogItem.info(
+                                LogItem.SOURCE_UI,
+                                "[WebView/Net] " + method + " /youtubei/v1/" + pathAndQuery
+                            ));
+                        } catch (Exception ignored) {}
+                    }
+                }
+                return null; // never block — always let the request through
+            }
+
+            /**
+             * Log page-level load errors (e.g. net::ERR_INTERNET_DISCONNECTED,
+             * net::ERR_UNKNOWN_URL_SCHEME) so we know when the WebView itself
+             * fails to load rather than YouTube's JS silently doing nothing.
+             */
+            @Override
+            public void onReceivedError(WebView view,
+                    android.webkit.WebResourceRequest req,
+                    android.webkit.WebResourceError err) {
+                super.onReceivedError(view, req, err);
+                if (req != null && req.isForMainFrame() && err != null) {
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/LoadError] " + req.getUrl() + " → " + err.getDescription()
+                    ));
+                }
+            }
+
+            /**
+             * Log HTTP-level errors (4xx / 5xx) for the main frame so we know
+             * if YouTube is returning an error response to the WebView.
+             */
+            @Override
+            public void onReceivedHttpError(WebView view,
+                    android.webkit.WebResourceRequest req,
+                    android.webkit.WebResourceResponse resp) {
+                super.onReceivedHttpError(view, req, resp);
+                if (req != null && req.isForMainFrame() && resp != null) {
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/HttpError] HTTP " + resp.getStatusCode()
+                            + " for " + req.getUrl()
+                    ));
+                }
+            }
+
             /*
              * YouTube's mobile site emits intent:// URLs to deep-link into the native
              * YouTube app. The default WebViewClient cannot handle the intent:// scheme,
