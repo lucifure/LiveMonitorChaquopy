@@ -245,29 +245,78 @@ public class YtDlpRunner {
         return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
+    /** Public wrapper used by callers that have their own output loop (youtubedl-android). */
+    public static boolean isImportantYtDlpLinePublic(String line) {
+        return isImportantYtDlpLine(line);
+    }
+
+    /**
+     * Returns true for lines that should be forwarded to the in-app log.
+     *
+     * We pass through everything EXCEPT pure progress/download-speed lines
+     * that would flood the log with hundreds of identical fragment lines.
+     * All errors, warnings, status changes, and po-token related lines are
+     * always forwarded regardless.
+     */
     private static boolean isImportantYtDlpLine(String line) {
         if (isBlank(line)) {
             return false;
         }
 
         String lower = line.toLowerCase();
-        return lower.contains("error")
-            || lower.contains("warning")
-            || lower.contains("unavailable")
-            || lower.contains("sign in")
-            || lower.contains("private")
-            || lower.contains("members-only")
-            || lower.contains("premiere")
-            || lower.contains("live event")
-            || lower.contains("destination")
-            || lower.contains("merging formats")
-            || lower.contains("po_token")
-            || lower.contains("po token")
-            || lower.contains("gvs")
-            || lower.contains("bot")
-            || lower.contains("token required")
-            || lower.contains("precondition")
-            || lower.contains("http error 403");
+
+        // Always pass through errors, warnings and key status lines.
+        if (lower.contains("error")
+                || lower.contains("warning")
+                || lower.contains("unavailable")
+                || lower.contains("sign in")
+                || lower.contains("private")
+                || lower.contains("members-only")
+                || lower.contains("premiere")
+                || lower.contains("live event")
+                || lower.contains("destination")
+                || lower.contains("merging formats")
+                || lower.contains("po_token")
+                || lower.contains("po token")
+                || lower.contains("gvs")
+                || lower.contains("bot")
+                || lower.contains("token required")
+                || lower.contains("precondition")
+                || lower.contains("http error 403")) {
+            return true;
+        }
+
+        // Pass through yt-dlp status/info lines (not bare download-speed spam).
+        if (lower.startsWith("[youtube]")
+                || lower.startsWith("[info]")
+                || lower.startsWith("[debug]")
+                || lower.startsWith("[generic]")
+                || lower.startsWith("[hlsnative]")
+                || lower.startsWith("[dashsegfrag]")
+                || lower.startsWith("[fragmentedmp4]")
+                || lower.startsWith("[merger]")
+                || lower.startsWith("[ffmpeg]")) {
+            return true;
+        }
+
+        // Pass through first fragment download lines and completion markers.
+        if (lower.contains("downloading webpage")
+                || lower.contains("downloading player")
+                || lower.contains("downloading m3u8")
+                || lower.contains("downloading mpd")
+                || lower.contains("downloading manifest")
+                || lower.contains("downloading fragment")
+                || lower.contains("total fragments")
+                || lower.contains("live event")
+                || lower.contains("writing")
+                || lower.contains("has already been recorded")
+                || lower.contains("100%")) {
+            return true;
+        }
+
+        // Skip bare [download] progress lines — they repeat every few seconds
+        // and are already visible in the diagnostic message on the recording card.
+        return false;
     }
 
     private static void ensureParentDirectory(String outputPath) {

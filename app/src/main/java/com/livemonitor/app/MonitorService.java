@@ -970,23 +970,28 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 ? "yt-dlp recorder starting from DVR beginning."
                 : "yt-dlp recorder starting from live edge.");
 
+            // Build a readable summary of the exact flags being passed so the
+            // log makes it obvious what yt-dlp will try to do.
+            boolean hasLiveFromStart = attempt.args != null
+                && attempt.args.contains("--live-from-start");
+            boolean hasPoToken = attempt.args != null
+                && attempt.args.stream().anyMatch(a -> a != null && a.contains("po_token"));
+            boolean hasCookieArg = attempt.args != null
+                && attempt.args.stream().anyMatch(a -> a != null
+                    && (a.equals("--cookies") || a.equals("-c")));
+            String fullCommand = builder.toLogString(attempt.args);
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Starting yt-dlp primary recorder.",
-                "videoId="
-                    + recording.getVideoId()
-                    + ", primaryRecorder="
-                    + primaryRecorderDecision.getRecorderName()
-                    + ", attempt="
-                    + (attemptIndex + 1)
-                    + "/"
-                    + attempts.size()
-                    + ", "
-                    + attempt.describe()
-                    + ", retries=10, command="
-                    + shortenForLog(builder.toLogString(attempt.args), 500)
+                "[yt-dlp] Starting recorder — attempt "
+                    + (attemptIndex + 1) + "/" + attempts.size()
+                    + " | liveFromStart=" + hasLiveFromStart
+                    + " | poToken=" + hasPoToken
+                    + " | cookies=" + hasCookieArg
+                    + " | recorder=" + primaryRecorderDecision.getRecorderName()
+                    + " | videoId=" + recording.getVideoId(),
+                "cmd=" + fullCommand
             );
 
             try {
@@ -1005,11 +1010,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         attempt.args,
                         recording.getCurrentTempSegmentPath(),
                         message -> log(
-                            LogItem.LEVEL_DEBUG,
+                            LogItem.LEVEL_INFO,
                             LogItem.SOURCE_RECORDER,
                             channel,
-                            "yt-dlp recorder output.",
-                            shortenForLog(message, 500)
+                            "[yt-dlp] " + shortenForLog(message, 600),
+                            null
                         )
                     );
 
@@ -1263,13 +1268,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
             @Override
             public Unit invoke(Float progress, Long etaSeconds, String line) {
-                if (!isBlank(line)) {
+                if (!isBlank(line) && YtDlpRunner.isImportantYtDlpLinePublic(line)) {
                     log(
-                        LogItem.LEVEL_DEBUG,
+                        LogItem.LEVEL_INFO,
                         LogItem.SOURCE_RECORDER,
                         channel,
-                        "youtubedl-android recorder output.",
-                        shortenForLog(line, 500)
+                        "[yt-dlp] " + shortenForLog(line, 600),
+                        null
                     );
                 }
                 return Unit.INSTANCE;
