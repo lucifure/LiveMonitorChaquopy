@@ -62,9 +62,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "function validToken(value){return typeof value==='string'&&value.length>10&&value.indexOf('TOKEN')<0&&value.indexOf('...')<0;}"
         + "var found={token:'',source:''};"
         + "function remember(token,source){if(!found.token&&validToken(token)){found.token=token;found.source=source;}}"
-        + "function readPotFromUrl(value,path){if(found.token||typeof value!=='string'||value.indexOf('pot=')<0){return;}"
-        + "try{remember(new URL(value,location.href).searchParams.get('pot'),path+'.url.pot');}catch(e){"
-        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){remember(decodeURIComponent(match[1].replace(/\\+/g,'%20')),path+'.url.pot');}}}"
+        + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
+        + "function readPotFromUrl(value,path){if(found.token||typeof value!=='string')return;"
+        + "var queue=[value],seen={};for(var qi=0;qi<queue.length&&!found.token;qi++){var text=queue[qi];if(!text||seen[text])continue;seen[text]=true;"
+        + "var decoded=decodePart(text);if(decoded&&decoded!==text)queue.push(decoded);"
+        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);remember(params.get('pot')||params.get('po_token'),path+'.params.pot');"
+        + "var nested=params.get('url')||params.get('u');if(nested)queue.push(nested);}catch(e){}"
+        + "try{var url=new URL(text,location.href);remember(url.searchParams.get('pot')||url.searchParams.get('po_token'),path+'.url.pot');"
+        + "var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)queue.push(nestedUrl);}catch(e2){}"
+        + "var match=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(match){remember(decodePart(match[1]),path+'.regex.pot');}}}"
         + "function walk(value,path,depth){"
         + "if(found.token||!value||depth>8){return;}"
         + "readPotFromUrl(value,path);if(found.token){return;}"
@@ -99,9 +105,16 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "function validToken(v){return typeof v==='string'&&v.length>10&&v.indexOf('TOKEN')<0&&v.indexOf('...')<0&&v.indexOf(' ')<0;}"
         + "function notify(token,client,videoId,source){if(!validToken(token))return false;"
         + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',source||'fetch.resp');return true;}catch(e){return false;}}"
-        + "function readPotFromUrl(value,path,found){if(typeof value!=='string'||value.indexOf('pot=')<0)return false;"
-        + "try{var pot=new URL(value,location.href).searchParams.get('pot');if(validToken(pot)){found.token=pot;found.source=path+'.url.pot';return true;}}catch(e){"
-        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){var decoded=decodeURIComponent(match[1].replace(/\\+/g,'%20'));if(validToken(decoded)){found.token=decoded;found.source=path+'.url.pot';return true;}}}return false;}"
+        + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
+        + "function acceptPot(p,path,found){if(validToken(p)){found.token=p;found.source=path;return true;}return false;}"
+        + "function readPotFromUrl(value,path,found){if(typeof value!=='string')return false;"
+        + "var queue=[value],seen={};for(var qi=0;qi<queue.length&&!found.token;qi++){var text=queue[qi];if(!text||seen[text])continue;seen[text]=true;"
+        + "var decoded=decodePart(text);if(decoded&&decoded!==text)queue.push(decoded);"
+        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);if(acceptPot(params.get('pot')||params.get('po_token'),path+'.params.pot',found))return true;"
+        + "var nested=params.get('url')||params.get('u');if(nested)queue.push(nested);}catch(e){}"
+        + "try{var url=new URL(text,location.href);if(acceptPot(url.searchParams.get('pot')||url.searchParams.get('po_token'),path+'.url.pot',found))return true;"
+        + "var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)queue.push(nestedUrl);}catch(e2){}"
+        + "var match=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(match&&acceptPot(decodePart(match[1]),path+'.regex.pot',found))return true;}return false;}"
         + "function scan(value,path,depth,found){if(found.token||!value||depth>8)return;"
         + "if(typeof value==='string'){readPotFromUrl(value,path,found);return;}"
         + "if(Array.isArray(value)){for(var i=0;i<value.length&&!found.token;i++){scan(value[i],path+'['+i+']',depth+1,found);}return;}"
@@ -517,6 +530,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         if (isBlank(token)) {
             token = uri.getQueryParameter("po_token");
+        }
+
+        if (isBlank(token)) {
+            token = uri.getQueryParameter("gvs_pot");
         }
 
         if (!isValidPoTokenCandidate(token) || token.equals(lastObservedPoToken)) {
