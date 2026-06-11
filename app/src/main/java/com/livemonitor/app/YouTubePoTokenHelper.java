@@ -228,6 +228,7 @@ public final class YouTubePoTokenHelper {
                 playerUrl
             );
             storage.saveSettings(appSettings);
+            PoTokenExpiryWorker.schedule(storage.getContext(), appSettings);
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_REMOTE_CONFIG,
                 "Auto-refreshed GVS PO token from background WebView. client="

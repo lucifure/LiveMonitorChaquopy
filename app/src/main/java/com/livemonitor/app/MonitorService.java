@@ -667,6 +667,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 );
             }
 
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return;
+            }
+
             if (!isBlank(resolvedInput.videoId) && !resolvedInput.videoId.equals(videoId)) {
                 videoId = resolvedInput.videoId;
                 recording.setVideoId(videoId);
@@ -949,6 +953,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String lastFailureReason = "yt-dlp recorder did not run.";
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return true;
+            }
+
             YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
             String ytDlpRecorderMode = attempt.allowLiveFromStart
@@ -1068,6 +1076,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             }
 
+            RecordingItem latestAfterAttempt = storage.findRecordingById(recording.getId());
+            if (latestAfterAttempt != null) {
+                recording = latestAfterAttempt;
+            }
+
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return true;
+            }
+
             if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
                 log(
                     LogItem.LEVEL_WARNING,
@@ -1101,6 +1118,55 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             liveInfo,
             lastFailureReason
         );
+    }
+
+    private boolean shouldStopRecorderAfterUserRequest(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording
+    ) {
+        if (recording == null) {
+            return true;
+        }
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        if (latest != null) {
+            recording = latest;
+        }
+
+        String status = recording.getStatus();
+        boolean stoppedByUser = RecordingItem.STATUS_PAUSED_BY_USER.equals(status)
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(status)
+            || RecordingItem.STATUS_COMPLETED.equals(status);
+
+        if (!stoppedByUser) {
+            return false;
+        }
+
+        activeRecordings.remove(recording.getId());
+        activeRecordings.remove(recording.getChannelId());
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
+        progressTracker.untrack(recording);
+
+        if (channel != null) {
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        String message = RecordingItem.STATUS_PAUSED_BY_USER.equals(status)
+            ? "Recording paused."
+            : "Recording stopped.";
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Stopping recorder attempts after user request.",
+            "recordingId=" + recording.getId() + ", status=" + status
+        );
+        broadcastRecordingUpdated(message);
+        return true;
     }
 
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
@@ -1450,6 +1516,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
             }
 
+            if (shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
+                return true;
+            }
+
             log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
@@ -1773,6 +1843,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException(
                     "Could not get playable stream URL. Resolver returned empty URL."
                 );
+            }
+
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return;
             }
 
             if (!isBlank(resolvedInput.videoId) && !recording.matchesVideo(resolvedInput.videoId)) {
@@ -2632,6 +2706,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String broadcastMessage
     ) {
         if (recording == null) {
+            return;
+        }
+
+        if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
             return;
         }
 
