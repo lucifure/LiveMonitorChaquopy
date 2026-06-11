@@ -155,6 +155,70 @@ public class NotificationHelper {
             .build();
     }
 
+    public static final int PO_TOKEN_SETUP_NOTIFICATION_ID = 3_000_000;
+
+    public void showPoTokenSetupNotification() {
+        if (notificationManager == null || !canPostNotifications()) {
+            return;
+        }
+
+        Intent intent = new Intent(appContext, YouTubeSignInActivity.class);
+        PendingIntent pendingIntent = buildActivityPendingIntent(
+            intent,
+            PO_TOKEN_SETUP_NOTIFICATION_ID
+        );
+
+        String title = "YouTube PO token required";
+        String text = "yt-dlp cannot record live streams without a PO token. "
+            + "Tap to open YouTube PO Token Setup, load a live video, then tap "
+            + "'Generate/Refresh PO token'.";
+
+        Notification notification = new NotificationCompat.Builder(appContext, CHANNEL_LIVE_ALERTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build();
+
+        notificationManager.notify(PO_TOKEN_SETUP_NOTIFICATION_ID, notification);
+    }
+
+    public static final int PO_TOKEN_SESSION_EXPIRED_NOTIFICATION_ID = 3_000_001;
+
+    public void showPoTokenSessionExpiredNotification() {
+        if (notificationManager == null || !canPostNotifications()) {
+            return;
+        }
+
+        Intent intent = new Intent(appContext, YouTubeSignInActivity.class);
+        PendingIntent pendingIntent = buildActivityPendingIntent(
+            intent,
+            PO_TOKEN_SESSION_EXPIRED_NOTIFICATION_ID
+        );
+
+        String title = "YouTube session expired — re-sign in needed";
+        String text = "The background PO token refresh failed. Your YouTube session may have expired. "
+            + "Tap to open YouTube PO Token Setup, sign in, load a live video, "
+            + "and the token will be saved automatically.";
+
+        Notification notification = new NotificationCompat.Builder(appContext, CHANNEL_LIVE_ALERTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build();
+
+        notificationManager.notify(PO_TOKEN_SESSION_EXPIRED_NOTIFICATION_ID, notification);
+    }
+
     public void showChannelMonitoringNotification(ChannelItem channel) {
         if (channel == null || notificationManager == null || !canPostNotifications()) {
             return;

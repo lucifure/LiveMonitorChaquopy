@@ -10,6 +10,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
@@ -36,7 +39,15 @@ import java.util.Map;
  */
 public class YouTubeSignInActivity extends AppCompatActivity {
     private static final String DEFAULT_TOKEN_VIDEO_ID = "dQw4w9WgXcQ";
-    private static final String START_URL = "https://m.youtube.com/watch?v=" + DEFAULT_TOKEN_VIDEO_ID;
+    /*
+     * Use the desktop YouTube URL rather than m.youtube.com.
+     * The mobile site frequently shows a black player and does not fully
+     * initialise the ytcfg / ytInitialPlayerResponse globals inside a
+     * WebView, so the PO token extraction script finds nothing.
+     * The desktop site initialises those globals reliably even when the
+     * video itself does not visually play (which is expected in a WebView).
+     */
+    private static final String START_URL = "https://www.youtube.com/watch?v=" + DEFAULT_TOKEN_VIDEO_ID;
     private static final String[] COOKIE_URLS = new String[] {
         "https://www.youtube.com/",
         "https://m.youtube.com/",
@@ -76,6 +87,64 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "return JSON.stringify({token:found.token,tokenType:'gvs',source:found.source,clientName:clientName,clientVersion:clientVersion,visitorData:visitorData,videoId:videoId,playerUrl:location.href});"
         + "})()";
 
+    /**
+     * Injected 5 seconds after a YouTube watch page finishes loading.
+     *
+     * <p>YouTube watch pages use server-side rendering — the player response
+     * ({@code ytInitialPlayerResponse}) arrives inside the initial HTML, so
+     * YouTube's own JavaScript never makes a separate {@code /youtubei/v1/player}
+     * network request.  As a result there is nothing for {@link
+     * YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} to intercept.
+     *
+     * <p>This script works around that by firing a {@code /youtubei/v1/player}
+     * {@code fetch()} call ourselves, using the page's own InnerTube context
+     * ({@code INNERTUBE_API_KEY} + {@code INNERTUBE_CONTEXT} from {@code ytcfg}).
+     * That request goes through our overridden {@code window.fetch}, so
+     * {@code checkBody} is called on both the request body and the response body.
+     * YouTube's server returns {@code serviceIntegrityDimensions.poToken} in the
+     * response for authenticated sessions — {@code onPoTokenIntercepted} fires
+     * automatically when {@code checkBody} finds it.
+     */
+    private static final String MANUAL_PLAYER_FETCH_SCRIPT = "(function(){"
+        + "try{"
+        + "var get=function(k){try{return window.ytcfg&&window.ytcfg.get?window.ytcfg.get(k):null;}catch(e){return null;}};"
+        + "var apiKey=get('INNERTUBE_API_KEY')||'';"
+        + "var ctx=get('INNERTUBE_CONTEXT')||null;"
+        + "var vid='';"
+        + "try{vid=new URL(location.href).searchParams.get('v')||'';}catch(e){}"
+        + "try{LiveMonitorApp.onApiRequestSeen('manual-player',vid||'?',"
+        + "  'apiKey='+(apiKey?'ok':'missing')+',ctx='+(ctx?'ok':'missing')+',vid='+(vid?'ok':'missing'),'manual');}catch(e){}"
+        + "if(!apiKey||!ctx||!vid)return;"
+        + "window.fetch('/youtubei/v1/player?key='+apiKey+'&prettyPrint=false',{"
+        + "  method:'POST',"
+        + "  credentials:'include',"
+        + "  headers:{'Content-Type':'application/json'},"
+        + "  body:JSON.stringify({"
+        + "    context:ctx,"
+        + "    videoId:vid,"
+        + "    playbackContext:{contentPlaybackContext:{html5Preference:'HTML5_PREF_WANTS'}},"
+        + "    racyCheckOk:true,"
+        + "    contentCheckOk:true"
+        + "  })"
+        + "}).then(function(r){"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-status',vid,'http='+r.status,'manual');}catch(e){}"
+        + "  return r.text();"
+        + "}).then(function(txt){"
+        + "  var preview='';"
+        + "  try{"
+        + "    var d=JSON.parse(txt);"
+        + "    var sid=d&&d.serviceIntegrityDimensions;"
+        + "    var errCode=(d&&d.error&&d.error.code)||'';"
+        + "    preview='hasPoToken='+(!!( sid&&sid.poToken))+(errCode?',err='+errCode:'');"
+        + "  }catch(e){preview='parse-err:'+String(e).substring(0,60);}"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-done',vid,preview,'manual');}catch(e){}"
+        + "}).catch(function(e){"
+        + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-fail',vid,String(e).substring(0,100),'manual');}catch(e2){}"
+        + "});"
+        + "}catch(e){"
+        + "try{LiveMonitorApp.onApiRequestSeen('manual-player-exc','',String(e).substring(0,100),'manual');}catch(e2){}}"
+        + "})()";
+
     private AppStorage storage;
     private WebView webView;
     private TextView statusText;
@@ -110,8 +179,8 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(
-            "Use this visible WebView to sign in, load a real YouTube player, then tap Generate/Refresh PO token. "
-                + "The app does not run hidden token scraping."
+            "Sign in, then navigate to a live video — the PO token is extracted automatically when a watch page loads. "
+                + "Tap Generate/Refresh PO token to retry manually. Tap Save session to store cookies."
         );
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
@@ -197,9 +266,205 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
-        settings.setUserAgentString(settings.getUserAgentString());
+        /*
+         * Fix 1: Use a standard mobile Chrome UA instead of the default Android
+         * WebView UA. The default UA contains a "wv" token that Google's sign-in
+         * pages detect and use to block sign-in with "This browser or app may not
+         * be secure." A plain Chrome mobile UA bypasses this check.
+         */
+        settings.setUserAgentString(
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        );
+        /*
+         * Fix 2: Additional settings required for YouTube to render the player
+         * fully. Without these the player area can show as a black rectangle.
+         */
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setAllowContentAccess(true);
+
+        /*
+         * Register the JavaScript bridge before the WebView loads any page.
+         * This makes the LiveMonitorApp object available in the page's JS context
+         * from the very first frame, which is required for the fetch/XHR interceptor
+         * (FETCH_INTERCEPTOR_SCRIPT) to be able to call back into Java as soon as
+         * YouTube's player requests the /youtubei/v1/player endpoint.
+         */
+        webView.addJavascriptInterface(new PoTokenJsBridge(), "LiveMonitorApp");
+
+        /*
+         * Fix 3: Grant media/DRM permission requests so the YouTube player
+         * initialises fully inside the visible WebView. Without a WebChromeClient
+         * these requests are silently denied and the player JS globals
+         * (ytcfg, ytInitialPlayerResponse) are never populated.
+         */
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                request.grant(request.getResources());
+            }
+
+            /**
+             * Pipe every JavaScript console message into the app log so we
+             * can see errors, warnings, and any LiveMonitorApp bridge calls
+             * that throw inside the page JS context.
+             */
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                if (cm == null) return false;
+                String msg  = cm.message()  == null ? "" : cm.message();
+                String src2 = cm.sourceId() == null ? "" : cm.sourceId();
+                // Always log errors/warnings; log other messages only if they
+                // mention our bridge so we don't flood the log with YouTube noise.
+                boolean isError = cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR
+                               || cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.WARNING;
+                boolean isBridge = msg.contains("LiveMonitorApp") || msg.contains("lm_pot");
+                if (isError || isBridge) {
+                    String level = cm.messageLevel().name();
+                    String short2 = src2.length() > 60 ? "…" + src2.substring(src2.length() - 60) : src2;
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/JS:" + level + "] " + msg
+                            + (short2.isEmpty() ? "" : "  (" + short2 + ":" + cm.lineNumber() + ")")
+                    ));
+                }
+                return false; // let the default handler run too
+            }
+        });
 
         webView.setWebViewClient(new WebViewClient() {
+
+            /**
+             * Ground-truth network-level logging that bypasses JavaScript entirely.
+             * This fires for every HTTP/HTTPS request the WebView makes — including
+             * requests issued by Web Workers, service workers, or any path that
+             * bypasses our fetch/XHR JS hooks.
+             *
+             * We log every /youtubei/v1/ call so we can see definitively:
+             *  - whether /player is ever attempted
+             *  - which HTTP method is used
+             *  - the exact path and query string
+             *
+             * Returning null lets the request proceed normally.
+             */
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView view, android.webkit.WebResourceRequest req) {
+                if (req != null && req.getUrl() != null) {
+                    String reqUrl = req.getUrl().toString();
+                    if (reqUrl.contains("/youtubei/v1/")) {
+                        try {
+                            String[] parts = reqUrl.split("/youtubei/v1/");
+                            String pathAndQuery = parts.length > 1 ? parts[1] : reqUrl;
+                            // Keep path + first 80 chars of query for readability
+                            if (pathAndQuery.length() > 100) {
+                                pathAndQuery = pathAndQuery.substring(0, 100) + "…";
+                            }
+                            String method = req.getMethod() == null ? "?" : req.getMethod();
+                            storage.appendLog(LogItem.info(
+                                LogItem.SOURCE_UI,
+                                "[WebView/Net] " + method + " /youtubei/v1/" + pathAndQuery
+                            ));
+                        } catch (Exception ignored) {}
+                    }
+                }
+                return null; // never block — always let the request through
+            }
+
+            /**
+             * Log page-level load errors (e.g. net::ERR_INTERNET_DISCONNECTED,
+             * net::ERR_UNKNOWN_URL_SCHEME) so we know when the WebView itself
+             * fails to load rather than YouTube's JS silently doing nothing.
+             */
+            @Override
+            public void onReceivedError(WebView view,
+                    android.webkit.WebResourceRequest req,
+                    android.webkit.WebResourceError err) {
+                super.onReceivedError(view, req, err);
+                if (req != null && req.isForMainFrame() && err != null) {
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/LoadError] " + req.getUrl() + " → " + err.getDescription()
+                    ));
+                }
+            }
+
+            /**
+             * Log HTTP-level errors (4xx / 5xx) for the main frame so we know
+             * if YouTube is returning an error response to the WebView.
+             */
+            @Override
+            public void onReceivedHttpError(WebView view,
+                    android.webkit.WebResourceRequest req,
+                    android.webkit.WebResourceResponse resp) {
+                super.onReceivedHttpError(view, req, resp);
+                if (req != null && req.isForMainFrame() && resp != null) {
+                    storage.appendLog(LogItem.debug(
+                        LogItem.SOURCE_UI,
+                        "[WebView/HttpError] HTTP " + resp.getStatusCode()
+                            + " for " + req.getUrl()
+                    ));
+                }
+            }
+
+            /*
+             * YouTube's mobile site emits intent:// URLs to deep-link into the native
+             * YouTube app. The default WebViewClient cannot handle the intent:// scheme,
+             * which produces net::ERR_UNKNOWN_URL_SCHEME and breaks the sign-in flow.
+             * We intercept these here: if a browser_fallback_url is embedded in the
+             * intent extras we load that instead; otherwise we stay on the current page.
+             */
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                if (request == null) return false;
+                String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                return handleSpecialUrlScheme(view, url);
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleSpecialUrlScheme(view, url == null ? "" : url);
+            }
+
+            private boolean handleSpecialUrlScheme(WebView view, String url) {
+                if (url.startsWith("intent://")) {
+                    try {
+                        android.content.Intent parsed = android.content.Intent.parseUri(
+                            url, android.content.Intent.URI_INTENT_SCHEME);
+                        String fallback = parsed.getStringExtra("browser_fallback_url");
+                        if (fallback != null && !fallback.trim().isEmpty()) {
+                            view.loadUrl(fallback.trim());
+                        }
+                        // No fallback — just stay on the current page; do not crash.
+                    } catch (Exception ignored) {
+                        // Malformed intent URI; stay on current page.
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                /*
+                 * Inject the fetch/XHR interceptor as early as possible — before
+                 * YouTube's player JS executes and makes the /youtubei/v1/player
+                 * request that contains the po_token in its body.
+                 * The guard in the script prevents double-installation if this
+                 * fires more than once (e.g. SPA navigation).
+                 */
+                view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
+                storage.appendLog(LogItem.debug(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/WebView] Page loading: " + safeUrlForStatus(url)
+                        + " | fetch+XHR interceptor injected"
+                ));
+            }
+
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
@@ -265,7 +530,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     private void openPlayerContext() {
         String playerUrl = normalizePlayerUrl(playerUrlInput.getText().toString());
         playerUrlInput.setText(playerUrl);
-        statusText.setText("Loading visible YouTube player context...");
+        statusText.setText("Loading YouTube player — will trigger player API request in 5 s...");
         webView.loadUrl(playerUrl);
     }
 
@@ -279,10 +544,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         }
 
         statusText.setText("Checking visible player context for an observable GVS PO token...");
-        webView.evaluateJavascript(PO_TOKEN_SCRIPT, this::handlePoTokenScriptResult);
+        webView.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, true));
     }
 
-    private void handlePoTokenScriptResult(String value) {
+    private void handlePoTokenScriptResult(String value, boolean isManual) {
         try {
             Object unwrapped = new JSONTokener(value == null ? "null" : value).nextValue();
             String jsonText = unwrapped instanceof String ? (String) unwrapped : String.valueOf(unwrapped);
@@ -290,9 +555,19 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             String token = json.optString("token", "").trim();
 
             if (isBlank(token)) {
-                String message = "No GVS PO token was observable on this loaded player page. Try playing the video, sign in, or open another video.";
+                String message = "No GVS PO token found on this page. Try playing the video, sign in, or open another video.";
                 statusText.setText(message);
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                storage.appendLog(LogItem.info(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/Globals] Globals scan: no token in ytcfg/ytInitialPlayerResponse"
+                        + (isManual ? " (manual scan)" : " (auto fallback scan)")
+                        + " — normal if fetch interceptor already captured it"
+                ));
+
+                if (isManual) {
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                }
+
                 return;
             }
 
@@ -300,7 +575,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         } catch (Exception e) {
             String message = "Unable to read PO-token data from the visible player: " + e.getMessage();
             statusText.setText(message);
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+
+            if (isManual) {
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -531,6 +809,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return "mweb";
         }
 
+        if (normalized.contains("embedded")) {
+            return "web_embedded";
+        }
+
         if (normalized.contains("web")) {
             return "web";
         }
@@ -592,6 +874,96 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    /**
+     * JavaScript interface exposed to the WebView as {@code LiveMonitorApp}.
+     *
+     * <p>Called by {@link YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} when it
+     * detects a po_token in a {@code /youtubei/v1/player} request body.
+     * Because JavascriptInterface methods are called on a background thread,
+     * all UI and storage work is dispatched to the main thread.
+     */
+    private final class PoTokenJsBridge {
+
+        /**
+         * Called by the JS interceptor whenever a /youtubei/v1/* request or
+         * the interceptor-installed confirmation fires.  Logged at INFO so it
+         * always appears in the Logs screen regardless of debug-filter settings.
+         */
+        @JavascriptInterface
+        public void onApiRequestSeen(String apiPath, String videoId,
+                String tokenStatus, String source) {
+            String path  = apiPath    == null ? "" : apiPath.trim();
+            String vid   = videoId    == null ? "" : videoId.trim();
+            String tstat = tokenStatus == null ? "" : tokenStatus.trim();
+            String src   = source     == null ? "" : source.trim();
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_UI,
+                "[PoToken/JS] api=" + path
+                    + " | vid=" + (vid.isEmpty() ? "—" : vid)
+                    + " | token=" + tstat
+                    + " | via=" + src
+            ));
+        }
+
+        @JavascriptInterface
+        public void onPoTokenIntercepted(String token, String clientName,
+                String videoId, String source) {
+            if (isDestroyed()) return;
+
+            String safeToken = token == null ? "" : token.trim();
+            String safeClient = (clientName == null || clientName.isEmpty()) ? "WEB" : clientName;
+            String safeVideo = videoId == null ? "" : videoId;
+            String safeSrc = source == null ? "" : source;
+
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_UI,
+                "[PoToken/Intercept] fetch/XHR bridge fired"
+                    + " | source=" + safeSrc
+                    + " | client=" + safeClient
+                    + " | videoId=" + safeVideo
+                    + " | tokenLen=" + safeToken.length()
+                    + (safeToken.length() >= 8
+                        ? " | token=" + safeToken.substring(0, 8) + "..."
+                        : " | token=<too short, ignored>")
+            ));
+
+            if (safeToken.length() < 16) {
+                storage.appendLog(LogItem.warning(
+                    LogItem.SOURCE_UI,
+                    "[PoToken/Intercept] Token rejected — too short (len=" + safeToken.length() + ")"
+                ));
+                return;
+            }
+
+            runOnUiThread(() -> {
+                if (isDestroyed()) return;
+                try {
+                    JSONObject json = new JSONObject();
+                    json.put("token", safeToken);
+                    json.put("tokenType", "gvs");
+                    json.put("source", "intercept:" + safeSrc);
+                    json.put("clientName", safeClient);
+                    json.put("videoId", safeVideo);
+                    json.put("playerUrl",
+                        webView != null && webView.getUrl() != null ? webView.getUrl() : "");
+                    storage.appendLog(LogItem.info(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/Intercept] Saving intercepted token. client=" + safeClient
+                            + " | videoId=" + safeVideo
+                            + " | source=" + safeSrc
+                    ));
+                    saveGeneratedPoToken(json, safeToken);
+                } catch (Exception e) {
+                    storage.appendLog(LogItem.error(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/Intercept] Failed to save intercepted token: " + e.getMessage(),
+                        null
+                    ));
+                }
+            });
+        }
     }
 
     private static class CookieEntry {

@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "EY8uaDhXmMWviyOMfLf-q"
+uri = "file://yt-dlp-fixes.tar.gz"
+type = "unspecified"
+title = "yt-dlp recording fixes (patch)"

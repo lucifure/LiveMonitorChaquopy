@@ -278,8 +278,12 @@ public class RecordingAdapter extends BaseAdapter {
         holder.title.setText(recording.getDisplayTitle());
         holder.subtitle.setText(recording.getDisplaySubtitle());
         holder.details.setText(buildDetails(recording));
-        holder.durationStat.setText("⏱ " + RecordingProgressTracker.formatDuration(recording.getDurationSeconds()));
-        holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(recording.getBytesRecorded()));
+        long durSec = recording.getDurationSeconds();
+        long bytesRec = recording.getBytesRecorded();
+        holder.durationStat.setText(bytesRec > 0
+            ? "⏱ " + RecordingProgressTracker.formatDuration(durSec)
+            : "⏱ Waiting...");
+        holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
         String savedToDisplay = recording.getSavedToDisplay();
         holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);

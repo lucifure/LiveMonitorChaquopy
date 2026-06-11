@@ -476,22 +476,36 @@ public class AppSettings {
     public String buildYtDlpFormatSelector() {
         if (QUALITY_BEST.equals(downloadQuality)) {
             /*
-             * Prefer a single muxed stream. Avoid separate video/audio formats.
+             * Prefer HLS (needed for --live-from-start and native HLS downloader).
+             * Fall back to any combined stream, then allow separate video+audio as a
+             * last resort so DASH-only clients (android_vr, mediaconnect, android
+             * with PO token) can still produce a recording instead of failing with
+             * "Requested format is not available". Bundled ffmpeg handles the mux.
              */
-            return "best";
+            return "best[protocol^=m3u8]/best/bestvideo+bestaudio";
         }
 
         String height = getQualityHeightOnly();
 
         if (height.isEmpty()) {
-            return "best";
+            return "best[protocol^=m3u8]/best/bestvideo+bestaudio";
         }
 
         /*
-         * Prefer one complete stream up to the selected height.
-         * Avoid bestvideo+bestaudio because user requested no separate streams.
+         * Priority order:
+         *   1. HLS combined at target height  (live-from-start, native downloader)
+         *   2. HLS combined at any height     (fallback without height cap)
+         *   3. Combined stream at target height (e.g. WebM muxed)
+         *   4. Any combined stream
+         *   5. Separate DASH at target height (last resort, requires ffmpeg mux)
+         *   6. Best separate DASH available
          */
-        return "best[height<=" + height + "]/best";
+        return "best[height<=" + height + "][protocol^=m3u8]"
+            + "/best[protocol^=m3u8]"
+            + "/best[height<=" + height + "]"
+            + "/best"
+            + "/bestvideo[height<=" + height + "]+bestaudio"
+            + "/bestvideo+bestaudio";
     }
 
     public String buildRetrySummary() {

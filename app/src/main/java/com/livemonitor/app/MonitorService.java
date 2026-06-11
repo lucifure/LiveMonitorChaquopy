@@ -43,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 
 public class MonitorService extends Service implements NetworkMonitor.Listener {
@@ -112,6 +113,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
+        PoTokenRefreshWorker.scheduleIfNeeded(this);
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
 
@@ -1510,15 +1512,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return failureReason;
         }
 
+        boolean hasPoToken = settings != null && settings.hasYtDlpPoToken();
         boolean hasConfiguredCookies = (settings != null && settings.hasYtDlpCookies())
             || (remoteConfig != null && remoteConfig.hasYtDlpCookies());
-        String guidance = hasConfiguredCookies
-            ? "YouTube bot/rate-limit challenge detected even though yt-dlp cookies are configured; "
-                + "refresh the cookies from a real signed-in browser session, reduce retry rate, "
-                + "or configure a valid yt-dlp PO-token/visitor-data extractor arg for the selected YouTube client."
-            : "YouTube bot/rate-limit challenge detected; configure the user's own YouTube cookies.txt "
-                + "or Cookie header in Settings, or configure a valid yt-dlp PO-token/visitor-data extractor arg. "
+
+        String guidance;
+        if (!hasPoToken) {
+            guidance = "YouTube requires a GVS PO token to access live stream formats. "
+                + "Open 'YouTube PO Token Setup' in Settings, load a live video page in the WebView, "
+                + "then tap 'Generate/Refresh PO token'. The token is extracted automatically when the page loads.";
+            notificationHelper.showPoTokenSetupNotification();
+        } else if (hasConfiguredCookies) {
+            guidance = "YouTube bot/rate-limit challenge detected even though yt-dlp cookies and PO token are configured; "
+                + "refresh the PO token via 'YouTube PO Token Setup' in Settings, reduce retry rate, "
+                + "or check that your cookies are from a current signed-in browser session.";
+        } else {
+            guidance = "YouTube bot/rate-limit challenge detected; configure YouTube cookies.txt "
+                + "via 'YouTube PO Token Setup' in Settings, or set up a valid GVS PO token. "
                 + "The app cannot safely impersonate or bypass YouTube's bot checks without legitimate session data.";
+        }
 
         return failureReason + " " + guidance;
     }
@@ -1567,7 +1579,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || lower.contains("not a bot")
             || lower.contains("http error 429")
             || lower.contains("too many requests")
-            || lower.contains("po token");
+            || lower.contains("po token")
+            || lower.contains("po_token")
+            || lower.contains("gvs po")
+            || lower.contains("precondition check failed")
+            || lower.contains("token required");
     }
 
     private boolean isLiveNotReadyError(String message) {
@@ -2883,6 +2899,39 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!isBlank(poTokenExtractorArgs)) {
             extractorArgs.add(poTokenExtractorArgs.trim());
             logYtDlpPoTokenCacheState();
+        } else {
+            boolean hasCookies = settings != null && settings.hasYtDlpCookies();
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "No PO token cached. YouTube now enforces po_token for live streams.",
+                hasCookies
+                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
+                        + "For best results open 'YouTube PO Token Setup', load a live video page, "
+                        + "then tap 'Generate/Refresh PO token'."
+                    : "Open 'YouTube PO Token Setup', load a live video page, then tap "
+                        + "'Generate/Refresh PO token'. Optionally tap 'Save session' to store cookies."
+            );
+            notificationHelper.showPoTokenSetupNotification();
+
+            /*
+             * When no po_token is cached, prioritise clients that are still
+             * accessible without a token.
+             *
+             * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
+             * YouTube client regarding po_token enforcement on live streams.
+             * Adding skip=dash forces HLS-only output which is required for
+             * --live-from-start to walk the DVR fragment index from the beginning.
+             *
+             * web;skip=dash is the next best option when cookies are present
+             * because an authenticated web session avoids most bot-check blocks.
+             */
+            extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
+
+            if (hasCookies) {
+                extractorArgs.add("youtube:player_client=web;skip=dash");
+            }
         }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
@@ -2908,17 +2957,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         /*
-         * YouTube can return "No video formats found" for one yt-dlp player
-         * client while another client remains playable. The Java HLS resolver
-         * already rotates through RemoteConfig clients; mirror that behavior for
-         * yt-dlp-first and the primary recorder so a stale default client does
-         * not immediately force FFmpeg fallback.
+         * TV_EMBEDDED is listed first because it has historically been the most
+         * lenient YouTube client about po_token enforcement for live streams and
+         * always returns HLS manifests compatible with --live-from-start.
+         *
+         * The remaining clients are tried in approximate order of how reliably
+         * they return playable formats without a po_token, with web-based clients
+         * before native app clients because native clients (android, ios) now
+         * require GVS po_token for DASH and frequently have no HLS fallback.
          */
+        addPreferredYtDlpClient(extractorArgs, "TV_EMBEDDED");
+        addPreferredYtDlpClient(extractorArgs, "WEB_EMBEDDED_PLAYER");
         addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI");
         addPreferredYtDlpClient(extractorArgs, "MWEB");
         addPreferredYtDlpClient(extractorArgs, "WEB");
+        addPreferredYtDlpClient(extractorArgs, "WEB_CREATOR");
         addPreferredYtDlpClient(extractorArgs, "ANDROID");
         addPreferredYtDlpClient(extractorArgs, "IOS");
+        addPreferredYtDlpClient(extractorArgs, "MEDIACONNECT");
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
@@ -3007,6 +3063,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
         if (extractorArgs == null || isBlank(clientName)) {
             return;
+        }
+
+        String normalizedClient = clientName.trim().toLowerCase();
+
+        /*
+         * When a PO token is cached, add a variant with the token injected for
+         * this specific client prefix first. GVS tokens are session-bound rather
+         * than strictly client-bound, so applying the same token value under
+         * each client's prefix gives yt-dlp the best chance of finding a working
+         * combination without requiring a fresh token per client.
+         */
+        if (settings != null && settings.hasYtDlpPoToken()) {
+            String tokenValue = settings.getYtDlpPoTokenValue();
+            String tokenType = settings.getYtDlpPoTokenType();
+
+            if (!isBlank(tokenValue) && !isBlank(tokenType)) {
+                extractorArgs.add(
+                    "youtube:player_client=" + normalizedClient
+                        + ";po_token=" + normalizedClient + "." + tokenType + "+" + tokenValue
+                );
+            }
         }
 
         extractorArgs.add(buildYtDlpPlayerClientArg(clientName));
