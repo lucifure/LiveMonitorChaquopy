@@ -187,7 +187,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     private WebView webView;
     private TextView statusText;
     private EditText playerUrlInput;
-    private String lastObservedPoToken = "";
+    private String lastObservedPoTokenContextKey = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -536,18 +536,29 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             token = uri.getQueryParameter("gvs_pot");
         }
 
-        if (!isValidPoTokenCandidate(token) || token.equals(lastObservedPoToken)) {
+        if (!isValidPoTokenCandidate(token)) {
             return;
         }
 
-        final String observedToken = token;
-        lastObservedPoToken = observedToken;
-        runOnUiThread(() -> saveObservedPoToken(
-            observedToken,
-            "visible-player:network-url-pot",
-            webView == null ? "" : webView.getUrl(),
-            true
-        ));
+        final String observedToken = token.trim();
+        final String resourceUrl = uri.toString();
+        runOnUiThread(() -> {
+            String playerUrl = bestKnownPlayerUrl(resourceUrl);
+            String videoId = bestKnownVideoId(playerUrl);
+            String contextKey = observedToken + "|" + videoId;
+
+            if (contextKey.equals(lastObservedPoTokenContextKey)) {
+                return;
+            }
+
+            lastObservedPoTokenContextKey = contextKey;
+            saveObservedPoToken(
+                observedToken,
+                "visible-player:network-url-pot",
+                playerUrl,
+                true
+            );
+        });
     }
 
     private void openPlayerContext() {
@@ -634,7 +645,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         String videoId = extractVideoId(playerUrl);
 
         if (isBlank(videoId)) {
-            videoId = extractVideoId(webView == null ? "" : webView.getUrl());
+            videoId = bestKnownVideoId(playerUrl);
         }
 
         AppSettings appSettings = storage.loadSettings();
@@ -646,7 +657,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             source,
             sessionBinding,
             videoId,
-            isBlank(playerUrl) ? START_URL : playerUrl
+            isBlank(playerUrl) ? "" : playerUrl
         );
         storage.saveSettings(appSettings);
         storage.appendLog(LogItem.info(
@@ -692,6 +703,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             AppSettings appSettings = storage.loadSettings();
             appSettings.setYtDlpCookieHeader(cookieHeader);
             appSettings.setYtDlpCookiesPath(cookieFile.getAbsolutePath());
+            refreshPoTokenSessionBinding(appSettings, cookieHeader);
             storage.saveSettings(appSettings);
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
@@ -700,11 +712,40 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             ));
 
             String message = "Saved " + cookies.size() + " cookies to Settings and " + cookieFile.getName() + ".";
+            if (appSettings.hasYtDlpPoToken()) {
+                message += " Cached PO token remains available.";
+            }
             statusText.setText(message);
             Toast.makeText(this, message, Toast.LENGTH_LONG).show();
         } catch (IOException e) {
             Toast.makeText(this, "Unable to write cookies.txt: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void refreshPoTokenSessionBinding(AppSettings settings, String cookieHeader) {
+        if (settings == null || !settings.hasYtDlpPoToken()) {
+            return;
+        }
+
+        String sessionBinding = sha256Prefix(cookieHeader, 16);
+        String videoId = settings.getYtDlpPoTokenVideoId();
+        if (isBlank(videoId)) {
+            videoId = bestKnownVideoId(settings.getYtDlpPoTokenPlayerUrl());
+        }
+
+        String playerUrl = settings.getYtDlpPoTokenPlayerUrl();
+        if (isBlank(extractVideoId(playerUrl))) {
+            playerUrl = bestKnownPlayerUrl(playerUrl);
+        }
+
+        settings.setYtDlpPoTokenMetadata(
+            settings.getYtDlpPoTokenType(),
+            settings.getYtDlpPoTokenUpdatedAt(),
+            settings.getYtDlpPoTokenSource(),
+            sessionBinding,
+            videoId,
+            playerUrl
+        );
     }
 
     private Map<String, CookieEntry> collectCookies(CookieManager cookieManager) {
@@ -782,6 +823,40 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         return trimmed.length() > 10
             && !trimmed.equalsIgnoreCase("TOKEN")
             && !trimmed.contains("...");
+    }
+
+    private String bestKnownPlayerUrl(String preferredUrl) {
+        if (!isBlank(extractVideoId(preferredUrl))) {
+            return preferredUrl.trim();
+        }
+
+        String currentUrl = webView == null ? "" : webView.getUrl();
+        if (!isBlank(extractVideoId(currentUrl))) {
+            return currentUrl.trim();
+        }
+
+        String inputUrl = playerUrlInput == null ? "" : playerUrlInput.getText().toString();
+        if (!isBlank(extractVideoId(inputUrl))) {
+            return inputUrl.trim();
+        }
+
+        return "";
+    }
+
+    private String bestKnownVideoId(String preferredUrl) {
+        String videoId = extractVideoId(preferredUrl);
+        if (!isBlank(videoId)) {
+            return videoId;
+        }
+
+        String currentUrl = webView == null ? "" : webView.getUrl();
+        videoId = extractVideoId(currentUrl);
+        if (!isBlank(videoId)) {
+            return videoId;
+        }
+
+        String inputUrl = playerUrlInput == null ? "" : playerUrlInput.getText().toString();
+        return extractVideoId(inputUrl);
     }
 
     private String normalizePlayerUrl(String value) {
