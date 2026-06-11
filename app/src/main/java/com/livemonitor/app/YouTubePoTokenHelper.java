@@ -67,10 +67,12 @@ public final class YouTubePoTokenHelper {
      *
      * <p>YouTube's po_token is no longer reliably stored in page globals such as
      * {@code ytcfg} or {@code ytInitialPlayerResponse}.  Instead it is generated
-     * by BotGuard and sent in the body of the {@code /youtubei/v1/player} API
-     * request.  This script overrides {@code window.fetch} and
-     * {@code XMLHttpRequest} to intercept that request and read the token directly
-     * out of the JSON body before it is sent to YouTube's servers.
+     * by BotGuard and sent in InnerTube API request bodies. YouTube may issue
+     * these calls via {@code fetch(Request)} rather than {@code fetch(url, init)},
+     * and the first observable token is not always on the player request itself.
+     * This script overrides {@code window.fetch} and {@code XMLHttpRequest} to
+     * inspect InnerTube request bodies and player responses before they leave the
+     * page context.
      *
      * <p>The intercepted token is forwarded to the Android app via the
      * {@code LiveMonitorApp} JavascriptInterface (method
@@ -89,62 +91,70 @@ public final class YouTubePoTokenHelper {
          * calling — not just /player but also /next, /browse, etc.
          */
         + "function isInnerTube(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/')>=0;}"
-        + "function isPlayerReq(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/player')>=0;}"
+        + "function isPlayerReq(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/player')>=0&&u.indexOf('/player/heartbeat')<0;}"
         + "function getStr(b,k){try{return(b&&b[k])||'';}catch(e){return '';}}"
         + "function getClient(b){try{return(b&&b.context&&b.context.client&&b.context.client.clientName)||'';}catch(e){return '';}}"
         + "function tryNotify(token,client,videoId,src){"
-        + "if(!token||typeof token!=='string'||token.length<16||token.indexOf(' ')>=0)return;"
-        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',src||'');}catch(e){}}"
+        + "if(!token||typeof token!=='string'||token.length<16||token.indexOf(' ')>=0)return false;"
+        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',src||'');return true;}catch(e){return false;}}"
         + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
-        + "function scanUrlForPot(value,src){if(typeof value!=='string')return;var q=[value],seen={};for(var i=0;i<q.length;i++){var text=q[i];if(!text||seen[text])continue;seen[text]=true;"
+        + "function scanUrlForPot(value,src){if(typeof value!=='string')return false;var q=[value],seen={};for(var i=0;i<q.length;i++){var text=q[i];if(!text||seen[text])continue;seen[text]=true;"
         + "var decoded=decodePart(text);if(decoded&&decoded!==text)q.push(decoded);"
-        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);var pot=params.get('pot')||params.get('po_token');if(pot)tryNotify(pot,'' ,'',src+'.params.pot');var nested=params.get('url')||params.get('u');if(nested)q.push(nested);}catch(e){}"
-        + "try{var url=new URL(text,location.href);var urlPot=url.searchParams.get('pot')||url.searchParams.get('po_token');if(urlPot)tryNotify(urlPot,'' ,'',src+'.url.pot');var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)q.push(nestedUrl);}catch(e2){}"
-        + "var m=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(m)tryNotify(decodePart(m[1]),'' ,'',src+'.regex.pot');}}"
+        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);var pot=params.get('pot')||params.get('po_token');if(pot&&tryNotify(pot,'' ,'',src+'.params.pot'))return true;var nested=params.get('url')||params.get('u');if(nested)q.push(nested);}catch(e){}"
+        + "try{var url=new URL(text,location.href);var urlPot=url.searchParams.get('pot')||url.searchParams.get('po_token');if(urlPot&&tryNotify(urlPot,'' ,'',src+'.url.pot'))return true;var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)q.push(nestedUrl);}catch(e2){}"
+        + "var m=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(m&&tryNotify(decodePart(m[1]),'' ,'',src+'.regex.pot'))return true;}return false;}"
         /*
          * Scan a JSON body (request or response) for a po_token.
          * Also scans streaming URL strings for the ?pot= query parameter
          * which appears in YouTube's adaptive format URLs in the player response.
          */
-        + "function scanForPot(obj,src,depth){"
-        + "if(!obj||depth>6)return;"
-        + "if(typeof obj==='string'){scanUrlForPot(obj,src);return;}"
-        + "if(Array.isArray(obj)){for(var i=0;i<obj.length;i++)scanForPot(obj[i],src,depth+1);return;}"
+        + "function scanForPot(obj,src,depth,client,vid){"
+        + "if(!obj||depth>8)return false;"
+        + "if(typeof obj==='string'){return scanUrlForPot(obj,src); }"
+        + "if(Array.isArray(obj)){for(var i=0;i<obj.length;i++){if(scanForPot(obj[i],src+'['+i+']',depth+1,client,vid))return true;}return false;}"
         + "if(typeof obj==='object'){"
+        + "var sid=obj.serviceIntegrityDimensions;"
+        + "if(sid&&tryNotify(sid.poToken,client||getClient(obj),vid||getStr(obj,'videoId'),src+'.serviceIntegrityDimensions.poToken'))return true;"
         + "var keys=Object.keys(obj);"
         + "for(var k=0;k<keys.length;k++){"
         + "var key=keys[k],val=obj[key];"
-        + "if(/po[_-]?token|potoken/i.test(key)&&typeof val==='string'&&val.length>10){tryNotify(val,'' ,'',src+'.key.'+key);}"
-        + "else scanForPot(val,src,depth+1);}}}"
-        + "function checkBody(body,src,vid,client){"
+        + "if(/po[_-]?token|potoken/i.test(key)&&typeof val==='string'&&val.length>10){if(tryNotify(val,client||getClient(obj),vid||getStr(obj,'videoId'),src+'.key.'+key))return true;}"
+        + "else if(scanForPot(val,src+'.'+key,depth+1,client,vid))return true;}}return false;}"
+        + "function checkBody(body,src,api,vid,client){"
         + "try{"
         + "var b=typeof body==='string'?JSON.parse(body):body;"
-        + "if(!b)return;"
+        + "if(!b)return false;"
+        + "var bodyVid=vid||getStr(b,'videoId');var bodyClient=client||getClient(b);"
         + "var sid=b.serviceIntegrityDimensions;"
         + "var hasSid=!!(sid&&sid.poToken);"
-        + "try{LiveMonitorApp.onApiRequestSeen('player',vid||getStr(b,'videoId'),hasSid?'has-token':'no-token',src);}catch(e){}"
-        + "if(hasSid){tryNotify(sid.poToken,client||getClient(b),vid||getStr(b,'videoId'),src+'.sid');return;}"
-        + "if(b.poToken){tryNotify(b.poToken,client||getClient(b),vid||getStr(b,'videoId'),src+'.body');return;}"
-        + "scanForPot(b,src,0);"
+        + "if(hasSid&&tryNotify(sid.poToken,bodyClient,bodyVid,src+'.sid')){try{LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,'has-token',src);}catch(e){}return true;}"
+        + "if(b.poToken&&tryNotify(b.poToken,bodyClient,bodyVid,src+'.body')){try{LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,'has-token',src);}catch(e2){}return true;}"
+        + "var found=scanForPot(b,src,0,bodyClient,bodyVid);"
+        + "try{if(found||api==='player')LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,found?'has-token':'no-token',src);}catch(e3){}"
+        + "return found;"
         + "}catch(e){"
-        + "try{LiveMonitorApp.onApiRequestSeen('player.parseerr','','parse-error:'+String(e),src);}catch(e2){}}}"
+        + "try{LiveMonitorApp.onApiRequestSeen((api||'player')+'.parseerr','','parse-error:'+String(e),src);}catch(e2){}return false;}}"
         /*
          * Intercept fetch — check request body AND response body.
          * The response body contains streaming format URLs with pot= parameter.
          */
+        + "function readBodyInfo(body){var info={vid:'',client:''};try{var parsed=typeof body==='string'?JSON.parse(body):body;info.vid=(parsed&&parsed.videoId)||'';info.client=getClient(parsed);}catch(e){}return info;}"
+        + "function inspectFetchReq(input,init,api){"
+        + "var body=init&&init.body;if(body){var info=readBodyInfo(body);checkBody(body,'fetch.req.'+api,api,info.vid,info.client);return;}"
+        + "try{if(input&&typeof input.clone==='function'&&typeof input.clone().text==='function'){input.clone().text().then(function(txt){var info=readBodyInfo(txt);checkBody(txt,'fetch.req.'+api,api,info.vid,info.client);});}}catch(e){}"
+        + "}"
         + "var _f=window.fetch;"
         + "window.fetch=function(input,init){"
         + "var u=typeof input==='string'?input:(input&&input.url)||'';"
         + "var rn=++__lm_reqCount;"
+        + "var api='';try{api=isInnerTube(u)?(u.split('/youtubei/v1/')[1].split('?')[0]||'?'):'';}catch(e){}"
+        + "var reqInfo=readBodyInfo(init&&init.body);"
+        + "if(api){inspectFetchReq(input,init,api);}"
         + "var pr=_f.apply(this,arguments);"
-        + "if(isPlayerReq(u)){"
-        + "var vid='';try{vid=JSON.parse((init&&init.body)||'{}').videoId||'';}catch(e){}"
-        + "if(init&&init.body){checkBody(init.body,'fetch.req',vid,'');}"
-        + "pr.then(function(resp){"
-        + "try{resp.clone().text().then(function(txt){checkBody(txt,'fetch.resp',vid,'');});}catch(e){}});"
-        + "}else if(isInnerTube(u)){"
-        + "try{var path=u.split('/youtubei/v1/')[1].split('?')[0]||'?';"
-        + "LiveMonitorApp.onApiRequestSeen(path,'','intercepted',u.indexOf('fetch')>=0?'fetch':'xhr');}catch(e){}}"
+        + "if(api){"
+        + "try{LiveMonitorApp.onApiRequestSeen(api,'','intercepted','fetch');}catch(e3){}"
+        + "if(isPlayerReq(u)){pr.then(function(resp){try{resp.clone().text().then(function(txt){checkBody(txt,'fetch.resp.'+api,api,reqInfo.vid,reqInfo.client);});}catch(e4){}});}"
+        + "}"
         + "return pr;};"
         /*
          * Intercept XHR — check request body AND response body.
@@ -152,18 +162,17 @@ public final class YouTubePoTokenHelper {
         + "var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send;"
         + "XMLHttpRequest.prototype.open=function(m,u){this.__lmu=u;return _o.apply(this,arguments);};"
         + "XMLHttpRequest.prototype.send=function(body){"
-        + "var self=this;"
-        + "if(isPlayerReq(this.__lmu)){"
-        + "var vid='';try{vid=JSON.parse(body||'{}').videoId||'';}catch(e){}"
-        + "if(body){checkBody(body,'xhr.req',vid,'');}"
-        + "var origOnReady=this.onreadystatechange;"
+        + "var self=this;var api='';try{api=isInnerTube(this.__lmu)?(this.__lmu.split('/youtubei/v1/')[1].split('?')[0]||'?'):'';}catch(e){}"
+        + "var vid='';var client='';try{var parsed=JSON.parse(body||'{}');vid=(parsed&&parsed.videoId)||'';client=getClient(parsed);}catch(e2){}"
+        + "if(api){"
+        + "if(body){checkBody(body,'xhr.req.'+api,api,vid,client);}"
+        + "try{LiveMonitorApp.onApiRequestSeen(api,'','intercepted','xhr');}catch(e3){}"
+        + "if(isPlayerReq(this.__lmu)){var origOnReady=this.onreadystatechange;"
         + "this.onreadystatechange=function(){"
         + "if(self.readyState===4&&self.responseText){"
-        + "try{checkBody(self.responseText,'xhr.resp',vid,'');}catch(e){}}"
-        + "if(origOnReady)origOnReady.apply(self,arguments);};"
-        + "}else if(isInnerTube(this.__lmu)){"
-        + "try{var p2=this.__lmu.split('/youtubei/v1/')[1].split('?')[0]||'?';"
-        + "LiveMonitorApp.onApiRequestSeen(p2,'','intercepted','xhr');}catch(e){}}"
+        + "try{checkBody(self.responseText,'xhr.resp.'+api,api,vid,client);}catch(e4){}}"
+        + "if(origOnReady)origOnReady.apply(self,arguments);};}"
+        + "}"
         + "return _s.apply(this,arguments);};"
         + "try{LiveMonitorApp.onApiRequestSeen('interceptor-installed','','ok','init');}catch(e){}"
         + "})()";
