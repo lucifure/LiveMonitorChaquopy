@@ -6,6 +6,8 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.PermissionRequest;
@@ -75,10 +77,8 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "try{walk(window.ytInitialPlayerResponse,'ytInitialPlayerResponse',0);}catch(e){}"
         + "try{walk(readCfg('PLAYER_VARS'),'ytcfg.PLAYER_VARS',0);}catch(e){}"
         + "try{walk(readCfg('PLAYER_CONFIG'),'ytcfg.PLAYER_CONFIG',0);}catch(e){}"
-        + "try{walk(window.ytplayer&&window.ytplayer.config,'ytplayer.config',0);}catch(e){}"
-        + "try{walk(window.yt&&window.yt.config_,'yt.config_',0);}catch(e){}"
-        + "try{walk(window._yt_player,'_yt_player',0);}catch(e){}"
-        + "try{walk(document.documentElement.innerHTML,'document.html',0);}catch(e){}"
+        + "try{var entries=performance&&performance.getEntriesByType?performance.getEntriesByType('resource'):[];"
+        + "for(var i=entries.length-1;i>=0&&!found.token&&i>entries.length-80;i--){readPotFromUrl(entries[i].name,'performance.resource['+i+']');}}catch(e){}"
         + "var clientName=readCfg('INNERTUBE_CONTEXT_CLIENT_NAME')||readCfg('INNERTUBE_CLIENT_NAME')||'MWEB';"
         + "var clientVersion=readCfg('INNERTUBE_CONTEXT_CLIENT_VERSION')||readCfg('INNERTUBE_CLIENT_VERSION')||'';"
         + "var visitorData=readCfg('VISITOR_DATA')||'';"
@@ -149,6 +149,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     private WebView webView;
     private TextView statusText;
     private EditText playerUrlInput;
+    private String lastObservedPoToken = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -465,54 +466,65 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                statusText.setText("Loading visible YouTube context: " + safeUrlForStatus(url));
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                statusText.setText("Loaded player context: " + safeUrlForStatus(url));
+                scheduleVisiblePlayerTokenScan(view, url);
+            }
 
-                if (looksLikePlayerUrl(url)) {
-                    /*
-                     * Primary mechanism: the PoTokenJsBridge receives the token
-                     * automatically when YouTube's player calls /youtubei/v1/player.
-                     * No polling needed.  Re-inject the interceptor here as a backup
-                     * in case it was wiped by a client-side navigation, then run the
-                     * legacy globals scan once after 4 s as a secondary fallback.
-                     */
-                    view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
-                    String videoId = extractVideoId(url);
-                    storage.appendLog(LogItem.info(
-                        LogItem.SOURCE_UI,
-                        "[PoToken/WebView] Player page loaded: videoId=" + videoId
-                            + " | interceptor active — watching for /youtubei/v1/player requests"
-                            + " | globals fallback scan scheduled in 4 s"
-                    ));
-                    statusText.setText("Watch page loaded \u2014 waiting for YouTube player API call...");
-                    // Delay 5 s so BotGuard has time to finish its challenge
-                    // before we fire our manual player request.
-                    webView.postDelayed(() -> {
-                        if (isDestroyed()) return;
-                        storage.appendLog(LogItem.debug(
-                            LogItem.SOURCE_UI,
-                            "[PoToken/WebView] Running globals scan + manual player fetch"
-                        ));
-                        // 1. Legacy globals scan (ytcfg / ytInitialPlayerResponse)
-                        view.evaluateJavascript(PO_TOKEN_SCRIPT,
-                            result -> handlePoTokenScriptResult(result, false));
-                        // 2. Fire a /youtubei/v1/player fetch using the page's own
-                        //    InnerTube session.  YouTube uses server-side rendering for
-                        //    watch pages so its own player never makes a separate API
-                        //    call — we must trigger one ourselves so the response body
-                        //    (which contains serviceIntegrityDimensions.poToken) passes
-                        //    through our FETCH_INTERCEPTOR_SCRIPT and is captured.
-                        view.evaluateJavascript(MANUAL_PLAYER_FETCH_SCRIPT, null);
-                    }, 5000);
-                } else {
-                    storage.appendLog(LogItem.debug(
-                        LogItem.SOURCE_UI,
-                        "[PoToken/WebView] Non-player page loaded: " + safeUrlForStatus(url)
-                    ));
-                    statusText.setText("Loaded: " + safeUrlForStatus(url));
-                }
+            @Override
+            public WebResourceResponse shouldInterceptRequest(
+                WebView view,
+                WebResourceRequest request
+            ) {
+                observePotentialPoTokenUrl(request == null ? null : request.getUrl());
+                return super.shouldInterceptRequest(view, request);
             }
         });
+    }
+
+    private void scheduleVisiblePlayerTokenScan(WebView view, String url) {
+        if (view == null || !looksLikePlayerUrl(url)) {
+            return;
+        }
+
+        view.postDelayed(() -> {
+            if (webView == null || !looksLikePlayerUrl(webView.getUrl())) {
+                return;
+            }
+
+            webView.evaluateJavascript(PO_TOKEN_SCRIPT, this::handlePoTokenScriptResult);
+        }, 1500L);
+    }
+
+    private void observePotentialPoTokenUrl(Uri uri) {
+        if (uri == null) {
+            return;
+        }
+
+        String token = uri.getQueryParameter("pot");
+
+        if (isBlank(token)) {
+            token = uri.getQueryParameter("po_token");
+        }
+
+        if (!isValidPoTokenCandidate(token) || token.equals(lastObservedPoToken)) {
+            return;
+        }
+
+        lastObservedPoToken = token;
+        runOnUiThread(() -> saveObservedPoToken(
+            token,
+            "visible-player:network-url-pot",
+            webView == null ? "" : webView.getUrl(),
+            true
+        ));
     }
 
     private void openPlayerContext() {
@@ -571,49 +583,68 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     }
 
     private void saveGeneratedPoToken(JSONObject json, String token) {
+        String source = "visible-player:" + json.optString("source", "player-context");
+        String playerUrl = json.optString("playerUrl", webView == null ? "" : webView.getUrl());
+        saveObservedPoToken(token, source, playerUrl, true);
+    }
+
+    private void saveObservedPoToken(
+        String token,
+        String source,
+        String playerUrl,
+        boolean showToast
+    ) {
+        String normalizedToken = token == null ? "" : token.trim();
+
+        if (!isValidPoTokenCandidate(normalizedToken)) {
+            return;
+        }
+
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.flush();
 
         Map<String, CookieEntry> cookies = collectCookies(cookieManager);
         String cookieHeader = buildCookieHeader(cookies);
         String sessionBinding = sha256Prefix(cookieHeader, 16);
-        String client = normalizeClientForYtDlp(json.optString("clientName", "mweb"));
-        String tokenType = json.optString("tokenType", TOKEN_TYPE_GVS);
-        String videoId = json.optString("videoId", extractVideoId(webView.getUrl()));
-        String playerUrl = json.optString("playerUrl", webView.getUrl());
-        String source = "visible-player:" + json.optString("source", "player-context");
+        String videoId = extractVideoId(playerUrl);
+
+        if (isBlank(videoId)) {
+            videoId = extractVideoId(webView == null ? "" : webView.getUrl());
+        }
 
         AppSettings appSettings = storage.loadSettings();
-        appSettings.setYtDlpPoTokenClient(client);
-        appSettings.setYtDlpPoTokenValue(token);
+        appSettings.setYtDlpPoTokenClient("mweb");
+        appSettings.setYtDlpPoTokenValue(normalizedToken);
         appSettings.setYtDlpPoTokenMetadata(
-            tokenType,
+            TOKEN_TYPE_GVS,
             System.currentTimeMillis(),
             source,
             sessionBinding,
             videoId,
-            playerUrl
+            isBlank(playerUrl) ? START_URL : playerUrl
         );
         storage.saveSettings(appSettings);
         storage.appendLog(LogItem.info(
             LogItem.SOURCE_UI,
-            "Generated YouTube GVS PO token from visible WebView player context. client="
-                + client
+            "Cached YouTube GVS PO token from visible WebView player context. client=mweb"
                 + ", type="
-                + tokenType
+                + TOKEN_TYPE_GVS
                 + ", videoId="
                 + videoId
+                + ", source="
+                + source
                 + ", session="
                 + sessionBinding
         ));
 
-        String message = "Cached GVS PO token for client="
-            + client
-            + ", video="
-            + videoId
+        String message = "Cached GVS PO token for client=mweb, video="
+            + (isBlank(videoId) ? "unknown" : videoId)
             + ". Token value is hidden from logs.";
         statusText.setText(message);
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+
+        if (showToast) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        }
     }
 
     private void saveYouTubeSession() {
@@ -715,6 +746,17 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 writer.write('\n');
             }
         }
+    }
+
+    private boolean isValidPoTokenCandidate(String value) {
+        if (isBlank(value)) {
+            return false;
+        }
+
+        String trimmed = value.trim();
+        return trimmed.length() > 10
+            && !trimmed.equalsIgnoreCase("TOKEN")
+            && !trimmed.contains("...");
     }
 
     private String normalizePlayerUrl(String value) {

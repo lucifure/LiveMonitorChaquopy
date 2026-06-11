@@ -102,17 +102,19 @@ on-device testing, the important checks are simply that initialization logs
 
 The app uses a visible, user-approved token setup flow instead of hidden WebView
 scraping. Open **Settings → YouTube session / PO token setup**, sign in if needed,
-load a real YouTube watch/player URL, and tap **Generate/Refresh PO token**. The
-button evaluates the currently visible player context and only caches a token if
-one is observable from player configuration/response data or `pot=` parameters in
-already-loaded playback URLs available to that WebView page.
+load a real YouTube watch/player URL, and tap **Generate/Refresh PO token** if a
+token has not already been detected. The visible WebView observes `pot=` query
+parameters from its own resource requests and also runs a lightweight player
+context scan after page load or when the refresh button is tapped. It only caches
+a token if one is observable from the visible player page; it does not install a
+global fetch/XHR monkey patch or scrape in a hidden WebView.
 
 Cached PO-token metadata includes:
 
 - yt-dlp player client (`mweb`, `web`, `android`, or `ios` when detected);
 - token type (`gvs`);
 - refresh timestamp;
-- source path in the visible player context;
+- source path in the visible player context or visible WebView resource URL;
 - a short hash of the current YouTube cookie session;
 - player video ID and player URL.
 
