@@ -667,6 +667,14 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             isBlank(playerUrl) ? "" : playerUrl
         );
         storage.saveSettings(appSettings);
+        PoTokenExpiryWorker.schedule(this, appSettings);
+        new NotificationHelper(this).showPoTokenCapturedNotification(
+            appSettings.getYtDlpPoTokenClient(),
+            appSettings.getYtDlpPoTokenType(),
+            videoId,
+            appSettings.getYtDlpPoTokenUpdatedAt()
+                + appSettings.getYtDlpPoTokenRefreshIntervalMillis()
+        );
         storage.appendLog(LogItem.info(
             LogItem.SOURCE_UI,
             "Cached YouTube GVS PO token from visible WebView player context. client=mweb"
