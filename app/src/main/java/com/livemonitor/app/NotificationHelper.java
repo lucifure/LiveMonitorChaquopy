@@ -156,8 +156,13 @@ public class NotificationHelper {
     }
 
     public static final int PO_TOKEN_SETUP_NOTIFICATION_ID = 3_000_000;
+    public static final int PO_TOKEN_SESSION_EXPIRED_NOTIFICATION_ID = 3_000_001;
+    public static final int PO_TOKEN_CAPTURED_NOTIFICATION_ID = 3_000_002;
+    public static final int PO_TOKEN_EXPIRED_NOTIFICATION_ID = 3_000_003;
 
     public void showPoTokenSetupNotification() {
+        createNotificationChannels();
+
         if (notificationManager == null || !canPostNotifications()) {
             return;
         }
@@ -187,9 +192,78 @@ public class NotificationHelper {
         notificationManager.notify(PO_TOKEN_SETUP_NOTIFICATION_ID, notification);
     }
 
-    public static final int PO_TOKEN_SESSION_EXPIRED_NOTIFICATION_ID = 3_000_001;
+    public void showPoTokenCapturedNotification(String client, String tokenType, String videoId, long expiresAtMillis) {
+        createNotificationChannels();
+
+        if (notificationManager == null || !canPostNotifications()) {
+            return;
+        }
+
+        Intent intent = new Intent(appContext, YouTubeSignInActivity.class);
+        PendingIntent pendingIntent = buildActivityPendingIntent(
+            intent,
+            PO_TOKEN_CAPTURED_NOTIFICATION_ID
+        );
+
+        String safeClient = isBlank(client) ? "mweb" : client.trim();
+        String safeType = isBlank(tokenType) ? "gvs" : tokenType.trim();
+        String safeVideo = isBlank(videoId) ? "unknown" : videoId.trim();
+        String text = "Cached " + safeType + " PO token for client=" + safeClient
+            + ", video=" + safeVideo + ".";
+        if (expiresAtMillis > 0L) {
+            text += " Refresh reminder is scheduled.";
+        }
+
+        Notification notification = new NotificationCompat.Builder(appContext, CHANNEL_LIVE_ALERTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("YouTube PO token captured")
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build();
+
+        notificationManager.notify(PO_TOKEN_CAPTURED_NOTIFICATION_ID, notification);
+    }
+
+    public void showPoTokenExpiredNotification(String videoId) {
+        createNotificationChannels();
+
+        if (notificationManager == null || !canPostNotifications()) {
+            return;
+        }
+
+        Intent intent = new Intent(appContext, YouTubeSignInActivity.class);
+        PendingIntent pendingIntent = buildActivityPendingIntent(
+            intent,
+            PO_TOKEN_EXPIRED_NOTIFICATION_ID
+        );
+
+        String text = "Your cached YouTube PO token reached its refresh interval.";
+        if (!isBlank(videoId)) {
+            text += " Last video=" + videoId.trim() + ".";
+        }
+        text += " Tap to open YouTube PO Token Setup and refresh it.";
+
+        Notification notification = new NotificationCompat.Builder(appContext, CHANNEL_LIVE_ALERTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("YouTube PO token refresh needed")
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build();
+
+        notificationManager.notify(PO_TOKEN_EXPIRED_NOTIFICATION_ID, notification);
+    }
 
     public void showPoTokenSessionExpiredNotification() {
+        createNotificationChannels();
+
         if (notificationManager == null || !canPostNotifications()) {
             return;
         }
@@ -278,6 +352,10 @@ public class NotificationHelper {
             appContext,
             Manifest.permission.POST_NOTIFICATIONS
         ) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     private String buildChannelStatusText(ChannelItem channel) {

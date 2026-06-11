@@ -38,11 +38,16 @@ public class AppStorage {
     private static final int DEFAULT_MAX_LOGS = 2_000;
     private static final int DEFAULT_MAX_RECORDINGS = 500;
 
+    private final Context appContext;
     private final SharedPreferences preferences;
 
     public AppStorage(Context context) {
-        Context appContext = context.getApplicationContext();
+        appContext = context.getApplicationContext();
         preferences = appContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+    }
+
+    public Context getContext() {
+        return appContext;
     }
 
     public synchronized List<ChannelItem> loadChannels() {
