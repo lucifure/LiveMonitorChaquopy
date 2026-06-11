@@ -9,10 +9,10 @@ import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
-import android.webkit.WebView;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
-import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
@@ -21,6 +21,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -30,6 +32,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -331,6 +334,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
          * observation plus bounded player-context scans.
          */
         webView.addJavascriptInterface(new PoTokenJsBridge(), "LiveMonitorApp");
+        installDocumentStartPoTokenInterceptor(webView);
 
         /*
          * Fix 3: Grant media/DRM permission requests so the YouTube player
@@ -496,6 +500,40 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 scheduleVisiblePlayerTokenScan(view, url);
             }
         });
+    }
+
+    private void installDocumentStartPoTokenInterceptor(WebView view) {
+        if (view == null) {
+            return;
+        }
+
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_UI,
+                "[PoToken/JS] document-start interceptor unavailable; using page-finished fallback"
+            ));
+            return;
+        }
+
+        try {
+            WebViewCompat.addDocumentStartJavaScript(
+                view,
+                YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT
+                    + "\n"
+                    + PLAYER_RESPONSE_OBSERVER_SCRIPT,
+                Collections.singleton("*")
+            );
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_UI,
+                "[PoToken/JS] document-start interceptor registered"
+            ));
+        } catch (RuntimeException e) {
+            storage.appendLog(LogItem.warning(
+                LogItem.SOURCE_UI,
+                "[PoToken/JS] document-start interceptor registration failed: "
+                    + e.getMessage()
+            ));
+        }
     }
 
     private void installPlayerResponseObserver(WebView view) {
