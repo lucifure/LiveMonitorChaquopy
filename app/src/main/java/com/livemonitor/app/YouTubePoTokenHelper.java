@@ -85,18 +85,19 @@ public final class YouTubePoTokenHelper {
     public static final String FETCH_INTERCEPTOR_SCRIPT = "(function(){"
         + "if(window.__lm_pot_interceptor)return;"
         + "window.__lm_pot_interceptor=true;"
-        + "var __lm_reqCount=0;"
+        + "var __lm_diagSeen={};"
         /*
-         * Match any InnerTube API call so we can log what YouTube is actually
-         * calling — not just /player but also /next, /browse, etc.
+         * Match InnerTube API calls so we can inspect token-bearing bodies while
+         * logging only PO-token capture successes/failures.
          */
         + "function isInnerTube(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/')>=0;}"
         + "function isPlayerReq(u){return typeof u==='string'&&u.indexOf('/youtubei/v1/player')>=0&&u.indexOf('/player/heartbeat')<0;}"
         + "function getStr(b,k){try{return(b&&b[k])||'';}catch(e){return '';}}"
         + "function getClient(b){try{return(b&&b.context&&b.context.client&&b.context.client.clientName)||'';}catch(e){return '';}}"
+        + "function diag(api,vid,status,src){try{var key=[api||'',vid||'',status||'',src||''].join('|');if(__lm_diagSeen[key])return;__lm_diagSeen[key]=true;LiveMonitorApp.onApiRequestSeen(api||'po-token',vid||'',status||'',src||'');}catch(e){}}"
         + "function tryNotify(token,client,videoId,src){"
         + "if(!token||typeof token!=='string'||token.length<16||token.indexOf(' ')>=0)return false;"
-        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',src||'');return true;}catch(e){return false;}}"
+        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',src||'');return true;}catch(e){diag('bridge',videoId||'','notify-failed:'+String(e).substring(0,80),src);return false;}}"
         + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
         + "function scanUrlForPot(value,src){if(typeof value!=='string')return false;var q=[value],seen={};for(var i=0;i<q.length;i++){var text=q[i];if(!text||seen[text])continue;seen[text]=true;"
         + "var decoded=decodePart(text);if(decoded&&decoded!==text)q.push(decoded);"
@@ -120,20 +121,23 @@ public final class YouTubePoTokenHelper {
         + "var key=keys[k],val=obj[key];"
         + "if(/po[_-]?token|potoken/i.test(key)&&typeof val==='string'&&val.length>10){if(tryNotify(val,client||getClient(obj),vid||getStr(obj,'videoId'),src+'.key.'+key))return true;}"
         + "else if(scanForPot(val,src+'.'+key,depth+1,client,vid))return true;}}return false;}"
+        + "function looksJsonText(text){text=String(text||'').replace(/^\\s+/, '');return text.charAt(0)==='{'||text.charAt(0)==='[';}"
+        + "function isBinaryText(text){text=String(text||'');if(!text)return false;var c=text.charCodeAt(0);return c===31||c===0||c===65533;}"
         + "function checkBody(body,src,api,vid,client){"
         + "try{"
+        + "if(typeof body==='string'&&!looksJsonText(body)){if(scanUrlForPot(body,src+'.text')){diag(api||'player',vid||'','has-token',src);return true;}if(api==='player'&&isBinaryText(body))diag(api,vid||'','body-not-json:compressed-or-binary',src);return false;}"
         + "var b=typeof body==='string'?JSON.parse(body):body;"
         + "if(!b)return false;"
         + "var bodyVid=vid||getStr(b,'videoId');var bodyClient=client||getClient(b);"
         + "var sid=b.serviceIntegrityDimensions;"
         + "var hasSid=!!(sid&&sid.poToken);"
-        + "if(hasSid&&tryNotify(sid.poToken,bodyClient,bodyVid,src+'.sid')){try{LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,'has-token',src);}catch(e){}return true;}"
-        + "if(b.poToken&&tryNotify(b.poToken,bodyClient,bodyVid,src+'.body')){try{LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,'has-token',src);}catch(e2){}return true;}"
+        + "if(hasSid&&tryNotify(sid.poToken,bodyClient,bodyVid,src+'.sid')){diag(api||'player',bodyVid,'has-token',src);return true;}"
+        + "if(b.poToken&&tryNotify(b.poToken,bodyClient,bodyVid,src+'.body')){diag(api||'player',bodyVid,'has-token',src);return true;}"
         + "var found=scanForPot(b,src,0,bodyClient,bodyVid);"
-        + "try{if(found||api==='player')LiveMonitorApp.onApiRequestSeen(api||'player',bodyVid,found?'has-token':'no-token',src);}catch(e3){}"
+        + "if(found||api==='player')diag(api||'player',bodyVid,found?'has-token':'no-token',src);"
         + "return found;"
         + "}catch(e){"
-        + "try{LiveMonitorApp.onApiRequestSeen((api||'player')+'.parseerr','','parse-error:'+String(e),src);}catch(e2){}return false;}}"
+        + "if(api==='player')diag(api,vid||'','parse-error:'+String(e).substring(0,120),src);return false;}}"
         /*
          * Intercept fetch — check request body AND response body.
          * The response body contains streaming format URLs with pot= parameter.
@@ -146,13 +150,11 @@ public final class YouTubePoTokenHelper {
         + "var _f=window.fetch;"
         + "window.fetch=function(input,init){"
         + "var u=typeof input==='string'?input:(input&&input.url)||'';"
-        + "var rn=++__lm_reqCount;"
         + "var api='';try{api=isInnerTube(u)?(u.split('/youtubei/v1/')[1].split('?')[0]||'?'):'';}catch(e){}"
         + "var reqInfo=readBodyInfo(init&&init.body);"
         + "if(api){inspectFetchReq(input,init,api);}"
         + "var pr=_f.apply(this,arguments);"
         + "if(api){"
-        + "try{LiveMonitorApp.onApiRequestSeen(api,'','intercepted','fetch');}catch(e3){}"
         + "if(isPlayerReq(u)){pr.then(function(resp){try{resp.clone().text().then(function(txt){checkBody(txt,'fetch.resp.'+api,api,reqInfo.vid,reqInfo.client);});}catch(e4){}});}"
         + "}"
         + "return pr;};"
@@ -166,7 +168,6 @@ public final class YouTubePoTokenHelper {
         + "var vid='';var client='';try{var parsed=JSON.parse(body||'{}');vid=(parsed&&parsed.videoId)||'';client=getClient(parsed);}catch(e2){}"
         + "if(api){"
         + "if(body){checkBody(body,'xhr.req.'+api,api,vid,client);}"
-        + "try{LiveMonitorApp.onApiRequestSeen(api,'','intercepted','xhr');}catch(e3){}"
         + "if(isPlayerReq(this.__lmu)){var origOnReady=this.onreadystatechange;"
         + "this.onreadystatechange=function(){"
         + "if(self.readyState===4&&self.responseText){"
@@ -174,7 +175,7 @@ public final class YouTubePoTokenHelper {
         + "if(origOnReady)origOnReady.apply(self,arguments);};}"
         + "}"
         + "return _s.apply(this,arguments);};"
-        + "try{LiveMonitorApp.onApiRequestSeen('interceptor-installed','','ok','init');}catch(e){}"
+        + "diag('capture','','interceptor-installed','init');"
         + "})()";
 
     /**

@@ -125,8 +125,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "var keys=Object.keys(value);for(var k=0;k<keys.length&&!found.token;k++){var key=keys[k],next=value[key];"
         + "if(/po[_-]?token|potoken/i.test(key)&&validToken(next)){found.token=next;found.source=path+'.'+key;return;}scan(next,path+'.'+key,depth+1,found);}}}"
         + "function inspectResponse(text,videoId,client,source){var found={token:'',source:''};try{scan(JSON.parse(text),source,0,found);}catch(e){readPotFromUrl(text,source+'.text',found);}"
-        + "try{LiveMonitorApp.onApiRequestSeen('player',videoId||'',found.token?'has-token':'no-token',source);}catch(e){}"
-        + "if(found.token){notify(found.token,client,videoId,found.source||source);}}"
+        + "if(found.token){try{LiveMonitorApp.onApiRequestSeen('player',videoId||'','has-token',source);}catch(e){}notify(found.token,client,videoId,found.source||source);}}"
         + "function requestUrl(input){return typeof input==='string'?input:((input&&input.url)||'');}"
         + "function isPlayerUrl(url){return typeof url==='string'&&url.indexOf('/youtubei/v1/player')>=0&&url.indexOf('/player/heartbeat')<0;}"
         + "var originalFetch=window.fetch;if(typeof originalFetch!=='function')return;"
@@ -135,7 +134,6 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "var promise=originalFetch.apply(this,arguments);"
         + "if(isPlayerUrl(url)){promise.then(function(resp){try{resp.clone().text().then(function(txt){inspectResponse(txt,videoId,client,'fetch.resp.player');});}catch(e){}});}"
         + "return promise;};"
-        + "try{LiveMonitorApp.onApiRequestSeen('player-observer','','installed','init');}catch(e){}"
         + "})()";
 
     /**
@@ -349,21 +347,17 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             }
 
             /**
-             * Pipe every JavaScript console message into the app log so we
-             * can see errors, warnings, and any LiveMonitorApp bridge calls
-             * that throw inside the page JS context.
+             * Keep console logging focused on PO-token capture only. YouTube emits
+             * many unrelated warnings/errors, so only bridge/interceptor messages
+             * are forwarded to the app log while investigating token capture.
              */
             @Override
             public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
                 if (cm == null) return false;
                 String msg  = cm.message()  == null ? "" : cm.message();
                 String src2 = cm.sourceId() == null ? "" : cm.sourceId();
-                // Always log errors/warnings; log other messages only if they
-                // mention our bridge so we don't flood the log with YouTube noise.
-                boolean isError = cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR
-                               || cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.WARNING;
                 boolean isBridge = msg.contains("LiveMonitorApp") || msg.contains("lm_pot");
-                if (isError || isBridge) {
+                if (isBridge) {
                     String level = cm.messageLevel().name();
                     String short2 = src2.length() > 60 ? "…" + src2.substring(src2.length() - 60) : src2;
                     storage.appendLog(LogItem.debug(
@@ -391,60 +385,28 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                     WebView view, WebResourceRequest req) {
                 if (req != null && req.getUrl() != null) {
                     observePotentialPoTokenUrl(req.getUrl());
-                    String reqUrl = req.getUrl().toString();
-                    if (reqUrl.contains("/youtubei/v1/")) {
-                        try {
-                            String[] parts = reqUrl.split("/youtubei/v1/");
-                            String pathAndQuery = parts.length > 1 ? parts[1] : reqUrl;
-                            // Keep path + first 80 chars of query for readability
-                            if (pathAndQuery.length() > 100) {
-                                pathAndQuery = pathAndQuery.substring(0, 100) + "…";
-                            }
-                            String method = req.getMethod() == null ? "?" : req.getMethod();
-                            storage.appendLog(LogItem.info(
-                                LogItem.SOURCE_UI,
-                                "[WebView/Net] " + method + " /youtubei/v1/" + pathAndQuery
-                            ));
-                        } catch (Exception ignored) {}
-                    }
                 }
                 return null; // never block — always let the request through
             }
 
             /**
-             * Log page-level load errors (e.g. net::ERR_INTERNET_DISCONNECTED,
-             * net::ERR_UNKNOWN_URL_SCHEME) so we know when the WebView itself
-             * fails to load rather than YouTube's JS silently doing nothing.
+             * Suppress generic WebView load noise while PO-token focused logging is enabled.
              */
             @Override
             public void onReceivedError(WebView view,
                     android.webkit.WebResourceRequest req,
                     android.webkit.WebResourceError err) {
                 super.onReceivedError(view, req, err);
-                if (req != null && req.isForMainFrame() && err != null) {
-                    storage.appendLog(LogItem.debug(
-                        LogItem.SOURCE_UI,
-                        "[WebView/LoadError] " + req.getUrl() + " → " + err.getDescription()
-                    ));
-                }
             }
 
             /**
-             * Log HTTP-level errors (4xx / 5xx) for the main frame so we know
-             * if YouTube is returning an error response to the WebView.
+             * Suppress generic HTTP noise while PO-token focused logging is enabled.
              */
             @Override
             public void onReceivedHttpError(WebView view,
                     android.webkit.WebResourceRequest req,
                     android.webkit.WebResourceResponse resp) {
                 super.onReceivedHttpError(view, req, resp);
-                if (req != null && req.isForMainFrame() && resp != null) {
-                    storage.appendLog(LogItem.debug(
-                        LogItem.SOURCE_UI,
-                        "[WebView/HttpError] HTTP " + resp.getStatusCode()
-                            + " for " + req.getUrl()
-                    ));
-                }
             }
 
             /*
@@ -508,9 +470,9 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         }
 
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            storage.appendLog(LogItem.info(
+            storage.appendLog(LogItem.warning(
                 LogItem.SOURCE_UI,
-                "[PoToken/JS] document-start interceptor unavailable; using page-finished fallback"
+                "[PoToken/Capture] document-start interceptor unavailable; using page-finished fallback"
             ));
             return;
         }
@@ -525,12 +487,12 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             );
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
-                "[PoToken/JS] document-start interceptor registered"
+                "[PoToken/Capture] document-start interceptor registered"
             ));
         } catch (RuntimeException e) {
             storage.appendLog(LogItem.warning(
                 LogItem.SOURCE_UI,
-                "[PoToken/JS] document-start interceptor registration failed: "
+                "[PoToken/Capture] document-start interceptor registration failed: "
                     + e.getMessage()
             ));
         }
@@ -592,13 +554,6 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             String playerUrl = bestKnownPlayerUrl(resourceUrl);
             String videoId = bestKnownVideoId(playerUrl);
-            String contextKey = observedToken + "|" + videoId;
-
-            if (contextKey.equals(lastObservedPoTokenContextKey)) {
-                return;
-            }
-
-            lastObservedPoTokenContextKey = contextKey;
             saveObservedPoToken(
                 observedToken,
                 "visible-player:network-url-pot",
@@ -639,14 +594,11 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             if (isBlank(token)) {
                 String message = "No GVS PO token found on this page. Try playing the video, sign in, or open another video.";
                 statusText.setText(message);
-                storage.appendLog(LogItem.info(
-                    LogItem.SOURCE_UI,
-                    "[PoToken/Globals] Globals scan: no token in ytcfg/ytInitialPlayerResponse"
-                        + (isManual ? " (manual scan; player API probe will run)" : " (auto fallback scan)")
-                        + " — waiting for targeted player-response observer"
-                ));
-
                 if (isManual) {
+                    storage.appendLog(LogItem.info(
+                        LogItem.SOURCE_UI,
+                        "[PoToken/Capture] Manual scan did not find a token in page globals; sending player API probe"
+                    ));
                     Toast.makeText(this, message + " Sending a player API probe...", Toast.LENGTH_LONG).show();
                     webView.evaluateJavascript(MANUAL_PLAYER_FETCH_SCRIPT, null);
                 }
@@ -694,6 +646,14 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         if (isBlank(videoId)) {
             videoId = bestKnownVideoId(playerUrl);
         }
+
+        String contextKey = normalizedToken + "|" + videoId;
+
+        if (contextKey.equals(lastObservedPoTokenContextKey)) {
+            return;
+        }
+
+        lastObservedPoTokenContextKey = contextKey;
 
         AppSettings appSettings = storage.loadSettings();
         appSettings.setYtDlpPoTokenClient("mweb");
@@ -1046,7 +1006,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             String src   = source     == null ? "" : source.trim();
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
-                "[PoToken/JS] api=" + path
+                "[PoToken/Capture] api=" + path
                     + " | vid=" + (vid.isEmpty() ? "—" : vid)
                     + " | token=" + tstat
                     + " | via=" + src
@@ -1065,7 +1025,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
-                "[PoToken/Intercept] player response bridge fired"
+                "[PoToken/Capture] player response bridge fired"
                     + " | source=" + safeSrc
                     + " | client=" + safeClient
                     + " | videoId=" + safeVideo
@@ -1075,7 +1035,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             if (safeToken.length() < 16) {
                 storage.appendLog(LogItem.warning(
                     LogItem.SOURCE_UI,
-                    "[PoToken/Intercept] Token rejected — too short (len=" + safeToken.length() + ")"
+                    "[PoToken/Capture] Token rejected — too short (len=" + safeToken.length() + ")"
                 ));
                 return;
             }
@@ -1093,7 +1053,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                         webView != null && webView.getUrl() != null ? webView.getUrl() : "");
                     storage.appendLog(LogItem.info(
                         LogItem.SOURCE_UI,
-                        "[PoToken/Intercept] Saving intercepted token. client=" + safeClient
+                        "[PoToken/Capture] Saving intercepted token. client=" + safeClient
                             + " | videoId=" + safeVideo
                             + " | source=" + safeSrc
                     ));
@@ -1101,7 +1061,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 } catch (Exception e) {
                     storage.appendLog(LogItem.error(
                         LogItem.SOURCE_UI,
-                        "[PoToken/Intercept] Failed to save intercepted token: " + e.getMessage(),
+                        "[PoToken/Capture] Failed to save intercepted token: " + e.getMessage(),
                         null
                     ));
                 }
