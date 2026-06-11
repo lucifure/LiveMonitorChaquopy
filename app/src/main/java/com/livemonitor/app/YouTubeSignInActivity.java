@@ -503,6 +503,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return;
         }
 
+        /*
+         * Install the full fetch/XHR interceptor first. The lightweight local
+         * observer only scans fetch responses, but YouTube often places the
+         * GVS PO token in the player request body, and some WebView builds send
+         * the player call via XHR. Without this shared interceptor the visible
+         * flow can repeatedly log "fetch.resp.player no-token" even though the
+         * token was present in the request path we were not observing.
+         */
+        view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
         view.evaluateJavascript(PLAYER_RESPONSE_OBSERVER_SCRIPT, null);
     }
 
