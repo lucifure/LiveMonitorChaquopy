@@ -487,9 +487,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return;
         }
 
-        lastObservedPoToken = token;
+        final String observedToken = token;
+        lastObservedPoToken = observedToken;
         runOnUiThread(() -> saveObservedPoToken(
-            token,
+            observedToken,
             "visible-player:network-url-pot",
             webView == null ? "" : webView.getUrl(),
             true
