@@ -288,10 +288,9 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         /*
          * Register the JavaScript bridge before the WebView loads any page.
-         * This makes the LiveMonitorApp object available in the page's JS context
-         * from the very first frame, which is required for the fetch/XHR interceptor
-         * (FETCH_INTERCEPTOR_SCRIPT) to be able to call back into Java as soon as
-         * YouTube's player requests the /youtubei/v1/player endpoint.
+         * This keeps compatibility with page scripts that report a token through
+         * LiveMonitorApp while the primary visible-player flow uses native URL
+         * observation plus bounded player-context scans.
          */
         webView.addJavascriptInterface(new PoTokenJsBridge(), "LiveMonitorApp");
 
@@ -338,22 +337,18 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
 
             /**
-             * Ground-truth network-level logging that bypasses JavaScript entirely.
-             * This fires for every HTTP/HTTPS request the WebView makes — including
-             * requests issued by Web Workers, service workers, or any path that
-             * bypasses our fetch/XHR JS hooks.
-             *
-             * We log every /youtubei/v1/ call so we can see definitively:
-             *  - whether /player is ever attempted
-             *  - which HTTP method is used
-             *  - the exact path and query string
+             * Observe visible WebView resource URLs at the native network layer.
+             * This avoids installing a global fetch/XHR monkey patch while still
+             * allowing pot=/po_token= query parameters to be captured when YouTube
+             * includes them on player resources.
              *
              * Returning null lets the request proceed normally.
              */
             @Override
-            public android.webkit.WebResourceResponse shouldInterceptRequest(
-                    WebView view, android.webkit.WebResourceRequest req) {
+            public WebResourceResponse shouldInterceptRequest(
+                    WebView view, WebResourceRequest req) {
                 if (req != null && req.getUrl() != null) {
+                    observePotentialPoTokenUrl(req.getUrl());
                     String reqUrl = req.getUrl().toString();
                     if (reqUrl.contains("/youtubei/v1/")) {
                         try {
@@ -450,23 +445,6 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                /*
-                 * Inject the fetch/XHR interceptor as early as possible — before
-                 * YouTube's player JS executes and makes the /youtubei/v1/player
-                 * request that contains the po_token in its body.
-                 * The guard in the script prevents double-installation if this
-                 * fires more than once (e.g. SPA navigation).
-                 */
-                view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
-                storage.appendLog(LogItem.debug(
-                    LogItem.SOURCE_UI,
-                    "[PoToken/WebView] Page loading: " + safeUrlForStatus(url)
-                        + " | fetch+XHR interceptor injected"
-                ));
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 statusText.setText("Loading visible YouTube context: " + safeUrlForStatus(url));
             }
@@ -476,15 +454,6 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 super.onPageFinished(view, url);
                 statusText.setText("Loaded player context: " + safeUrlForStatus(url));
                 scheduleVisiblePlayerTokenScan(view, url);
-            }
-
-            @Override
-            public WebResourceResponse shouldInterceptRequest(
-                WebView view,
-                WebResourceRequest request
-            ) {
-                observePotentialPoTokenUrl(request == null ? null : request.getUrl());
-                return super.shouldInterceptRequest(view, request);
             }
         });
     }
@@ -499,7 +468,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 return;
             }
 
-            webView.evaluateJavascript(PO_TOKEN_SCRIPT, this::handlePoTokenScriptResult);
+            webView.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, false));
         }, 1500L);
     }
 
@@ -518,9 +487,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return;
         }
 
-        lastObservedPoToken = token;
+        final String observedToken = token;
+        lastObservedPoToken = observedToken;
         runOnUiThread(() -> saveObservedPoToken(
-            token,
+            observedToken,
             "visible-player:network-url-pot",
             webView == null ? "" : webView.getUrl(),
             true
