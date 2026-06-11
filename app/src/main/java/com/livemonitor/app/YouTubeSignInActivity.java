@@ -62,9 +62,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "function validToken(value){return typeof value==='string'&&value.length>10&&value.indexOf('TOKEN')<0&&value.indexOf('...')<0;}"
         + "var found={token:'',source:''};"
         + "function remember(token,source){if(!found.token&&validToken(token)){found.token=token;found.source=source;}}"
-        + "function readPotFromUrl(value,path){if(found.token||typeof value!=='string'||value.indexOf('pot=')<0){return;}"
-        + "try{remember(new URL(value,location.href).searchParams.get('pot'),path+'.url.pot');}catch(e){"
-        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){remember(decodeURIComponent(match[1].replace(/\\+/g,'%20')),path+'.url.pot');}}}"
+        + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
+        + "function readPotFromUrl(value,path){if(found.token||typeof value!=='string')return;"
+        + "var queue=[value],seen={};for(var qi=0;qi<queue.length&&!found.token;qi++){var text=queue[qi];if(!text||seen[text])continue;seen[text]=true;"
+        + "var decoded=decodePart(text);if(decoded&&decoded!==text)queue.push(decoded);"
+        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);remember(params.get('pot')||params.get('po_token'),path+'.params.pot');"
+        + "var nested=params.get('url')||params.get('u');if(nested)queue.push(nested);}catch(e){}"
+        + "try{var url=new URL(text,location.href);remember(url.searchParams.get('pot')||url.searchParams.get('po_token'),path+'.url.pot');"
+        + "var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)queue.push(nestedUrl);}catch(e2){}"
+        + "var match=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(match){remember(decodePart(match[1]),path+'.regex.pot');}}}"
         + "function walk(value,path,depth){"
         + "if(found.token||!value||depth>8){return;}"
         + "readPotFromUrl(value,path);if(found.token){return;}"
@@ -99,9 +105,16 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "function validToken(v){return typeof v==='string'&&v.length>10&&v.indexOf('TOKEN')<0&&v.indexOf('...')<0&&v.indexOf(' ')<0;}"
         + "function notify(token,client,videoId,source){if(!validToken(token))return false;"
         + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',source||'fetch.resp');return true;}catch(e){return false;}}"
-        + "function readPotFromUrl(value,path,found){if(typeof value!=='string'||value.indexOf('pot=')<0)return false;"
-        + "try{var pot=new URL(value,location.href).searchParams.get('pot');if(validToken(pot)){found.token=pot;found.source=path+'.url.pot';return true;}}catch(e){"
-        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){var decoded=decodeURIComponent(match[1].replace(/\\+/g,'%20'));if(validToken(decoded)){found.token=decoded;found.source=path+'.url.pot';return true;}}}return false;}"
+        + "function decodePart(v){try{return decodeURIComponent(String(v||'').replace(/\\+/g,'%20'));}catch(e){return String(v||'');}}"
+        + "function acceptPot(p,path,found){if(validToken(p)){found.token=p;found.source=path;return true;}return false;}"
+        + "function readPotFromUrl(value,path,found){if(typeof value!=='string')return false;"
+        + "var queue=[value],seen={};for(var qi=0;qi<queue.length&&!found.token;qi++){var text=queue[qi];if(!text||seen[text])continue;seen[text]=true;"
+        + "var decoded=decodePart(text);if(decoded&&decoded!==text)queue.push(decoded);"
+        + "try{var params=new URLSearchParams(text.charAt(0)==='?'?text.substring(1):text);if(acceptPot(params.get('pot')||params.get('po_token'),path+'.params.pot',found))return true;"
+        + "var nested=params.get('url')||params.get('u');if(nested)queue.push(nested);}catch(e){}"
+        + "try{var url=new URL(text,location.href);if(acceptPot(url.searchParams.get('pot')||url.searchParams.get('po_token'),path+'.url.pot',found))return true;"
+        + "var nestedUrl=url.searchParams.get('url')||url.searchParams.get('u');if(nestedUrl)queue.push(nestedUrl);}catch(e2){}"
+        + "var match=text.match(/[?&](?:pot|po_token)=([^&#]+)/i);if(match&&acceptPot(decodePart(match[1]),path+'.regex.pot',found))return true;}return false;}"
         + "function scan(value,path,depth,found){if(found.token||!value||depth>8)return;"
         + "if(typeof value==='string'){readPotFromUrl(value,path,found);return;}"
         + "if(Array.isArray(value)){for(var i=0;i<value.length&&!found.token;i++){scan(value[i],path+'['+i+']',depth+1,found);}return;}"
@@ -174,7 +187,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     private WebView webView;
     private TextView statusText;
     private EditText playerUrlInput;
-    private String lastObservedPoToken = "";
+    private String lastObservedPoTokenContextKey = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -490,6 +503,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return;
         }
 
+        /*
+         * Install the full fetch/XHR interceptor first. The lightweight local
+         * observer only scans fetch responses, but YouTube often places the
+         * GVS PO token in the player request body, and some WebView builds send
+         * the player call via XHR. Without this shared interceptor the visible
+         * flow can repeatedly log "fetch.resp.player no-token" even though the
+         * token was present in the request path we were not observing.
+         */
+        view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
         view.evaluateJavascript(PLAYER_RESPONSE_OBSERVER_SCRIPT, null);
     }
 
@@ -519,18 +541,33 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             token = uri.getQueryParameter("po_token");
         }
 
-        if (!isValidPoTokenCandidate(token) || token.equals(lastObservedPoToken)) {
+        if (isBlank(token)) {
+            token = uri.getQueryParameter("gvs_pot");
+        }
+
+        if (!isValidPoTokenCandidate(token)) {
             return;
         }
 
-        final String observedToken = token;
-        lastObservedPoToken = observedToken;
-        runOnUiThread(() -> saveObservedPoToken(
-            observedToken,
-            "visible-player:network-url-pot",
-            webView == null ? "" : webView.getUrl(),
-            true
-        ));
+        final String observedToken = token.trim();
+        final String resourceUrl = uri.toString();
+        runOnUiThread(() -> {
+            String playerUrl = bestKnownPlayerUrl(resourceUrl);
+            String videoId = bestKnownVideoId(playerUrl);
+            String contextKey = observedToken + "|" + videoId;
+
+            if (contextKey.equals(lastObservedPoTokenContextKey)) {
+                return;
+            }
+
+            lastObservedPoTokenContextKey = contextKey;
+            saveObservedPoToken(
+                observedToken,
+                "visible-player:network-url-pot",
+                playerUrl,
+                true
+            );
+        });
     }
 
     private void openPlayerContext() {
@@ -617,7 +654,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         String videoId = extractVideoId(playerUrl);
 
         if (isBlank(videoId)) {
-            videoId = extractVideoId(webView == null ? "" : webView.getUrl());
+            videoId = bestKnownVideoId(playerUrl);
         }
 
         AppSettings appSettings = storage.loadSettings();
@@ -629,7 +666,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             source,
             sessionBinding,
             videoId,
-            isBlank(playerUrl) ? START_URL : playerUrl
+            isBlank(playerUrl) ? "" : playerUrl
         );
         storage.saveSettings(appSettings);
         storage.appendLog(LogItem.info(
@@ -675,6 +712,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             AppSettings appSettings = storage.loadSettings();
             appSettings.setYtDlpCookieHeader(cookieHeader);
             appSettings.setYtDlpCookiesPath(cookieFile.getAbsolutePath());
+            refreshPoTokenSessionBinding(appSettings, cookieHeader);
             storage.saveSettings(appSettings);
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
@@ -683,11 +721,40 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             ));
 
             String message = "Saved " + cookies.size() + " cookies to Settings and " + cookieFile.getName() + ".";
+            if (appSettings.hasYtDlpPoToken()) {
+                message += " Cached PO token remains available.";
+            }
             statusText.setText(message);
             Toast.makeText(this, message, Toast.LENGTH_LONG).show();
         } catch (IOException e) {
             Toast.makeText(this, "Unable to write cookies.txt: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void refreshPoTokenSessionBinding(AppSettings settings, String cookieHeader) {
+        if (settings == null || !settings.hasYtDlpPoToken()) {
+            return;
+        }
+
+        String sessionBinding = sha256Prefix(cookieHeader, 16);
+        String videoId = settings.getYtDlpPoTokenVideoId();
+        if (isBlank(videoId)) {
+            videoId = bestKnownVideoId(settings.getYtDlpPoTokenPlayerUrl());
+        }
+
+        String playerUrl = settings.getYtDlpPoTokenPlayerUrl();
+        if (isBlank(extractVideoId(playerUrl))) {
+            playerUrl = bestKnownPlayerUrl(playerUrl);
+        }
+
+        settings.setYtDlpPoTokenMetadata(
+            settings.getYtDlpPoTokenType(),
+            settings.getYtDlpPoTokenUpdatedAt(),
+            settings.getYtDlpPoTokenSource(),
+            sessionBinding,
+            videoId,
+            playerUrl
+        );
     }
 
     private Map<String, CookieEntry> collectCookies(CookieManager cookieManager) {
@@ -765,6 +832,40 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         return trimmed.length() > 10
             && !trimmed.equalsIgnoreCase("TOKEN")
             && !trimmed.contains("...");
+    }
+
+    private String bestKnownPlayerUrl(String preferredUrl) {
+        if (!isBlank(extractVideoId(preferredUrl))) {
+            return preferredUrl.trim();
+        }
+
+        String currentUrl = webView == null ? "" : webView.getUrl();
+        if (!isBlank(extractVideoId(currentUrl))) {
+            return currentUrl.trim();
+        }
+
+        String inputUrl = playerUrlInput == null ? "" : playerUrlInput.getText().toString();
+        if (!isBlank(extractVideoId(inputUrl))) {
+            return inputUrl.trim();
+        }
+
+        return "";
+    }
+
+    private String bestKnownVideoId(String preferredUrl) {
+        String videoId = extractVideoId(preferredUrl);
+        if (!isBlank(videoId)) {
+            return videoId;
+        }
+
+        String currentUrl = webView == null ? "" : webView.getUrl();
+        videoId = extractVideoId(currentUrl);
+        if (!isBlank(videoId)) {
+            return videoId;
+        }
+
+        String inputUrl = playerUrlInput == null ? "" : playerUrlInput.getText().toString();
+        return extractVideoId(inputUrl);
     }
 
     private String normalizePlayerUrl(String value) {
