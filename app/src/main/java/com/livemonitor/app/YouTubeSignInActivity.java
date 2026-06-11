@@ -88,22 +88,45 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "})()";
 
     /**
-     * Injected 5 seconds after a YouTube watch page finishes loading.
-     *
-     * <p>YouTube watch pages use server-side rendering — the player response
-     * ({@code ytInitialPlayerResponse}) arrives inside the initial HTML, so
-     * YouTube's own JavaScript never makes a separate {@code /youtubei/v1/player}
-     * network request.  As a result there is nothing for {@link
-     * YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} to intercept.
-     *
-     * <p>This script works around that by firing a {@code /youtubei/v1/player}
-     * {@code fetch()} call ourselves, using the page's own InnerTube context
-     * ({@code INNERTUBE_API_KEY} + {@code INNERTUBE_CONTEXT} from {@code ytcfg}).
-     * That request goes through our overridden {@code window.fetch}, so
-     * {@code checkBody} is called on both the request body and the response body.
-     * YouTube's server returns {@code serviceIntegrityDimensions.poToken} in the
-     * response for authenticated sessions — {@code onPoTokenIntercepted} fires
-     * automatically when {@code checkBody} finds it.
+     * Lightweight player-response observer. Native shouldInterceptRequest can see
+     * only request URLs, but the PO token usually lives in the /youtubei/v1/player
+     * response body, so this clones only player fetch responses and scans those
+     * bounded JSON bodies. It does not wrap XHR or scan full page HTML.
+     */
+    private static final String PLAYER_RESPONSE_OBSERVER_SCRIPT = "(function(){"
+        + "if(window.__lm_player_pot_observer)return;"
+        + "window.__lm_player_pot_observer=true;"
+        + "function validToken(v){return typeof v==='string'&&v.length>10&&v.indexOf('TOKEN')<0&&v.indexOf('...')<0&&v.indexOf(' ')<0;}"
+        + "function notify(token,client,videoId,source){if(!validToken(token))return false;"
+        + "try{LiveMonitorApp.onPoTokenIntercepted(token,client||'',videoId||'',source||'fetch.resp');return true;}catch(e){return false;}}"
+        + "function readPotFromUrl(value,path,found){if(typeof value!=='string'||value.indexOf('pot=')<0)return false;"
+        + "try{var pot=new URL(value,location.href).searchParams.get('pot');if(validToken(pot)){found.token=pot;found.source=path+'.url.pot';return true;}}catch(e){"
+        + "var match=value.match(/[?&]pot=([^&#]+)/);if(match){var decoded=decodeURIComponent(match[1].replace(/\\+/g,'%20'));if(validToken(decoded)){found.token=decoded;found.source=path+'.url.pot';return true;}}}return false;}"
+        + "function scan(value,path,depth,found){if(found.token||!value||depth>8)return;"
+        + "if(typeof value==='string'){readPotFromUrl(value,path,found);return;}"
+        + "if(Array.isArray(value)){for(var i=0;i<value.length&&!found.token;i++){scan(value[i],path+'['+i+']',depth+1,found);}return;}"
+        + "if(typeof value==='object'){var sid=value.serviceIntegrityDimensions;if(sid&&validToken(sid.poToken)){found.token=sid.poToken;found.source=path+'.serviceIntegrityDimensions.poToken';return;}"
+        + "var keys=Object.keys(value);for(var k=0;k<keys.length&&!found.token;k++){var key=keys[k],next=value[key];"
+        + "if(/po[_-]?token|potoken/i.test(key)&&validToken(next)){found.token=next;found.source=path+'.'+key;return;}scan(next,path+'.'+key,depth+1,found);}}}"
+        + "function inspectResponse(text,videoId,client,source){var found={token:'',source:''};try{scan(JSON.parse(text),source,0,found);}catch(e){readPotFromUrl(text,source+'.text',found);}"
+        + "try{LiveMonitorApp.onApiRequestSeen('player',videoId||'',found.token?'has-token':'no-token',source);}catch(e){}"
+        + "if(found.token){notify(found.token,client,videoId,found.source||source);}}"
+        + "function requestUrl(input){return typeof input==='string'?input:((input&&input.url)||'');}"
+        + "function isPlayerUrl(url){return typeof url==='string'&&url.indexOf('/youtubei/v1/player')>=0&&url.indexOf('/player/heartbeat')<0;}"
+        + "var originalFetch=window.fetch;if(typeof originalFetch!=='function')return;"
+        + "window.fetch=function(input,init){var url=requestUrl(input);var videoId='',client='';"
+        + "if(isPlayerUrl(url)){try{var body=(init&&init.body)||'';var parsed=typeof body==='string'?JSON.parse(body):body;videoId=(parsed&&parsed.videoId)||'';client=(parsed&&parsed.context&&parsed.context.client&&parsed.context.client.clientName)||'';}catch(e){}}"
+        + "var promise=originalFetch.apply(this,arguments);"
+        + "if(isPlayerUrl(url)){promise.then(function(resp){try{resp.clone().text().then(function(txt){inspectResponse(txt,videoId,client,'fetch.resp.player');});}catch(e){}});}"
+        + "return promise;};"
+        + "try{LiveMonitorApp.onApiRequestSeen('player-observer','','installed','init');}catch(e){}"
+        + "})()";
+
+    /**
+     * Manual fallback used when the visible page globals/resource scan does not
+     * expose a token. It sends one same-origin {@code /youtubei/v1/player} request
+     * with the page's own InnerTube context, parses the response, and forwards any
+     * {@code serviceIntegrityDimensions.poToken} through the normal save path.
      */
     private static final String MANUAL_PLAYER_FETCH_SCRIPT = "(function(){"
         + "try{"
@@ -134,8 +157,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         + "  try{"
         + "    var d=JSON.parse(txt);"
         + "    var sid=d&&d.serviceIntegrityDimensions;"
+        + "    var po=(sid&&sid.poToken)||(d&&d.poToken)||'';"
         + "    var errCode=(d&&d.error&&d.error.code)||'';"
-        + "    preview='hasPoToken='+(!!( sid&&sid.poToken))+(errCode?',err='+errCode:'');"
+        + "    preview='hasPoToken='+(!!po)+(errCode?',err='+errCode:'');"
+        + "    if(po){try{LiveMonitorApp.onPoTokenIntercepted(po,(ctx&&ctx.client&&ctx.client.clientName)||'',vid,'manual-player.sid');}catch(e){}}"
         + "  }catch(e){preview='parse-err:'+String(e).substring(0,60);}"
         + "  try{LiveMonitorApp.onApiRequestSeen('manual-player-done',vid,preview,'manual');}catch(e){}"
         + "}).catch(function(e){"
@@ -288,10 +313,9 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
         /*
          * Register the JavaScript bridge before the WebView loads any page.
-         * This makes the LiveMonitorApp object available in the page's JS context
-         * from the very first frame, which is required for the fetch/XHR interceptor
-         * (FETCH_INTERCEPTOR_SCRIPT) to be able to call back into Java as soon as
-         * YouTube's player requests the /youtubei/v1/player endpoint.
+         * This keeps compatibility with page scripts that report a token through
+         * LiveMonitorApp while the primary visible-player flow uses native URL
+         * observation plus bounded player-context scans.
          */
         webView.addJavascriptInterface(new PoTokenJsBridge(), "LiveMonitorApp");
 
@@ -338,22 +362,18 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
 
             /**
-             * Ground-truth network-level logging that bypasses JavaScript entirely.
-             * This fires for every HTTP/HTTPS request the WebView makes — including
-             * requests issued by Web Workers, service workers, or any path that
-             * bypasses our fetch/XHR JS hooks.
-             *
-             * We log every /youtubei/v1/ call so we can see definitively:
-             *  - whether /player is ever attempted
-             *  - which HTTP method is used
-             *  - the exact path and query string
+             * Observe visible WebView resource URLs at the native network layer.
+             * Request URLs alone do not expose POST response bodies, but this still
+             * catches any pot=/po_token= query parameters YouTube puts directly on
+             * visible player resources.
              *
              * Returning null lets the request proceed normally.
              */
             @Override
-            public android.webkit.WebResourceResponse shouldInterceptRequest(
-                    WebView view, android.webkit.WebResourceRequest req) {
+            public WebResourceResponse shouldInterceptRequest(
+                    WebView view, WebResourceRequest req) {
                 if (req != null && req.getUrl() != null) {
+                    observePotentialPoTokenUrl(req.getUrl());
                     String reqUrl = req.getUrl().toString();
                     if (reqUrl.contains("/youtubei/v1/")) {
                         try {
@@ -450,43 +470,27 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                /*
-                 * Inject the fetch/XHR interceptor as early as possible — before
-                 * YouTube's player JS executes and makes the /youtubei/v1/player
-                 * request that contains the po_token in its body.
-                 * The guard in the script prevents double-installation if this
-                 * fires more than once (e.g. SPA navigation).
-                 */
-                view.evaluateJavascript(YouTubePoTokenHelper.FETCH_INTERCEPTOR_SCRIPT, null);
-                storage.appendLog(LogItem.debug(
-                    LogItem.SOURCE_UI,
-                    "[PoToken/WebView] Page loading: " + safeUrlForStatus(url)
-                        + " | fetch+XHR interceptor injected"
-                ));
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
+                installPlayerResponseObserver(view);
                 statusText.setText("Loading visible YouTube context: " + safeUrlForStatus(url));
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                installPlayerResponseObserver(view);
                 statusText.setText("Loaded player context: " + safeUrlForStatus(url));
                 scheduleVisiblePlayerTokenScan(view, url);
             }
-
-            @Override
-            public WebResourceResponse shouldInterceptRequest(
-                WebView view,
-                WebResourceRequest request
-            ) {
-                observePotentialPoTokenUrl(request == null ? null : request.getUrl());
-                return super.shouldInterceptRequest(view, request);
-            }
         });
+    }
+
+    private void installPlayerResponseObserver(WebView view) {
+        if (view == null) {
+            return;
+        }
+
+        view.evaluateJavascript(PLAYER_RESPONSE_OBSERVER_SCRIPT, null);
     }
 
     private void scheduleVisiblePlayerTokenScan(WebView view, String url) {
@@ -499,7 +503,8 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 return;
             }
 
-            webView.evaluateJavascript(PO_TOKEN_SCRIPT, this::handlePoTokenScriptResult);
+            installPlayerResponseObserver(webView);
+            webView.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, false));
         }, 1500L);
     }
 
@@ -518,9 +523,10 @@ public class YouTubeSignInActivity extends AppCompatActivity {
             return;
         }
 
-        lastObservedPoToken = token;
+        final String observedToken = token;
+        lastObservedPoToken = observedToken;
         runOnUiThread(() -> saveObservedPoToken(
-            token,
+            observedToken,
             "visible-player:network-url-pot",
             webView == null ? "" : webView.getUrl(),
             true
@@ -544,6 +550,7 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         }
 
         statusText.setText("Checking visible player context for an observable GVS PO token...");
+        installPlayerResponseObserver(webView);
         webView.evaluateJavascript(PO_TOKEN_SCRIPT, result -> handlePoTokenScriptResult(result, true));
     }
 
@@ -560,12 +567,13 @@ public class YouTubeSignInActivity extends AppCompatActivity {
                 storage.appendLog(LogItem.info(
                     LogItem.SOURCE_UI,
                     "[PoToken/Globals] Globals scan: no token in ytcfg/ytInitialPlayerResponse"
-                        + (isManual ? " (manual scan)" : " (auto fallback scan)")
-                        + " — normal if fetch interceptor already captured it"
+                        + (isManual ? " (manual scan; player API probe will run)" : " (auto fallback scan)")
+                        + " — waiting for targeted player-response observer"
                 ));
 
                 if (isManual) {
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, message + " Sending a player API probe...", Toast.LENGTH_LONG).show();
+                    webView.evaluateJavascript(MANUAL_PLAYER_FETCH_SCRIPT, null);
                 }
 
                 return;
@@ -879,16 +887,15 @@ public class YouTubeSignInActivity extends AppCompatActivity {
     /**
      * JavaScript interface exposed to the WebView as {@code LiveMonitorApp}.
      *
-     * <p>Called by {@link YouTubePoTokenHelper#FETCH_INTERCEPTOR_SCRIPT} when it
-     * detects a po_token in a {@code /youtubei/v1/player} request body.
+     * <p>Called by the targeted player-response observer or manual player probe
+     * when a PO token is found in a {@code /youtubei/v1/player} response body.
      * Because JavascriptInterface methods are called on a background thread,
      * all UI and storage work is dispatched to the main thread.
      */
     private final class PoTokenJsBridge {
 
         /**
-         * Called by the JS interceptor whenever a /youtubei/v1/* request or
-         * the interceptor-installed confirmation fires.  Logged at INFO so it
+         * Called by the JS observer whenever a diagnostic event fires. Logged at INFO so it
          * always appears in the Logs screen regardless of debug-filter settings.
          */
         @JavascriptInterface
@@ -919,14 +926,11 @@ public class YouTubeSignInActivity extends AppCompatActivity {
 
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_UI,
-                "[PoToken/Intercept] fetch/XHR bridge fired"
+                "[PoToken/Intercept] player response bridge fired"
                     + " | source=" + safeSrc
                     + " | client=" + safeClient
                     + " | videoId=" + safeVideo
                     + " | tokenLen=" + safeToken.length()
-                    + (safeToken.length() >= 8
-                        ? " | token=" + safeToken.substring(0, 8) + "..."
-                        : " | token=<too short, ignored>")
             ));
 
             if (safeToken.length() < 16) {
