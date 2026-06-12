@@ -203,9 +203,11 @@ public class RecorderCommandBuilder {
 
 
     /**
-     * Experimental no-PO-token recorder path based on the Termux command which
-     * currently succeeds with the android_vr client by downloading DASH
-     * video+audio and letting yt-dlp/ffmpeg merge the MP4.
+     * Builds the primary no-PO-token recorder path from the proven Termux
+     * android_vr DASH command. Keep this intentionally self-contained instead
+     * of layering it on top of the HLS/client-rotation recorder builder: this
+     * path should not inherit WebView cookies, PO-token extractor args, or
+     * bounded retry defaults while android_vr DASH works without them.
      */
     public List<String> buildAndroidVrDashRecordArgs(
         String videoUrl,
@@ -216,34 +218,56 @@ public class RecorderCommandBuilder {
         boolean allowLiveFromStart,
         boolean allowWaitForVideo
     ) {
-        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(
-            videoUrl,
-            outputMp4Path,
-            settings,
-            remoteConfig,
-            "youtube:player_client=android_vr",
-            allowLiveFromStart,
-            allowWaitForVideo
-        ));
+        if (remoteConfig == null) {
+            remoteConfig = new RemoteConfig();
+        }
 
-        replaceOptionValue(args, "-f", buildAndroidVrDashFormatSelector(settings));
-        addOptionAndValueBeforeInput(args, "--merge-output-format", "mp4");
+        List<String> args = new ArrayList<>();
+
+        args.add(remoteConfig.getYtDlpExecutable());
+        args.add("--js-runtime");
+        args.add("quickjs");
+        args.add("--wait-for-video");
+        args.add("60");
+
+        if (allowLiveFromStart) {
+            args.add("--live-from-start");
+        }
+
+        args.add("--extractor-args");
+        args.add("youtube:player_client=android_vr");
+        args.add("--hls-use-mpegts");
+        args.add("--no-part");
+        args.add("--skip-unavailable-fragments");
+        args.add("--retries");
+        args.add("infinite");
+        args.add("--fragment-retries");
+        args.add("infinite");
+        args.add("--extractor-retries");
+        args.add("infinite");
+        args.add("--file-access-retries");
+        args.add("infinite");
+        args.add("--retry-sleep");
+        args.add("5");
+        args.add("--socket-timeout");
+        args.add("10");
+        args.add("--force-ipv4");
+        args.add("--no-check-certificates");
+        args.add("-f");
+        args.add("bv*[height<=480]+ba/b");
+        args.add("--merge-output-format");
+        args.add("mp4");
 
         if (!isBlank(tempDirectoryPath)) {
-            addOptionAndValueBeforeInput(args, "-P", "temp:" + tempDirectoryPath.trim());
+            args.add("-P");
+            args.add("temp:" + tempDirectoryPath.trim());
         }
+
+        args.add("-o");
+        args.add(outputMp4Path);
+        args.add(videoUrl);
 
         return Collections.unmodifiableList(args);
-    }
-
-    private String buildAndroidVrDashFormatSelector(AppSettings settings) {
-        String height = settings == null ? "480" : settings.getQualityHeightOnly();
-
-        if (isBlank(height)) {
-            return "bestvideo+bestaudio/best";
-        }
-
-        return "bestvideo[height<=" + height + "]+bestaudio/best";
     }
 
     /**
