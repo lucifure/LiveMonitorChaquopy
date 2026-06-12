@@ -173,8 +173,8 @@ public class NotificationHelper {
             PO_TOKEN_SETUP_NOTIFICATION_ID
         );
 
-        String title = "YouTube PO token required";
-        String text = "yt-dlp cannot record live streams without a PO token. "
+        String title = "YouTube PO token may be needed";
+        String text = "YouTube blocked the current yt-dlp live-stream attempt. "
             + "Tap to open YouTube PO Token Setup, load a live video, then tap "
             + "'Generate/Refresh PO token'.";
 

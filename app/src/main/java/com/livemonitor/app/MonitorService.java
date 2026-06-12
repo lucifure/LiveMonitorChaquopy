@@ -1516,19 +1516,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        if (!isBlank(finalMp4OutputPath)) {
-            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
-                builder,
-                videoUrl,
-                finalMp4OutputPath,
-                tempDirectoryPath,
-                appSettings,
-                config,
-                true,
-                allowWaitForVideo
-            ));
-        }
-
         for (String extractorArg : extractorArgs) {
             attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
@@ -1542,20 +1529,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ));
         }
 
-        if (retryWithoutLiveFromStart) {
-            if (!isBlank(finalMp4OutputPath)) {
-                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
-                    builder,
-                    videoUrl,
-                    finalMp4OutputPath,
-                    tempDirectoryPath,
-                    appSettings,
-                    config,
-                    false,
-                    allowWaitForVideo
-                ));
-            }
+        if (!isBlank(finalMp4OutputPath)) {
+            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                finalMp4OutputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                true,
+                allowWaitForVideo
+            ));
+        }
 
+        if (retryWithoutLiveFromStart) {
             for (String extractorArg : extractorArgs) {
                 attempts.add(buildYtDlpPrimaryRecordAttempt(
                     builder,
@@ -1564,6 +1551,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     appSettings,
                     config,
                     extractorArg,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
+
+            if (!isBlank(finalMp4OutputPath)) {
+                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    finalMp4OutputPath,
+                    tempDirectoryPath,
+                    appSettings,
+                    config,
                     false,
                     allowWaitForVideo
                 ));
@@ -3387,43 +3387,44 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String poTokenExtractorArgs = settings == null
             ? ""
             : settings.buildYtDlpPoTokenExtractorArgs();
+        boolean hasPoToken = !isBlank(poTokenExtractorArgs);
+        boolean hasCookies = settings != null && settings.hasYtDlpCookies();
 
-        if (!isBlank(poTokenExtractorArgs)) {
-            extractorArgs.add(poTokenExtractorArgs.trim());
+        /*
+         * Keep the without-PO-token branch behavior stable even when the user
+         * has a cached PO token from setup. The HLS clients below are the fast
+         * live-from-start path and should always be attempted before token-bound
+         * GVS/DASH clients, because stale or video-specific tokens can return no
+         * formats or stall before bytes are written.
+         *
+         * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
+         * YouTube client regarding po_token enforcement on live streams. Adding
+         * skip=dash forces HLS-only output, which is required for
+         * --live-from-start to walk the DVR fragment index from the beginning.
+         *
+         * web;skip=dash is the next best option when cookies are present because
+         * an authenticated web session avoids most bot-check blocks.
+         */
+        extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
+
+        if (hasCookies) {
+            extractorArgs.add("youtube:player_client=web;skip=dash");
+        }
+
+        if (hasPoToken) {
             logYtDlpPoTokenCacheState();
         } else {
-            boolean hasCookies = settings != null && settings.hasYtDlpCookies();
             log(
-                LogItem.LEVEL_WARNING,
+                LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 null,
-                "No PO token cached. YouTube now enforces po_token for live streams.",
+                "No PO token cached. Trying live-stream fallback clients first.",
                 hasCookies
                     ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
-                        + "For best results open 'YouTube PO Token Setup', load a live video page, "
-                        + "then tap 'Generate/Refresh PO token'."
-                    : "Open 'YouTube PO Token Setup', load a live video page, then tap "
-                        + "'Generate/Refresh PO token'. Optionally tap 'Save session' to store cookies."
+                        + "A PO token is recommended only if these fallback attempts fail."
+                    : "tv_embedded (HLS) fallback attempts will be tried first. "
+                        + "A PO token is recommended only if YouTube blocks recording or no playable formats are found."
             );
-            notificationHelper.showPoTokenSetupNotification();
-
-            /*
-             * When no po_token is cached, prioritise clients that are still
-             * accessible without a token.
-             *
-             * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
-             * YouTube client regarding po_token enforcement on live streams.
-             * Adding skip=dash forces HLS-only output which is required for
-             * --live-from-start to walk the DVR fragment index from the beginning.
-             *
-             * web;skip=dash is the next best option when cookies are present
-             * because an authenticated web session avoids most bot-check blocks.
-             */
-            extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
-
-            if (hasCookies) {
-                extractorArgs.add("youtube:player_client=web;skip=dash");
-            }
         }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
@@ -3446,6 +3447,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (primaryClient != null && primaryClient.isValid()) {
                 extractorArgs.add(buildYtDlpPlayerClientArg(primaryClient.getClientName()));
             }
+        }
+
+        if (hasPoToken) {
+            extractorArgs.add(poTokenExtractorArgs.trim());
         }
 
         /*

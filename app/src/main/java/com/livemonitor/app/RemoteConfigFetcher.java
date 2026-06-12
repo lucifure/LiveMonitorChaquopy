@@ -61,6 +61,15 @@ public class RemoteConfigFetcher {
             return cached;
         }
 
+        if (isBlank(settings.getRemoteConfigUrl())) {
+            if (storage.hasCachedRemoteConfig()
+                && cached.isValidForAppVersion(getAppVersionCode())) {
+                return cached;
+            }
+
+            return new RemoteConfig();
+        }
+
         FetchResult result = fetchFromSettings(settings);
 
         if (result.success && result.config != null) {
@@ -96,6 +105,26 @@ public class RemoteConfigFetcher {
                 return;
             }
 
+            if (isBlank(settings.getRemoteConfigUrl())) {
+                if (callback != null) {
+                    if (storage.hasCachedRemoteConfig()
+                        && cached.isValidForAppVersion(getAppVersionCode())) {
+                        callback.onConfigReady(
+                            cached,
+                            false,
+                            "Remote config URL is empty. Using cached config."
+                        );
+                    } else {
+                        callback.onConfigReady(
+                            new RemoteConfig(),
+                            false,
+                            "Remote config URL is empty. Using default config."
+                        );
+                    }
+                }
+                return;
+            }
+
             FetchResult result = fetchFromSettings(settings);
 
             if (result.success && result.config != null) {
@@ -105,7 +134,8 @@ public class RemoteConfigFetcher {
                 return;
             }
 
-            if (cached.isValidForAppVersion(getAppVersionCode())) {
+            if (storage.hasCachedRemoteConfig()
+                && cached.isValidForAppVersion(getAppVersionCode())) {
                 if (callback != null) {
                     callback.onConfigReady(
                         cached,
