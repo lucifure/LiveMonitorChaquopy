@@ -419,24 +419,8 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
         startServiceCompat(intent);
 
-        AppSettings settings = storage.loadSettings();
-        boolean customFolder = !settings.getSaveLocationUri().trim().isEmpty();
-
-        if (customFolder) {
-            recording.markCopyingToFolder(settings.getSaveLocationDisplayName());
-        } else {
-            if (recording.hasExistingFinalMp4File()) {
-                recording.markCompleted(recording.getFinalMp4Path());
-            } else if (recording.hasExistingTempTsFile()) {
-                recording.markCompleted(recording.getTempTsPath());
-            }
-            recording.hideFromDownloading();
-        }
-
-        storage.upsertRecording(recording);
-
         refreshAll();
-        Toast.makeText(this, "Copying to selected folder…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Stopping and saving recording…", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {

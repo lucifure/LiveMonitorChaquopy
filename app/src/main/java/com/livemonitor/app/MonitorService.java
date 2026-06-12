@@ -36,6 +36,7 @@ import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -377,6 +378,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        if (!networkAvailable) {
+            recording.markPausedNetwork("Network unavailable; keeping recorded files until internet returns.");
+            recording.showInDownloading();
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Resume delayed until network returns.");
+            return;
+        }
+
         recording.markRecording();
         recording.showInDownloading();
         storage.upsertRecording(recording);
@@ -387,13 +396,66 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertChannel(channel);
         notificationHelper.showChannelMonitoringNotification(channel);
 
-        LiveInfo liveInfo = new LiveInfo(
-            recording.getVideoId(),
-            recording.getTitle(),
-            recording.getVideoUrl()
-        );
-        executor.execute(() -> runRecording(channel.getId(), recording, liveInfo));
+        executor.execute(() -> resumeRecordingOrFinalizeStoppedLive(channel.getId(), recording));
         broadcastRecordingUpdated("Recording resumed.");
+    }
+
+    private void resumeRecordingOrFinalizeStoppedLive(String channelId, RecordingItem recording) {
+        ChannelItem channel = storage.findChannelById(channelId);
+
+        try {
+            if (!networkAvailable) {
+                recording.markPausedNetwork("Network unavailable; keeping recorded files until internet returns.");
+                storage.upsertRecording(recording);
+                activeRecordings.remove(recording.getId());
+                activeRecordings.remove(recording.getChannelId());
+                if (!isBlank(channelId)) {
+                    activeRecordings.remove(channelId);
+                }
+                progressTracker.untrack(recording);
+                broadcastRecordingUpdated("Resume delayed until network returns.");
+                return;
+            }
+
+            String resolvedChannelId = channel == null ? null : resolveChannelId(channel.getUrl());
+            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+
+            if (liveInfo == null || !recording.matchesVideo(liveInfo.videoId)) {
+                activeRecordings.remove(recording.getId());
+                activeRecordings.remove(recording.getChannelId());
+                if (!isBlank(channelId)) {
+                    activeRecordings.remove(channelId);
+                }
+                progressTracker.untrack(recording);
+
+                if (saveStoppedRecordingForDownloads(recording, channel)) {
+                    if (channel != null) {
+                        channel.markRecordingFinished();
+                        channel.markWaitingForLive();
+                        storage.upsertChannel(channel);
+                        notificationHelper.showChannelMonitoringNotification(channel);
+                    }
+                    broadcastRecordingUpdated("Paused recording finalized because the live stream ended.");
+                } else {
+                    recording.markRecoverable("Paused recording could not resume because the live stream ended and no playable file was found.");
+                    storage.upsertRecording(recording);
+                    broadcastRecordingUpdated("Paused recording is recoverable.");
+                }
+                return;
+            }
+
+            runRecording(channelId, recording, liveInfo);
+        } catch (Exception e) {
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(recording.getChannelId());
+            if (!isBlank(channelId)) {
+                activeRecordings.remove(channelId);
+            }
+            progressTracker.untrack(recording);
+            recording.markRecoverable("Resume failed. " + normalizeErrorMessage(e));
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Recording resume failed.");
+        }
     }
 
     private void handleStopRecording(Intent intent) {
@@ -437,7 +499,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (recording != null) {
             waitForRecordingFileAfterCancellation(recording);
             RecordingItem latest = storage.findRecordingById(recording.getId());
-            savedPlayableFile = saveStoppedRecordingForDownloads(latest == null ? recording : latest);
+            ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+            savedPlayableFile = saveStoppedRecordingForDownloads(latest == null ? recording : latest, channel);
         }
 
         if (!savedPlayableFile) {
@@ -448,37 +511,271 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private boolean saveStoppedRecordingForDownloads(RecordingItem recording) {
+        return saveStoppedRecordingForDownloads(recording, null);
+    }
+
+    private boolean saveStoppedRecordingForDownloads(RecordingItem recording, ChannelItem channel) {
         if (recording == null) {
             return false;
         }
 
         if (recording.isCompleted()) {
-            copyCompletedRecordingToSelectedFolder(recording, null);
+            copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             return true;
         }
 
-        boolean savedPlayableFile;
+        if (recording.hasExistingFinalMp4File()) {
+            recording.markCompleted(recording.getFinalMp4Path());
+            copyCompletedRecordingToSelectedFolder(recording, channel);
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            return true;
+        }
+
+        if (mergeStoppedDashSidecars(recording, channel)) {
+            return true;
+        }
 
         String existingTempSegmentPath = recording.getFirstExistingTempSegmentPath();
 
-        if (recording.hasExistingFinalMp4File()) {
-            recording.markCompleted(recording.getFinalMp4Path());
-            copyCompletedRecordingToSelectedFolder(recording, null);
-            savedPlayableFile = true;
-        } else if (!isBlank(existingTempSegmentPath)) {
+        if (!isBlank(existingTempSegmentPath)) {
+            if (settings != null && settings.isConvertTsToMp4()) {
+                return convertRecording(recording, channel);
+            }
+
             recording.markCompleted(existingTempSegmentPath);
-            copyCompletedRecordingToSelectedFolder(recording, null);
-            savedPlayableFile = true;
-        } else {
-            recording.markStoppedByUser();
-            savedPlayableFile = false;
+            copyCompletedRecordingToSelectedFolder(recording, channel);
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            return true;
         }
 
+        recording.markStoppedByUser();
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
-        return savedPlayableFile;
+        return false;
+    }
+
+
+    private boolean mergeStoppedDashSidecars(RecordingItem recording, ChannelItem channel) {
+        List<File> sidecars = findYtDlpDashSidecarFiles(recording);
+
+        if (sidecars.size() < 2 || isBlank(recording.getFinalMp4Path())) {
+            return false;
+        }
+
+        File videoFile = selectDashVideoSidecar(sidecars);
+        File audioFile = selectDashAudioSidecar(sidecars, videoFile);
+
+        if (videoFile == null || audioFile == null || videoFile.equals(audioFile)) {
+            return false;
+        }
+
+        if (!ensureRecordingStorageAvailable(channel, estimateDashMergeRequiredBytes(sidecars))) {
+            recording.markRecoverable("Not enough free storage to merge stopped DASH recording. " + fileManager.getStorageSummary());
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Stopped recording is recoverable; storage is low.");
+            return false;
+        }
+
+        recording.markConverting();
+        storage.upsertRecording(recording);
+        broadcastRecordingUpdated("Merging stopped recording.");
+
+        String command = "-y -i " + quote(videoFile.getAbsolutePath())
+            + " -i " + quote(audioFile.getAbsolutePath())
+            + " -map 0:v:0? -map 1:a:0? -c copy -movflags +faststart "
+            + quote(recording.getFinalMp4Path());
+
+        try {
+            ReturnCode code = FFmpegKit.execute(command).getReturnCode();
+
+            if (!ReturnCode.isSuccess(code)) {
+                recording.markRecoverable("Stopped DASH merge failed.");
+                storage.upsertRecording(recording);
+                log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "Stopped DASH merge failed.", describeReturnCode(code));
+                return false;
+            }
+
+            if (!recording.hasExistingFinalMp4File()) {
+                recording.markRecoverable("Stopped DASH merge completed but the final MP4 was not created.");
+                storage.upsertRecording(recording);
+                return false;
+            }
+
+            recording.markCompleted(recording.getFinalMp4Path());
+            copyCompletedRecordingToSelectedFolder(recording, channel);
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+
+            for (File sidecar : sidecars) {
+                if (sidecar != null) {
+                    safeDelete(sidecar.getAbsolutePath());
+                }
+            }
+
+            log(
+                LogItem.LEVEL_SUCCESS,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Stopped DASH recording merged.",
+                recording.getFinalMp4Path()
+            );
+            return true;
+        } catch (Exception e) {
+            recording.markRecoverable("Stopped DASH merge error. " + normalizeErrorMessage(e));
+            storage.upsertRecording(recording);
+            log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, channel, "Stopped DASH merge error.", normalizeErrorMessage(e));
+            return false;
+        }
+    }
+
+    private List<File> findYtDlpDashSidecarFiles(RecordingItem recording) {
+        if (recording == null || isBlank(recording.getFinalMp4Path())) {
+            return Collections.emptyList();
+        }
+
+        File finalFile = new File(recording.getFinalMp4Path());
+        String finalName = finalFile.getName();
+        int dot = finalName.lastIndexOf('.');
+        String baseName = dot > 0 ? finalName.substring(0, dot) : finalName;
+
+        if (isBlank(baseName)) {
+            return Collections.emptyList();
+        }
+
+        List<File> sidecars = new ArrayList<>();
+        Set<String> scannedDirectories = new LinkedHashSet<>();
+
+        collectYtDlpDashSidecars(finalFile.getParentFile(), baseName, scannedDirectories, sidecars);
+
+        for (String segmentPath : recording.getTempSegmentPaths()) {
+            if (!isBlank(segmentPath)) {
+                collectYtDlpDashSidecars(new File(segmentPath).getParentFile(), baseName, scannedDirectories, sidecars);
+            }
+        }
+
+        sidecars.sort((left, right) -> Long.compare(Math.max(0L, right.length()), Math.max(0L, left.length())));
+        return sidecars;
+    }
+
+    private void collectYtDlpDashSidecars(
+        File directory,
+        String baseName,
+        Set<String> scannedDirectories,
+        List<File> sidecars
+    ) {
+        if (directory == null || !directory.exists() || isBlank(baseName) || sidecars == null) {
+            return;
+        }
+
+        String directoryPath = directory.getAbsolutePath();
+        if (scannedDirectories != null && !scannedDirectories.add(directoryPath)) {
+            return;
+        }
+
+        File[] files = directory.listFiles();
+        if (files == null) {
+            return;
+        }
+
+        for (File file : files) {
+            if (file == null || !file.isFile() || file.length() <= 0L) {
+                continue;
+            }
+
+            String name = file.getName();
+            if ((name.startsWith(baseName + ".f") || name.startsWith(baseName + ".dash"))
+                && isLikelyMediaSidecar(name)) {
+                sidecars.add(file);
+            }
+        }
+    }
+
+    private boolean isLikelyMediaSidecar(String fileName) {
+        if (isBlank(fileName)) {
+            return false;
+        }
+
+        String lower = fileName.toLowerCase(java.util.Locale.US);
+        return lower.endsWith(".mp4")
+            || lower.endsWith(".m4a")
+            || lower.endsWith(".webm")
+            || lower.endsWith(".mkv")
+            || lower.endsWith(".mp4.part")
+            || lower.endsWith(".m4a.part")
+            || lower.endsWith(".webm.part")
+            || lower.endsWith(".mkv.part");
+    }
+
+    private File selectDashVideoSidecar(List<File> sidecars) {
+        if (sidecars == null || sidecars.isEmpty()) {
+            return null;
+        }
+
+        for (File file : sidecars) {
+            if (file != null && !isAudioDashSidecar(file.getName())) {
+                return file;
+            }
+        }
+
+        return sidecars.get(0);
+    }
+
+    private File selectDashAudioSidecar(List<File> sidecars, File videoFile) {
+        if (sidecars == null || sidecars.isEmpty()) {
+            return null;
+        }
+
+        for (File file : sidecars) {
+            if (file != null && !file.equals(videoFile) && isAudioDashSidecar(file.getName())) {
+                return file;
+            }
+        }
+
+        for (File file : sidecars) {
+            if (file != null && !file.equals(videoFile)) {
+                return file;
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isAudioDashSidecar(String fileName) {
+        if (isBlank(fileName)) {
+            return false;
+        }
+
+        String lower = fileName.toLowerCase(java.util.Locale.US);
+        return lower.endsWith(".m4a")
+            || lower.endsWith(".m4a.part")
+            || lower.endsWith(".opus")
+            || lower.endsWith(".opus.part")
+            || lower.contains(".f139.")
+            || lower.contains(".f140.")
+            || lower.contains(".f141.")
+            || lower.contains(".f249.")
+            || lower.contains(".f250.")
+            || lower.contains(".f251.")
+            || lower.contains(".f599.")
+            || lower.contains(".f600.");
+    }
+
+    private long estimateDashMergeRequiredBytes(List<File> sidecars) {
+        long totalBytes = 0L;
+
+        if (sidecars != null) {
+            for (File file : sidecars) {
+                if (file != null && file.exists()) {
+                    totalBytes += Math.max(0L, file.length());
+                }
+            }
+        }
+
+        return Math.max(MIN_FREE_BYTES_BEFORE_CONVERSION, totalBytes + MIN_FREE_BYTES_BEFORE_CONVERSION);
     }
 
     private void waitForRecordingFileAfterCancellation(RecordingItem recording) {
@@ -492,7 +789,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             RecordingItem latest = storage.findRecordingById(recording.getId());
             RecordingItem candidate = latest == null ? recording : latest;
 
-            if (!candidate.getBestPlayablePath().trim().isEmpty()) {
+            if (!candidate.getBestPlayablePath().trim().isEmpty()
+                || findYtDlpDashSidecarFiles(candidate).size() >= 2) {
                 return;
             }
 
@@ -2361,22 +2659,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return CleanExitAction.FINALIZE;
     }
 
-    private void convertRecording(RecordingItem recording, ChannelItem channel) {
-        if (recording != null && recording.hasExistingFinalMp4File()) {
+    private boolean convertRecording(RecordingItem recording, ChannelItem channel) {
+        if (recording == null) {
+            return false;
+        }
+
+        if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording completed by yt-dlp merge.", recording.getFinalMp4Path());
-            return;
+            return true;
         }
 
         if (!settings.isConvertTsToMp4()) {
             recording.markCompleted(recording.getTempTsPath());
-            copyCompletedRecordingToSelectedFolder(recording, null);
+            copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
-            return;
+            return true;
         }
 
         long requiredBytes = estimateConversionRequiredBytes(recording);
@@ -2385,7 +2687,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording.markRecoverable("Not enough free storage to convert safely. " + fileManager.getStorageSummary());
             storage.upsertRecording(recording);
             broadcastRecordingUpdated("Recording is recoverable; storage is low.");
-            return;
+            return false;
         }
 
         recording.markConverting();
@@ -2406,6 +2708,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     safeDelete(segmentPath);
                 }
                 log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording completed.", recording.getFinalMp4Path());
+                storage.upsertRecording(recording);
+                return true;
             } else {
                 recording.markRecoverable("MP4 conversion failed.");
                 log(LogItem.LEVEL_WARNING, LogItem.SOURCE_RECORDER, channel, "Conversion failed.", "");
@@ -2416,6 +2720,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         storage.upsertRecording(recording);
+        return false;
     }
 
     private void copyCompletedRecordingToSelectedFolder(RecordingItem recording, ChannelItem channel) {
@@ -4367,6 +4672,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channel.markWaitingForLive();
                 storage.upsertChannel(channel);
                 startChannelLoop(channel);
+            }
+        }
+
+        for (RecordingItem recording : storage.loadRecordings()) {
+            if (recording != null
+                && RecordingItem.STATUS_PAUSED_NETWORK.equals(recording.getStatus())
+                && !activeRecordings.containsKey(recording.getId())) {
+                ChannelItem channel = storage.findChannelById(recording.getChannelId());
+
+                if (channel != null && channel.shouldMonitor()) {
+                    recording.markRecording();
+                    recording.showInDownloading();
+                    storage.upsertRecording(recording);
+                    activeRecordings.put(channel.getId(), recording);
+                    progressTracker.track(recording);
+                    executor.execute(() -> resumeRecordingOrFinalizeStoppedLive(channel.getId(), recording));
+                }
             }
         }
 
