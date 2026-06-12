@@ -1525,19 +1525,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
                 builder,
                 videoUrl,
-                finalMp4OutputPath,
-                tempDirectoryPath,
-                appSettings,
-                config,
-                true,
-                allowWaitForVideo
-            ));
-        }
-
-        for (String extractorArg : extractorArgs) {
-            attempts.add(buildYtDlpPrimaryRecordAttempt(
-                builder,
-                videoUrl,
                 outputPath,
                 appSettings,
                 config,
@@ -1547,20 +1534,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ));
         }
 
-        if (retryWithoutLiveFromStart) {
-            if (!isBlank(finalMp4OutputPath)) {
-                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
-                    builder,
-                    videoUrl,
-                    finalMp4OutputPath,
-                    tempDirectoryPath,
-                    appSettings,
-                    config,
-                    false,
-                    allowWaitForVideo
-                ));
-            }
+        if (!isBlank(finalMp4OutputPath)) {
+            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                finalMp4OutputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                true,
+                allowWaitForVideo
+            ));
+        }
 
+        if (retryWithoutLiveFromStart) {
             for (String extractorArg : extractorArgs) {
                 attempts.add(buildYtDlpPrimaryRecordAttempt(
                     builder,
@@ -1569,6 +1556,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     appSettings,
                     config,
                     extractorArg,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
+
+            if (!isBlank(finalMp4OutputPath)) {
+                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    finalMp4OutputPath,
+                    tempDirectoryPath,
+                    appSettings,
+                    config,
                     false,
                     allowWaitForVideo
                 ));
