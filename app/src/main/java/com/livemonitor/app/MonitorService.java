@@ -1516,19 +1516,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        if (!isBlank(finalMp4OutputPath)) {
-            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
-                builder,
-                videoUrl,
-                finalMp4OutputPath,
-                tempDirectoryPath,
-                appSettings,
-                config,
-                true,
-                allowWaitForVideo
-            ));
-        }
-
         for (String extractorArg : extractorArgs) {
             attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
@@ -1542,20 +1529,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ));
         }
 
-        if (retryWithoutLiveFromStart) {
-            if (!isBlank(finalMp4OutputPath)) {
-                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
-                    builder,
-                    videoUrl,
-                    finalMp4OutputPath,
-                    tempDirectoryPath,
-                    appSettings,
-                    config,
-                    false,
-                    allowWaitForVideo
-                ));
-            }
+        if (!isBlank(finalMp4OutputPath)) {
+            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                finalMp4OutputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                true,
+                allowWaitForVideo
+            ));
+        }
 
+        if (retryWithoutLiveFromStart) {
             for (String extractorArg : extractorArgs) {
                 attempts.add(buildYtDlpPrimaryRecordAttempt(
                     builder,
@@ -1564,6 +1551,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     appSettings,
                     config,
                     extractorArg,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
+
+            if (!isBlank(finalMp4OutputPath)) {
+                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    finalMp4OutputPath,
+                    tempDirectoryPath,
+                    appSettings,
+                    config,
                     false,
                     allowWaitForVideo
                 ));
@@ -3394,18 +3394,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } else {
             boolean hasCookies = settings != null && settings.hasYtDlpCookies();
             log(
-                LogItem.LEVEL_WARNING,
+                LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 null,
-                "No PO token cached. YouTube now enforces po_token for live streams.",
+                "No PO token cached. Trying live-stream fallback clients first.",
                 hasCookies
                     ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
-                        + "For best results open 'YouTube PO Token Setup', load a live video page, "
-                        + "then tap 'Generate/Refresh PO token'."
-                    : "Open 'YouTube PO Token Setup', load a live video page, then tap "
-                        + "'Generate/Refresh PO token'. Optionally tap 'Save session' to store cookies."
+                        + "A PO token is recommended only if these fallback attempts fail."
+                    : "tv_embedded (HLS) fallback attempts will be tried first. "
+                        + "A PO token is recommended only if YouTube blocks recording or no playable formats are found."
             );
-            notificationHelper.showPoTokenSetupNotification();
 
             /*
              * When no po_token is cached, prioritise clients that are still
