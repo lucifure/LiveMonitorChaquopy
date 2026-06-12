@@ -193,22 +193,103 @@ public class RecordingProgressTracker {
         long totalBytes = 0L;
 
         for (String segmentPath : recording.getTempSegmentPaths()) {
-            if (isBlank(segmentPath)) {
+            totalBytes += getFileLength(segmentPath);
+        }
+
+        totalBytes += getFileLength(recording.getFinalMp4Path());
+        totalBytes += calculateYtDlpDashSidecarBytes(recording);
+
+        return Math.max(0L, totalBytes);
+    }
+
+    private long calculateYtDlpDashSidecarBytes(RecordingItem recording) {
+        if (recording == null || isBlank(recording.getFinalMp4Path())) {
+            return 0L;
+        }
+
+        try {
+            File finalFile = new File(recording.getFinalMp4Path());
+            String finalName = finalFile.getName();
+            int dot = finalName.lastIndexOf('.');
+            String baseName = dot > 0 ? finalName.substring(0, dot) : finalName;
+
+            if (isBlank(baseName)) {
+                return 0L;
+            }
+
+            java.util.HashSet<String> scannedDirectories = new java.util.HashSet<>();
+            long totalBytes = calculateYtDlpDashSidecarBytesInDirectory(
+                finalFile.getParentFile(),
+                baseName,
+                scannedDirectories
+            );
+
+            for (String segmentPath : recording.getTempSegmentPaths()) {
+                if (!isBlank(segmentPath)) {
+                    totalBytes += calculateYtDlpDashSidecarBytesInDirectory(
+                        new File(segmentPath).getParentFile(),
+                        baseName,
+                        scannedDirectories
+                    );
+                }
+            }
+
+            return totalBytes;
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private long calculateYtDlpDashSidecarBytesInDirectory(
+        File directory,
+        String baseName,
+        java.util.HashSet<String> scannedDirectories
+    ) {
+        if (directory == null || !directory.exists() || isBlank(baseName)) {
+            return 0L;
+        }
+
+        String directoryPath = directory.getAbsolutePath();
+        if (scannedDirectories != null && !scannedDirectories.add(directoryPath)) {
+            return 0L;
+        }
+
+        File[] files = directory.listFiles();
+        if (files == null || files.length == 0) {
+            return 0L;
+        }
+
+        long totalBytes = 0L;
+        for (File file : files) {
+            if (file == null || !file.isFile()) {
                 continue;
             }
 
-            try {
-                File file = new File(segmentPath);
-
-                if (file.exists() && file.isFile()) {
-                    totalBytes += Math.max(0L, file.length());
-                }
-            } catch (Exception ignored) {
-                // Keep progress tracking best-effort across all chunks.
+            String name = file.getName();
+            if (name.startsWith(baseName + ".f") || name.startsWith(baseName + ".dash")) {
+                totalBytes += Math.max(0L, file.length());
             }
         }
 
-        return Math.max(0L, totalBytes);
+        return totalBytes;
+    }
+
+    private long getFileLength(String path) {
+        if (isBlank(path)) {
+            return 0L;
+        }
+
+        try {
+            File file = new File(path);
+
+            if (file.exists() && file.isFile()) {
+                return Math.max(0L, file.length());
+            }
+        } catch (Exception ignored) {
+            // Keep progress tracking best-effort across all chunks.
+        }
+
+        return 0L;
     }
 
     private long calculateDurationSeconds(TrackedRecording tracked) {

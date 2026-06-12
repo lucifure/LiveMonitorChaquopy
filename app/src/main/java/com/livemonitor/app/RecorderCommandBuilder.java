@@ -203,6 +203,50 @@ public class RecorderCommandBuilder {
 
 
     /**
+     * Experimental no-PO-token recorder path based on the Termux command which
+     * currently succeeds with the android_vr client by downloading DASH
+     * video+audio and letting yt-dlp/ffmpeg merge the MP4.
+     */
+    public List<String> buildAndroidVrDashRecordArgs(
+        String videoUrl,
+        String outputMp4Path,
+        String tempDirectoryPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
+        List<String> args = new ArrayList<>(buildYtDlpRecordArgs(
+            videoUrl,
+            outputMp4Path,
+            settings,
+            remoteConfig,
+            "youtube:player_client=android_vr",
+            allowLiveFromStart,
+            allowWaitForVideo
+        ));
+
+        replaceOptionValue(args, "-f", buildAndroidVrDashFormatSelector(settings));
+        addOptionAndValueBeforeInput(args, "--merge-output-format", "mp4");
+
+        if (!isBlank(tempDirectoryPath)) {
+            addOptionAndValueBeforeInput(args, "-P", "temp:" + tempDirectoryPath.trim());
+        }
+
+        return Collections.unmodifiableList(args);
+    }
+
+    private String buildAndroidVrDashFormatSelector(AppSettings settings) {
+        String height = settings == null ? "480" : settings.getQualityHeightOnly();
+
+        if (isBlank(height)) {
+            return "bestvideo+bestaudio/best";
+        }
+
+        return "bestvideo[height<=" + height + "]+bestaudio/best";
+    }
+
+    /**
      * Builds yt-dlp arguments for resolving one playable media URL.
      * MonitorService feeds the resolved URL into FFmpegRunner so the existing
      * recording/progress/recovery pipeline stays unchanged.
@@ -477,6 +521,31 @@ public class RecorderCommandBuilder {
         }
     }
 
+
+    private void replaceOptionValue(List<String> args, String option, String value) {
+        if (args == null || isBlank(option)) {
+            return;
+        }
+
+        for (int index = 0; index < args.size() - 1; index++) {
+            if (option.equals(args.get(index))) {
+                args.set(index + 1, value == null ? "" : value);
+                return;
+            }
+        }
+
+        addOptionAndValueBeforeInput(args, option, value);
+    }
+
+    private void addOptionAndValueBeforeInput(List<String> args, String option, String value) {
+        if (args == null || isBlank(option)) {
+            return;
+        }
+
+        int insertIndex = Math.max(1, args.size() - 1);
+        args.add(insertIndex, option);
+        args.add(insertIndex + 1, value == null ? "" : value);
+    }
 
     private void removeOptionAndValue(List<String> args, String option) {
         if (args == null || isBlank(option)) {
