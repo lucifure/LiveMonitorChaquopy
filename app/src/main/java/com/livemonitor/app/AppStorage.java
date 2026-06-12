@@ -421,6 +421,10 @@ public class AppStorage {
         }
     }
 
+    public synchronized boolean hasCachedRemoteConfig() {
+        return !isBlank(preferences.getString(KEY_REMOTE_CONFIG, ""));
+    }
+
     public synchronized void saveRemoteConfig(RemoteConfig remoteConfig) {
         if (remoteConfig == null) {
             remoteConfig = new RemoteConfig();
