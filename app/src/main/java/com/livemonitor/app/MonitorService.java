@@ -413,7 +413,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channelId = recording.getChannelId();
             }
 
-            saveStoppedRecordingForDownloads(recording);
+            recording.markStoppedByUser();
+            recording.showInDownloading();
+            storage.upsertRecording(recording);
         }
 
         if (channelId != null && !channelId.trim().isEmpty()) {
@@ -429,7 +431,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         cancelActiveRecording(recording);
-        if (recording == null || recording.getBestPlayablePath().trim().isEmpty()) {
+
+        boolean savedPlayableFile = false;
+        if (recording != null) {
+            waitForRecordingFileAfterCancellation(recording);
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            savedPlayableFile = saveStoppedRecordingForDownloads(latest == null ? recording : latest);
+        }
+
+        if (!savedPlayableFile) {
             broadcastRecordingUpdated("Download stopped; no file was saved because no stream data was received.");
         } else {
             broadcastRecordingUpdated("Download stopped and saved.");
@@ -450,12 +460,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean savedPlayableFile;
 
+        String existingTempSegmentPath = recording.getFirstExistingTempSegmentPath();
+
         if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, null);
             savedPlayableFile = true;
-        } else if (recording.hasExistingTempTsFile()) {
-            recording.markCompleted(recording.getTempTsPath());
+        } else if (!isBlank(existingTempSegmentPath)) {
+            recording.markCompleted(existingTempSegmentPath);
             copyCompletedRecordingToSelectedFolder(recording, null);
             savedPlayableFile = true;
         } else {
@@ -466,6 +478,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
         return savedPlayableFile;
+    }
+
+    private void waitForRecordingFileAfterCancellation(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        long deadline = System.currentTimeMillis() + 3_000L;
+
+        while (System.currentTimeMillis() < deadline) {
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            RecordingItem candidate = latest == null ? recording : latest;
+
+            if (!candidate.getBestPlayablePath().trim().isEmpty()) {
+                return;
+            }
+
+            sleep(150L);
+        }
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
