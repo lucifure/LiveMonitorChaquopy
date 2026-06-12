@@ -13,6 +13,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 /**
@@ -21,6 +22,8 @@ import androidx.appcompat.app.AppCompatActivity;
  * Shows logs from all channels and app components.
  */
 public class LogActivity extends AppCompatActivity {
+
+    private static final int CLIPBOARD_SAFE_CHUNK_CHARS = 90_000;
 
     private AppStorage storage;
     private LogAdapter adapter;
@@ -147,12 +150,79 @@ public class LogActivity extends AppCompatActivity {
             return;
         }
 
+        if (text.length() <= CLIPBOARD_SAFE_CHUNK_CHARS) {
+            copyTextToClipboard("LiveMonitor Global Log", text);
+            Toast.makeText(this, "Full log copied.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        showChunkedCopyDialog(splitLogForClipboard(text));
+    }
+
+    private void showChunkedCopyDialog(String[] chunks) {
+        if (chunks == null || chunks.length == 0) {
+            Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String[] labels = new String[chunks.length];
+        for (int i = 0; i < chunks.length; i++) {
+            labels[i] = "Copy part " + (i + 1) + " of " + chunks.length;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Log is large")
+            .setMessage("Android may truncate very large clipboard text. Copy the log in parts and paste them one by one.")
+            .setItems(labels, (dialog, which) -> {
+                copyTextToClipboard("LiveMonitor Global Log part " + (which + 1) + " of " + chunks.length, chunks[which]);
+                Toast.makeText(
+                    this,
+                    "Copied log part " + (which + 1) + " of " + chunks.length + ".",
+                    Toast.LENGTH_SHORT
+                ).show();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private String[] splitLogForClipboard(String text) {
+        int safeChunkCount = Math.max(2, (int) Math.ceil(text.length() / (double) CLIPBOARD_SAFE_CHUNK_CHARS));
+        safeChunkCount = Math.min(3, safeChunkCount);
+        int targetChunkLength = (int) Math.ceil(text.length() / (double) safeChunkCount);
+        String[] chunks = new String[safeChunkCount];
+
+        int start = 0;
+        for (int i = 0; i < safeChunkCount; i++) {
+            int end;
+            if (i == safeChunkCount - 1) {
+                end = text.length();
+            } else {
+                end = findChunkEnd(text, start, Math.min(text.length(), start + targetChunkLength));
+            }
+
+            chunks[i] = text.substring(start, end).trim();
+            start = end;
+        }
+
+        return chunks;
+    }
+
+    private int findChunkEnd(String text, int start, int preferredEnd) {
+        int minEnd = Math.min(text.length(), start + Math.max(1, CLIPBOARD_SAFE_CHUNK_CHARS / 2));
+        int newline = text.lastIndexOf('\n', preferredEnd);
+
+        if (newline >= minEnd) {
+            return newline + 1;
+        }
+
+        return preferredEnd;
+    }
+
+    private void copyTextToClipboard(String label, String text) {
         ClipboardManager clipboard =
             (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 
-        clipboard.setPrimaryClip(ClipData.newPlainText("LiveMonitor Global Log", text));
-
-        Toast.makeText(this, "Log copied.", Toast.LENGTH_SHORT).show();
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text));
     }
 
     private void clearLog() {

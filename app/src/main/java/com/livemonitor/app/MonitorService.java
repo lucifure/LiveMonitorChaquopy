@@ -67,6 +67,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private final Map<String, Boolean> activeLoops = new ConcurrentHashMap<>();
     private final Map<String, RecordingItem> activeRecordings = new ConcurrentHashMap<>();
+    private final Set<String> activeYoutubedlAndroidRecordings = ConcurrentHashMap.newKeySet();
     private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
 
@@ -413,7 +414,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channelId = recording.getChannelId();
             }
 
-            saveStoppedRecordingForDownloads(recording);
+            recording.markStoppedByUser();
+            recording.showInDownloading();
+            storage.upsertRecording(recording);
         }
 
         if (channelId != null && !channelId.trim().isEmpty()) {
@@ -429,7 +432,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         cancelActiveRecording(recording);
-        if (recording == null || recording.getBestPlayablePath().trim().isEmpty()) {
+
+        boolean savedPlayableFile = false;
+        if (recording != null) {
+            waitForRecordingFileAfterCancellation(recording);
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            savedPlayableFile = saveStoppedRecordingForDownloads(latest == null ? recording : latest);
+        }
+
+        if (!savedPlayableFile) {
             broadcastRecordingUpdated("Download stopped; no file was saved because no stream data was received.");
         } else {
             broadcastRecordingUpdated("Download stopped and saved.");
@@ -450,12 +461,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean savedPlayableFile;
 
+        String existingTempSegmentPath = recording.getFirstExistingTempSegmentPath();
+
         if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, null);
             savedPlayableFile = true;
-        } else if (recording.hasExistingTempTsFile()) {
-            recording.markCompleted(recording.getTempTsPath());
+        } else if (!isBlank(existingTempSegmentPath)) {
+            recording.markCompleted(existingTempSegmentPath);
             copyCompletedRecordingToSelectedFolder(recording, null);
             savedPlayableFile = true;
         } else {
@@ -466,6 +479,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         recording.hideFromDownloading();
         storage.upsertRecording(recording);
         return savedPlayableFile;
+    }
+
+    private void waitForRecordingFileAfterCancellation(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        long deadline = System.currentTimeMillis() + 3_000L;
+
+        while (System.currentTimeMillis() < deadline) {
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            RecordingItem candidate = latest == null ? recording : latest;
+
+            if (!candidate.getBestPlayablePath().trim().isEmpty()) {
+                return;
+            }
+
+            sleep(150L);
+        }
     }
 
     private ChannelItem getChannelFromIntent(Intent intent) {
@@ -946,6 +978,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             builder,
             videoUrl,
             recording.getCurrentTempSegmentPath(),
+            recording.getFinalMp4Path(),
+            fileManager.getTempDirectory().getAbsolutePath(),
             settings,
             remoteConfig,
             false
@@ -1173,6 +1207,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecorderCommandBuilder builder,
         String videoUrl,
         String outputPath,
+        String finalMp4OutputPath,
+        String tempDirectoryPath,
         AppSettings appSettings,
         RemoteConfig config,
         boolean allowWaitForVideo
@@ -1181,6 +1217,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
+
+        if (!isBlank(finalMp4OutputPath)) {
+            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                finalMp4OutputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                true,
+                allowWaitForVideo
+            ));
+        }
 
         for (String extractorArg : extractorArgs) {
             attempts.add(buildYtDlpPrimaryRecordAttempt(
@@ -1196,6 +1245,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         if (retryWithoutLiveFromStart) {
+            if (!isBlank(finalMp4OutputPath)) {
+                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                    builder,
+                    videoUrl,
+                    finalMp4OutputPath,
+                    tempDirectoryPath,
+                    appSettings,
+                    config,
+                    false,
+                    allowWaitForVideo
+                ));
+            }
+
             for (String extractorArg : extractorArgs) {
                 attempts.add(buildYtDlpPrimaryRecordAttempt(
                     builder,
@@ -1211,6 +1273,35 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return attempts;
+    }
+
+    private YtDlpResolveAttempt buildAndroidVrDashPrimaryRecordAttempt(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String outputPath,
+        String tempDirectoryPath,
+        AppSettings appSettings,
+        RemoteConfig config,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
+        return new YtDlpResolveAttempt(
+            builder.buildAndroidVrDashRecordArgs(
+                videoUrl,
+                outputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                allowLiveFromStart,
+                allowWaitForVideo
+            ),
+            "youtube:player_client=android_vr",
+            allowLiveFromStart,
+            "youtube:player_client=android_vr, format=bestvideo+bestaudio DASH, noPoToken=true"
+                + (appSettings != null && appSettings.isLiveFromStartEnabled()
+                    ? ", liveFromStart=" + allowLiveFromStart
+                    : "")
+        );
     }
 
     private YtDlpResolveAttempt buildYtDlpPrimaryRecordAttempt(
@@ -1310,7 +1401,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         };
 
-        executeYoutubedlAndroidRequest(request, processId, callback);
+        activeYoutubedlAndroidRecordings.add(processId);
+
+        try {
+            executeYoutubedlAndroidRequest(request, processId, callback);
+        } finally {
+            activeYoutubedlAndroidRecordings.remove(processId);
+        }
 
         return 0;
     }
@@ -1728,7 +1825,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean cancelRequested = false;
 
         try {
-            if (FFmpegRunner.isRunning(recordingId) || YtDlpRunner.isRecording(recordingId)) {
+            if (FFmpegRunner.isRunning(recordingId)
+                || YtDlpRunner.isRecording(recordingId)
+                || activeYoutubedlAndroidRecordings.contains(recordingId)) {
                 stalledRecording.setDiagnosticMessage(
                     "No file growth detected; keeping the active recorder alive while reconnect retries continue."
                 );
@@ -1962,6 +2061,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             YoutubeDL.getInstance().destroyProcessById(recordingId);
+            activeYoutubedlAndroidRecordings.remove(recordingId);
             return true;
         } catch (RuntimeException ignored) {
             return false;
@@ -2262,6 +2362,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void convertRecording(RecordingItem recording, ChannelItem channel) {
+        if (recording != null && recording.hasExistingFinalMp4File()) {
+            recording.markCompleted(recording.getFinalMp4Path());
+            copyCompletedRecordingToSelectedFolder(recording, channel);
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, channel, "Recording completed by yt-dlp merge.", recording.getFinalMp4Path());
+            return;
+        }
+
         if (!settings.isConvertTsToMp4()) {
             recording.markCompleted(recording.getTempTsPath());
             copyCompletedRecordingToSelectedFolder(recording, null);
@@ -3236,6 +3345,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || "--user-agent".equals(arg)
             || "--extractor-args".equals(arg)
             || "--ffmpeg-location".equals(arg)
+            || "--merge-output-format".equals(arg)
+            || "-P".equals(arg)
+            || "--paths".equals(arg)
             || "--cookies".equals(arg)
             || "--cookies-from-browser".equals(arg)
             || "--add-header".equals(arg);

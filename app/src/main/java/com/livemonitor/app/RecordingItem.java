@@ -419,8 +419,14 @@ public class RecordingItem {
             return finalMp4Path;
         }
 
-        if (hasExistingTempTsFile()) {
-            return tempTsPath;
+        return getFirstExistingTempSegmentPath();
+    }
+
+    public String getFirstExistingTempSegmentPath() {
+        for (String segmentPath : getTempSegmentPaths()) {
+            if (isExistingFile(segmentPath)) {
+                return segmentPath;
+            }
         }
 
         return "";
