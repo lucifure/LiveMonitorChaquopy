@@ -204,11 +204,10 @@ public class RecorderCommandBuilder {
 
 
     /**
-     * Builds the primary no-PO-token recorder path from the proven Termux
-     * android_vr DASH command. Keep this intentionally self-contained instead
-     * of layering it on top of the HLS/client-rotation recorder builder: this
-     * path should not inherit WebView cookies, PO-token extractor args, or
-     * bounded retry defaults while android_vr DASH works without them.
+     * Builds the primary DASH recorder path from the proven Termux android_vr
+     * command. When both saved cookies and a captured GVS PO token exist, switch
+     * only the extractor identity to the yt-dlp-recommended mweb token+cookies
+     * form; otherwise keep the original no-PO-token android_vr chain.
      */
     public List<String> buildAndroidVrDashRecordArgs(
         String videoUrl,
@@ -236,13 +235,20 @@ public class RecorderCommandBuilder {
         }
 
         args.add("--extractor-args");
-        args.add("youtube:player_client=android_vr");
+        String mwebPoTokenExtractorArgs = buildMwebPoTokenExtractorArgs(settings);
+        args.add(isBlank(mwebPoTokenExtractorArgs)
+            ? "youtube:player_client=android_vr"
+            : mwebPoTokenExtractorArgs);
         args.add("--hls-use-mpegts");
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
         args.add("--retries");
-        args.add("10");
+        args.add("infinite");
         args.add("--fragment-retries");
+        args.add("infinite");
+        args.add("--extractor-retries");
+        args.add("infinite");
+        args.add("--file-access-retries");
         args.add("infinite");
         args.add("--retry-sleep");
         args.add("5");
@@ -270,9 +276,42 @@ public class RecorderCommandBuilder {
 
         args.add("-o");
         args.add(outputFile == null ? outputMp4Path : outputFile.getName());
+
+        // Pass cookies without allowing settings to replace the selected
+        // extractor args. The mweb PO-token path is only selected above when
+        // cookies exist, so token and cookies are applied together or not at all.
+        addSettingsYtDlpArgs(args, settings, false);
+
         args.add(videoUrl);
 
         return Collections.unmodifiableList(args);
+    }
+
+    private String buildMwebPoTokenExtractorArgs(AppSettings settings) {
+        if (settings == null || !settings.hasYtDlpCookies() || !settings.hasYtDlpPoToken()) {
+            return "";
+        }
+
+        String token = sanitizePoTokenValue(settings.getYtDlpPoTokenValue());
+
+        if (isBlank(token)) {
+            return "";
+        }
+
+        return "youtube:player_client=mweb"
+            + ";po_token=mweb.gvs+"
+            + token
+            + ";player-skip=webpage,configs";
+    }
+
+    private String sanitizePoTokenValue(String value) {
+        if (isBlank(value)) {
+            return "";
+        }
+
+        return value.trim()
+            .replaceAll("(?i)^[a-z0-9_]+\\.[a-z0-9_]+\\+", "")
+            .replaceAll("[;\\s]+", "");
     }
 
     /**

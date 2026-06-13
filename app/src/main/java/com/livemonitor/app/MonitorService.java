@@ -1325,7 +1325,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + attempts.size()
                     + ", "
                     + attempt.describe()
-                    + ", retries=10, command="
+                    + ", retries=infinite, command="
                     + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
@@ -1512,8 +1512,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean allowWaitForVideo
     ) {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
-        LinkedHashSet<String> extractorArgs = buildYtDlpExtractorArgAttempts();
-
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
         if (!isBlank(finalMp4OutputPath)) {
@@ -1527,37 +1525,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 true,
                 allowWaitForVideo
             ));
-        }
 
-        for (String extractorArg : extractorArgs) {
-            attempts.add(buildYtDlpPrimaryRecordAttempt(
-                builder,
-                videoUrl,
-                outputPath,
-                tempDirectoryPath,
-                appSettings,
-                config,
-                extractorArg,
-                true,
-                allowWaitForVideo
-            ));
-        }
-
-        if (retryWithoutLiveFromStart) {
-            for (String extractorArg : extractorArgs) {
-                attempts.add(buildYtDlpPrimaryRecordAttempt(
-                    builder,
-                    videoUrl,
-                    outputPath,
-                    appSettings,
-                    config,
-                    extractorArg,
-                    false,
-                    allowWaitForVideo
-                ));
-            }
-
-            if (!isBlank(finalMp4OutputPath)) {
+            if (retryWithoutLiveFromStart) {
                 attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
                     builder,
                     videoUrl,
@@ -1594,9 +1563,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 allowLiveFromStart,
                 allowWaitForVideo
             ),
-            "youtube:player_client=android_vr",
+            appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
+                ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
+                : "youtube:player_client=android_vr",
             allowLiveFromStart,
-            "youtube:player_client=android_vr, format=bv*[height<=480]+ba/b DASH, noPoToken=true"
+            (appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
+                ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
+                : "youtube:player_client=android_vr, noPoToken=true")
+                + ", format=bv*[height<=480]+ba/b DASH"
                 + (appSettings != null && appSettings.isLiveFromStartEnabled()
                     ? ", liveFromStart=" + allowLiveFromStart
                     : "")
@@ -1907,6 +1881,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String homePath = findYtDlpPathValue(args, "home");
         String tempPath = findYtDlpPathValue(args, "temp");
         String outputTemplate = findYtDlpOptionValue(args, "-o");
+
+        if (isBlank(homePath) && !isBlank(outputTemplate)) {
+            File outputFile = new File(outputTemplate);
+            File parent = outputFile.isAbsolute() ? outputFile.getParentFile() : null;
+
+            if (parent != null) {
+                homePath = parent.getAbsolutePath();
+            }
+        }
 
         return "home="
             + describeDirectoryForDiagnostics(homePath, outputTemplate)
@@ -3624,11 +3607,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LinkedHashSet<String> buildYtDlpExtractorArgAttempts() {
+        return buildYtDlpExtractorArgAttempts(false);
+    }
+
+    private LinkedHashSet<String> buildYtDlpExtractorArgAttempts(boolean includePoToken) {
         LinkedHashSet<String> extractorArgs = new LinkedHashSet<>();
 
-        String poTokenExtractorArgs = settings == null
-            ? ""
-            : settings.buildYtDlpPoTokenExtractorArgs();
+        String poTokenExtractorArgs = includePoToken && settings != null
+            ? settings.buildYtDlpPoTokenExtractorArgs()
+            : "";
         boolean hasPoToken = !isBlank(poTokenExtractorArgs);
         boolean hasCookies = settings != null && settings.hasYtDlpCookies();
 
@@ -3660,18 +3647,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 null,
-                "No PO token cached. Trying live-stream fallback clients first.",
+                includePoToken
+                    ? "No PO token cached. Trying live-stream fallback clients first."
+                    : "PO-token extractor attempts disabled for this without-PO-token chain.",
                 hasCookies
-                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first. "
-                        + "A PO token is recommended only if these fallback attempts fail."
-                    : "tv_embedded (HLS) fallback attempts will be tried first. "
-                        + "A PO token is recommended only if YouTube blocks recording or no playable formats are found."
+                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first."
+                    : "tv_embedded (HLS) fallback attempts will be tried first."
             );
         }
 
         String localExtractorArgs = settings == null ? "" : settings.getYtDlpExtractorArgs();
 
-        if (!isBlank(localExtractorArgs)) {
+        if (!isBlank(localExtractorArgs) && (includePoToken || !containsPoTokenArg(localExtractorArgs))) {
             extractorArgs.add(localExtractorArgs.trim());
         }
 
@@ -3681,7 +3668,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         String configuredExtractorArgs = remoteConfig == null ? "" : remoteConfig.getYtDlpExtractorArgs();
 
-        if (!isBlank(configuredExtractorArgs)) {
+        if (!isBlank(configuredExtractorArgs) && (includePoToken || !containsPoTokenArg(configuredExtractorArgs))) {
             extractorArgs.add(configuredExtractorArgs.trim());
         } else if (remoteConfig != null) {
             RemoteConfig.YoutubeClient primaryClient = remoteConfig.getPrimaryClient();
@@ -3705,20 +3692,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          * before native app clients because native clients (android, ios) now
          * require GVS po_token for DASH and frequently have no HLS fallback.
          */
-        addPreferredYtDlpClient(extractorArgs, "TV_EMBEDDED");
-        addPreferredYtDlpClient(extractorArgs, "WEB_EMBEDDED_PLAYER");
-        addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI");
-        addPreferredYtDlpClient(extractorArgs, "MWEB");
-        addPreferredYtDlpClient(extractorArgs, "WEB");
-        addPreferredYtDlpClient(extractorArgs, "WEB_CREATOR");
-        addPreferredYtDlpClient(extractorArgs, "ANDROID");
-        addPreferredYtDlpClient(extractorArgs, "IOS");
-        addPreferredYtDlpClient(extractorArgs, "MEDIACONNECT");
+        addPreferredYtDlpClient(extractorArgs, "TV_EMBEDDED", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "WEB_EMBEDDED_PLAYER", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "MWEB", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "WEB", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "WEB_CREATOR", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "ANDROID", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "IOS", includePoToken);
+        addPreferredYtDlpClient(extractorArgs, "MEDIACONNECT", includePoToken);
 
         if (remoteConfig != null) {
             for (RemoteConfig.YoutubeClient client : remoteConfig.getYoutubeClients()) {
                 if (client != null && client.isValid()) {
-                    addPreferredYtDlpClient(extractorArgs, client.getClientName());
+                    addPreferredYtDlpClient(extractorArgs, client.getClientName(), includePoToken);
                 }
             }
         }
@@ -3791,6 +3778,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return extractorDescription + liveFromStartDescription;
     }
 
+    private boolean containsPoTokenArg(String extractorArg) {
+        return extractorArg != null
+            && extractorArg.toLowerCase(java.util.Locale.US).contains("po_token=");
+    }
+
     private String redactYtDlpExtractorArgForLog(String extractorArg) {
         if (extractorArg == null) {
             return "";
@@ -3800,6 +3792,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void addPreferredYtDlpClient(LinkedHashSet<String> extractorArgs, String clientName) {
+        addPreferredYtDlpClient(extractorArgs, clientName, false);
+    }
+
+    private void addPreferredYtDlpClient(
+        LinkedHashSet<String> extractorArgs,
+        String clientName,
+        boolean includePoToken
+    ) {
         if (extractorArgs == null || isBlank(clientName)) {
             return;
         }
@@ -3813,7 +3813,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          * each client's prefix gives yt-dlp the best chance of finding a working
          * combination without requiring a fresh token per client.
          */
-        if (settings != null && settings.hasYtDlpPoToken()) {
+        if (includePoToken && settings != null && settings.hasYtDlpPoToken()) {
             String tokenValue = settings.getYtDlpPoTokenValue();
             String tokenType = settings.getYtDlpPoTokenType();
 
