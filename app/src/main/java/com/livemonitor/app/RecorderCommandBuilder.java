@@ -244,8 +244,12 @@ public class RecorderCommandBuilder {
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
         args.add("--retries");
-        args.add("10");
+        args.add("infinite");
         args.add("--fragment-retries");
+        args.add("infinite");
+        args.add("--extractor-retries");
+        args.add("infinite");
+        args.add("--file-access-retries");
         args.add("infinite");
         args.add("--retry-sleep");
         args.add("5");
