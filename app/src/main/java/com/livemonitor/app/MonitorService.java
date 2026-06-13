@@ -1521,9 +1521,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 builder,
                 videoUrl,
                 outputPath,
+                tempDirectoryPath,
                 appSettings,
                 config,
-                extractorArg,
                 true,
                 allowWaitForVideo
             ));
