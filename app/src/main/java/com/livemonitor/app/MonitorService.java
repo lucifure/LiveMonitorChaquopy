@@ -1908,6 +1908,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String tempPath = findYtDlpPathValue(args, "temp");
         String outputTemplate = findYtDlpOptionValue(args, "-o");
 
+        if (isBlank(homePath) && !isBlank(outputTemplate)) {
+            File outputFile = new File(outputTemplate);
+            File parent = outputFile.isAbsolute() ? outputFile.getParentFile() : null;
+
+            if (parent != null) {
+                homePath = parent.getAbsolutePath();
+            }
+        }
+
         return "home="
             + describeDirectoryForDiagnostics(homePath, outputTemplate)
             + ", temp="
