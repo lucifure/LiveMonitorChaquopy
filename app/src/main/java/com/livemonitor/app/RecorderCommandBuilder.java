@@ -227,8 +227,11 @@ public class RecorderCommandBuilder {
         args.add(remoteConfig.getYtDlpExecutable());
         args.add("--js-runtime");
         args.add("quickjs");
-        args.add("--wait-for-video");
-        args.add("60");
+
+        if (allowWaitForVideo) {
+            args.add("--wait-for-video");
+            args.add("60");
+        }
 
         if (allowLiveFromStart) {
             args.add("--live-from-start");
@@ -262,15 +265,17 @@ public class RecorderCommandBuilder {
         args.add("mp4");
 
         File outputFile = isBlank(outputMp4Path) ? null : new File(outputMp4Path);
-        File homeDirectory = outputFile == null ? null : outputFile.getParentFile();
 
-        if (homeDirectory != null) {
-            args.add("-P");
-            args.add("home:" + homeDirectory.getAbsolutePath());
-        }
-
+        /*
+         * Use an absolute output path for youtubedl-android. Its request
+         * wrapper can collapse repeated -P/--paths options, which leaves
+         * yt-dlp running without a reliable home directory and produces the
+         * observed stuck 0 B recorder diagnostics. Keeping the final output
+         * absolute matches the Termux-style command while still allowing a
+         * separate temp directory when the wrapper preserves it.
+         */
         if (!isBlank(tempDirectoryPath)) {
-            args.add("-P");
+            args.add("--paths");
             args.add("temp:" + tempDirectoryPath.trim());
         }
 
