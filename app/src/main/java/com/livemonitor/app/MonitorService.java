@@ -1563,9 +1563,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 allowLiveFromStart,
                 allowWaitForVideo
             ),
-            "youtube:player_client=android_vr",
+            appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
+                ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
+                : "youtube:player_client=android_vr",
             allowLiveFromStart,
-            "youtube:player_client=android_vr, format=bv*[height<=480]+ba/b DASH, noPoToken=true"
+            (appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
+                ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
+                : "youtube:player_client=android_vr, noPoToken=true")
+                + ", format=bv*[height<=480]+ba/b DASH"
                 + (appSettings != null && appSettings.isLiveFromStartEnabled()
                     ? ", liveFromStart=" + allowLiveFromStart
                     : "")
