@@ -1516,19 +1516,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        for (String extractorArg : extractorArgs) {
-            attempts.add(buildYtDlpPrimaryRecordAttempt(
-                builder,
-                videoUrl,
-                outputPath,
-                tempDirectoryPath,
-                appSettings,
-                config,
-                true,
-                allowWaitForVideo
-            ));
-        }
-
         if (!isBlank(finalMp4OutputPath)) {
             attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
                 builder,
@@ -1537,6 +1524,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 tempDirectoryPath,
                 appSettings,
                 config,
+                true,
+                allowWaitForVideo
+            ));
+        }
+
+        for (String extractorArg : extractorArgs) {
+            attempts.add(buildYtDlpPrimaryRecordAttempt(
+                builder,
+                videoUrl,
+                outputPath,
+                tempDirectoryPath,
+                appSettings,
+                config,
+                extractorArg,
                 true,
                 allowWaitForVideo
             ));

@@ -243,10 +243,6 @@ public class RecorderCommandBuilder {
         args.add("infinite");
         args.add("--fragment-retries");
         args.add("infinite");
-        args.add("--extractor-retries");
-        args.add("infinite");
-        args.add("--file-access-retries");
-        args.add("infinite");
         args.add("--retry-sleep");
         args.add("5");
         args.add("--socket-timeout");
@@ -257,11 +253,6 @@ public class RecorderCommandBuilder {
         args.add("bv*[height<=480]+ba/b");
         args.add("--merge-output-format");
         args.add("mp4");
-
-        if (!isBlank(tempDirectoryPath)) {
-            args.add("-P");
-            args.add("temp:" + tempDirectoryPath.trim());
-        }
 
         args.add("-o");
         args.add(outputMp4Path);
