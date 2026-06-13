@@ -243,10 +243,6 @@ public class RecorderCommandBuilder {
         args.add("infinite");
         args.add("--fragment-retries");
         args.add("infinite");
-        args.add("--extractor-retries");
-        args.add("infinite");
-        args.add("--file-access-retries");
-        args.add("infinite");
         args.add("--retry-sleep");
         args.add("5");
         args.add("--socket-timeout");
