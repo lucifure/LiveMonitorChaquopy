@@ -1325,7 +1325,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + attempts.size()
                     + ", "
                     + attempt.describe()
-                    + ", retries=10, command="
+                    + ", retries=infinite, command="
                     + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
