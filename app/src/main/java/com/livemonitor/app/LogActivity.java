@@ -10,6 +10,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -165,29 +166,55 @@ public class LogActivity extends AppCompatActivity {
             return;
         }
 
-        String[] labels = new String[chunks.length];
+        String[] labels = new String[chunks.length * 2];
         for (int i = 0; i < chunks.length; i++) {
-            labels[i] = "Copy part " + (i + 1) + " of " + chunks.length;
+            labels[i * 2] = "Copy part " + (i + 1) + " of " + chunks.length;
+            labels[i * 2 + 1] = "View/select part " + (i + 1) + " of " + chunks.length;
         }
 
         new AlertDialog.Builder(this)
-            .setTitle("Log is large")
-            .setMessage("Android may truncate very large clipboard text. Copy the log in parts and paste them one by one.")
+            .setTitle("Log split into " + chunks.length + " parts")
+            .setMessage("Each part is kept below the clipboard limit. Copy a part directly, or open a selectable part to select/copy only the lines you need.")
             .setItems(labels, (dialog, which) -> {
-                copyTextToClipboard("LiveMonitor Global Log part " + (which + 1) + " of " + chunks.length, chunks[which]);
-                Toast.makeText(
-                    this,
-                    "Copied log part " + (which + 1) + " of " + chunks.length + ".",
-                    Toast.LENGTH_SHORT
-                ).show();
+                int partIndex = which / 2;
+                if (which % 2 == 0) {
+                    copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
+                    Toast.makeText(
+                        this,
+                        "Copied log part " + (partIndex + 1) + " of " + chunks.length + ".",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                } else {
+                    showSelectableLogPart(chunks, partIndex);
+                }
             })
             .setNegativeButton("Cancel", null)
             .show();
     }
 
+    private void showSelectableLogPart(String[] chunks, int partIndex) {
+        TextView logTextView = new TextView(this);
+        logTextView.setText(chunks[partIndex]);
+        logTextView.setTextIsSelectable(true);
+        logTextView.setTextSize(12);
+        logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(logTextView);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Log part " + (partIndex + 1) + " of " + chunks.length)
+            .setView(scrollView)
+            .setPositiveButton("Copy this part", (dialog, which) -> {
+                copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
+                Toast.makeText(this, "Copied log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("Close", null)
+            .show();
+    }
+
     private String[] splitLogForClipboard(String text) {
         int safeChunkCount = Math.max(2, (int) Math.ceil(text.length() / (double) CLIPBOARD_SAFE_CHUNK_CHARS));
-        safeChunkCount = Math.min(3, safeChunkCount);
         int targetChunkLength = (int) Math.ceil(text.length() / (double) safeChunkCount);
         String[] chunks = new String[safeChunkCount];
 
