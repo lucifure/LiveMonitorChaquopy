@@ -207,8 +207,10 @@ public class RecorderCommandBuilder {
      * Builds the primary no-PO-token recorder path from the proven Termux
      * android_vr DASH command. Keep this intentionally self-contained instead
      * of layering it on top of the HLS/client-rotation recorder builder: this
-     * path should not inherit WebView cookies, PO-token extractor args, or
-     * bounded retry defaults while android_vr DASH works without them.
+     * path should not inherit PO-token extractor args or bounded retry
+     * defaults while android_vr DASH works without them. Cookies are still
+     * allowed because they are normal signed-in session data and do not change
+     * the without-PO-token extractor chain.
      */
     public List<String> buildAndroidVrDashRecordArgs(
         String videoUrl,
@@ -241,8 +243,12 @@ public class RecorderCommandBuilder {
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
         args.add("--retries");
-        args.add("10");
+        args.add("infinite");
         args.add("--fragment-retries");
+        args.add("infinite");
+        args.add("--extractor-retries");
+        args.add("infinite");
+        args.add("--file-access-retries");
         args.add("infinite");
         args.add("--retry-sleep");
         args.add("5");
@@ -270,6 +276,12 @@ public class RecorderCommandBuilder {
 
         args.add("-o");
         args.add(outputFile == null ? outputMp4Path : outputFile.getName());
+
+        // Keep the android_vr chain token-free, but pass saved WebView cookies
+        // when available so YouTube bot/rate-limit checks do not stop the
+        // otherwise working no-PO-token DASH recorder before it writes bytes.
+        addSettingsYtDlpArgs(args, settings, false);
+
         args.add(videoUrl);
 
         return Collections.unmodifiableList(args);
