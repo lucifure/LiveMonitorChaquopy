@@ -1,5 +1,6 @@
 package com.livemonitor.app;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -240,7 +241,7 @@ public class RecorderCommandBuilder {
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
         args.add("--retries");
-        args.add("infinite");
+        args.add("10");
         args.add("--fragment-retries");
         args.add("infinite");
         args.add("--extractor-retries");
@@ -258,13 +259,21 @@ public class RecorderCommandBuilder {
         args.add("--merge-output-format");
         args.add("mp4");
 
+        File outputFile = isBlank(outputMp4Path) ? null : new File(outputMp4Path);
+        File homeDirectory = outputFile == null ? null : outputFile.getParentFile();
+
+        if (homeDirectory != null) {
+            args.add("-P");
+            args.add("home:" + homeDirectory.getAbsolutePath());
+        }
+
         if (!isBlank(tempDirectoryPath)) {
             args.add("-P");
             args.add("temp:" + tempDirectoryPath.trim());
         }
 
         args.add("-o");
-        args.add(outputMp4Path);
+        args.add(outputFile == null ? outputMp4Path : outputFile.getName());
         args.add(videoUrl);
 
         return Collections.unmodifiableList(args);
