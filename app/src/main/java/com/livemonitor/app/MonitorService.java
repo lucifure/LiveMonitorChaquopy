@@ -1706,7 +1706,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LogItem.SOURCE_RECORDER,
             channel,
             "Starting bundled youtubedl-android primary recorder process.",
-            "processId=" + processId
+            "processId=" + processId + ", diagnostics=" + buildYtDlpRecorderDiagnostics(args)
         );
 
         Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
@@ -1726,11 +1726,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         };
 
         activeYoutubedlAndroidRecordings.add(processId);
+        Thread diagnosticsThread = startYtDlpRecorderDiagnostics(processId, args, channel);
 
         try {
             executeYoutubedlAndroidRequest(request, processId, callback);
         } finally {
             activeYoutubedlAndroidRecordings.remove(processId);
+            diagnosticsThread.interrupt();
         }
 
         return 0;
@@ -1865,6 +1867,152 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return "";
+    }
+
+    private Thread startYtDlpRecorderDiagnostics(
+        String processId,
+        List<String> args,
+        ChannelItem channel
+    ) {
+        Thread diagnosticsThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()
+                && activeYoutubedlAndroidRecordings.contains(processId)) {
+                try {
+                    Thread.sleep(15_000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+
+                if (!activeYoutubedlAndroidRecordings.contains(processId)) {
+                    break;
+                }
+
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "youtubedl-android recorder diagnostics.",
+                    "processId=" + processId + ", " + buildYtDlpRecorderDiagnostics(args)
+                );
+            }
+        }, "YtDlpRecorderDiagnostics-" + processId);
+
+        diagnosticsThread.setDaemon(true);
+        diagnosticsThread.start();
+        return diagnosticsThread;
+    }
+
+    private String buildYtDlpRecorderDiagnostics(List<String> args) {
+        String homePath = findYtDlpPathValue(args, "home");
+        String tempPath = findYtDlpPathValue(args, "temp");
+        String outputTemplate = findYtDlpOptionValue(args, "-o");
+
+        return "home="
+            + describeDirectoryForDiagnostics(homePath, outputTemplate)
+            + ", temp="
+            + describeDirectoryForDiagnostics(tempPath, outputTemplate)
+            + ", outputTemplate="
+            + outputTemplate
+            + ", format="
+            + findYtDlpOptionValue(args, "-f")
+            + ", extractorArgs="
+            + findYtDlpOptionValue(args, "--extractor-args");
+    }
+
+    private String findYtDlpOptionValue(List<String> args, String option) {
+        if (args == null || isBlank(option)) {
+            return "";
+        }
+
+        for (int i = 0; i < args.size() - 1; i++) {
+            if (option.equals(args.get(i))) {
+                String value = args.get(i + 1);
+                return value == null ? "" : value;
+            }
+        }
+
+        return "";
+    }
+
+    private String describeDirectoryForDiagnostics(String directoryPath, String outputTemplate) {
+        if (isBlank(directoryPath)) {
+            return "empty";
+        }
+
+        try {
+            File directory = new File(directoryPath);
+            StringBuilder builder = new StringBuilder();
+            builder.append(directoryPath)
+                .append("{exists=")
+                .append(directory.exists())
+                .append(", dir=")
+                .append(directory.isDirectory());
+
+            if (!directory.exists() || !directory.isDirectory()) {
+                builder.append('}');
+                return builder.toString();
+            }
+
+            File[] files = directory.listFiles();
+            int fileCount = files == null ? 0 : files.length;
+            long totalBytes = 0L;
+            StringBuilder sample = new StringBuilder();
+            String outputBase = getOutputTemplateBaseName(outputTemplate);
+
+            if (files != null) {
+                for (File file : files) {
+                    if (file == null || !file.isFile()) {
+                        continue;
+                    }
+
+                    long length = Math.max(0L, file.length());
+                    totalBytes += length;
+                    String name = file.getName();
+                    boolean relevant = isBlank(outputBase)
+                        || name.startsWith(outputBase)
+                        || name.endsWith(".part")
+                        || name.endsWith(".ytdl")
+                        || name.endsWith(".m4s")
+                        || name.endsWith(".ts")
+                        || name.endsWith(".mp4");
+
+                    if (relevant && sample.length() < 350) {
+                        if (sample.length() > 0) {
+                            sample.append("; ");
+                        }
+
+                        sample.append(name).append('=').append(length).append('B');
+                    }
+                }
+            }
+
+            builder.append(", files=")
+                .append(fileCount)
+                .append(", bytes=")
+                .append(totalBytes)
+                .append(", sample=[")
+                .append(sample)
+                .append("]}");
+            return builder.toString();
+        } catch (RuntimeException e) {
+            return directoryPath + "{error=" + e.getClass().getSimpleName() + "}";
+        }
+    }
+
+    private String getOutputTemplateBaseName(String outputTemplate) {
+        if (isBlank(outputTemplate)) {
+            return "";
+        }
+
+        String name = new File(outputTemplate).getName();
+        int dot = name.lastIndexOf('.');
+
+        if (dot <= 0) {
+            return name;
+        }
+
+        return name.substring(0, dot);
     }
 
     private String getYoutubedlAndroidFfmpegLocation() {
