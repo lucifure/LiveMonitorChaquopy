@@ -31,7 +31,7 @@ import java.util.Locale;
 public class RecordingFileManager {
 
     private static final String RECORDINGS_DIR_NAME = "recordings";
-    private static final String TEMP_DIR_NAME = "temp";
+    private static final String TEMP_DIR_NAME = ".temp_cache";
     private static final String COMPLETED_DIR_NAME = "completed";
     private static final String RECOVERABLE_DIR_NAME = "recoverable";
 

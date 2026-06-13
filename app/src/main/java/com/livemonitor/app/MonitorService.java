@@ -1696,6 +1696,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             throw new IllegalStateException("youtubedl-android recorder is not ready.");
         }
 
+        cleanYtDlpTempFragments(args);
+
         YoutubeDLRequest request = buildYoutubedlAndroidRequest(videoUrl, args);
         String processId = isBlank(recordingId) ? "yt-dlp-primary-recorder" : recordingId;
 
@@ -1807,6 +1809,62 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return request;
+    }
+
+    private void cleanYtDlpTempFragments(List<String> args) {
+        String tempPath = findYtDlpPathValue(args, "temp");
+
+        if (isBlank(tempPath)) {
+            return;
+        }
+
+        try {
+            File tempDirectory = new File(tempPath);
+            File[] files = tempDirectory.listFiles();
+
+            if (files == null) {
+                return;
+            }
+
+            for (File file : files) {
+                if (file == null || !file.isFile()) {
+                    continue;
+                }
+
+                String name = file.getName();
+
+                if (name.endsWith(".part")
+                    || name.endsWith(".ytdl")
+                    || name.endsWith(".ts")
+                    || name.endsWith(".m4s")) {
+                    safeDelete(file.getAbsolutePath());
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Best-effort cleanup, matching the Termux script without blocking recording.
+        }
+    }
+
+    private String findYtDlpPathValue(List<String> args, String pathType) {
+        if (args == null || isBlank(pathType)) {
+            return "";
+        }
+
+        String prefix = pathType + ":";
+
+        for (int i = 0; i < args.size() - 1; i++) {
+            if (!"-P".equals(args.get(i)) && !"--paths".equals(args.get(i))) {
+                continue;
+            }
+
+            String value = args.get(i + 1);
+
+            if (!isBlank(value) && value.startsWith(prefix)) {
+                return value.substring(prefix.length()).trim();
+            }
+        }
+
+        return "";
     }
 
     private String getYoutubedlAndroidFfmpegLocation() {
