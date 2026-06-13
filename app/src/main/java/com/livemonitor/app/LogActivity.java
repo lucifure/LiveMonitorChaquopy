@@ -198,7 +198,7 @@ public class LogActivity extends AppCompatActivity {
             Button viewPartButton = new Button(this);
             viewPartButton.setAllCaps(false);
             viewPartButton.setText("View/Select");
-            viewPartButton.setOnClickListener(v -> showSelectableLogPart(chunks, partIndex));
+            viewPartButton.setOnClickListener(v -> showSelectableGlobalLogPart(chunks, partIndex));
             LinearLayout.LayoutParams viewParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             viewParams.leftMargin = dp(8);
             row.addView(viewPartButton, viewParams);
@@ -216,28 +216,7 @@ public class LogActivity extends AppCompatActivity {
             .show();
     }
 
-    private void showSelectableLogPart(String[] chunks, int partIndex) {
-        TextView logTextView = new TextView(this);
-        logTextView.setText(chunks[partIndex]);
-        logTextView.setTextIsSelectable(true);
-        logTextView.setTextSize(12);
-        logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
-
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.addView(logTextView);
-
-        new AlertDialog.Builder(this)
-            .setTitle("Log part " + (partIndex + 1) + " of " + chunks.length)
-            .setView(scrollView)
-            .setPositiveButton("Copy this part", (dialog, which) -> {
-                copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
-                Toast.makeText(this, "Copied log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("Close", null)
-            .show();
-    }
-
-    private void showSelectableLogPart(String[] chunks, int partIndex) {
+    private void showSelectableGlobalLogPart(String[] chunks, int partIndex) {
         TextView logTextView = new TextView(this);
         logTextView.setText(chunks[partIndex]);
         logTextView.setTextIsSelectable(true);

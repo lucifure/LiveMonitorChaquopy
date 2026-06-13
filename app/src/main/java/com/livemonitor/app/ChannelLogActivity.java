@@ -201,7 +201,7 @@ public class ChannelLogActivity extends AppCompatActivity {
             Button viewPartButton = new Button(this);
             viewPartButton.setAllCaps(false);
             viewPartButton.setText("View/Select");
-            viewPartButton.setOnClickListener(v -> showSelectableLogPart(chunks, partIndex));
+            viewPartButton.setOnClickListener(v -> showSelectableChannelLogPart(chunks, partIndex));
             LinearLayout.LayoutParams viewParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             viewParams.leftMargin = dp(8);
             row.addView(viewPartButton, viewParams);
@@ -219,7 +219,7 @@ public class ChannelLogActivity extends AppCompatActivity {
             .show();
     }
 
-    private void showSelectableLogPart(String[] chunks, int partIndex) {
+    private void showSelectableChannelLogPart(String[] chunks, int partIndex) {
         TextView logTextView = new TextView(this);
         logTextView.setText(chunks[partIndex]);
         logTextView.setTextIsSelectable(true);

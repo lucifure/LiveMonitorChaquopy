@@ -1606,6 +1606,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecorderCommandBuilder builder,
         String videoUrl,
         String outputPath,
+        String unusedTempDirectoryPath,
+        AppSettings appSettings,
+        RemoteConfig config,
+        String extractorArg,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
+        return buildYtDlpPrimaryRecordAttempt(
+            builder,
+            videoUrl,
+            outputPath,
+            appSettings,
+            config,
+            extractorArg,
+            allowLiveFromStart,
+            allowWaitForVideo
+        );
+    }
+
+    private YtDlpResolveAttempt buildYtDlpPrimaryRecordAttempt(
+        RecorderCommandBuilder builder,
+        String videoUrl,
+        String outputPath,
         AppSettings appSettings,
         RemoteConfig config,
         String extractorArg,
