@@ -169,25 +169,53 @@ public class ChannelLogActivity extends AppCompatActivity {
             return;
         }
 
-        String[] labels = new String[chunks.length * 2];
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(12), 0, dp(12), 0);
+
+        TextView helpText = new TextView(this);
+        helpText.setText("Choose Copy to place a safe-sized part on the clipboard, or View/Select to select only the lines you need.");
+        helpText.setPadding(0, 0, 0, dp(8));
+        content.addView(helpText);
+
         for (int i = 0; i < chunks.length; i++) {
-            labels[i * 2] = "Copy part " + (i + 1) + " of " + chunks.length;
-            labels[i * 2 + 1] = "View/select part " + (i + 1) + " of " + chunks.length;
+            final int partIndex = i;
+
+            TextView partLabel = new TextView(this);
+            partLabel.setText("Part " + (i + 1) + " of " + chunks.length + " (" + chunks[i].length() + " chars)");
+            partLabel.setPadding(0, dp(8), 0, dp(4));
+            content.addView(partLabel);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button copyPartButton = new Button(this);
+            copyPartButton.setAllCaps(false);
+            copyPartButton.setText("Copy");
+            copyPartButton.setOnClickListener(v -> {
+                copyTextToClipboard("LiveMonitor Channel Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
+                Toast.makeText(this, "Copied channel log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
+            });
+            row.addView(copyPartButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            Button viewPartButton = new Button(this);
+            viewPartButton.setAllCaps(false);
+            viewPartButton.setText("View/Select");
+            viewPartButton.setOnClickListener(v -> showSelectableLogPart(chunks, partIndex));
+            LinearLayout.LayoutParams viewParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            viewParams.leftMargin = dp(8);
+            row.addView(viewPartButton, viewParams);
+
+            content.addView(row);
         }
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(content);
 
         new AlertDialog.Builder(this)
             .setTitle("Channel log split into " + chunks.length + " parts")
-            .setMessage("Each part is kept below the clipboard limit. Copy a part directly, or open a selectable part to select/copy only the lines you need.")
-            .setItems(labels, (dialog, which) -> {
-                int partIndex = which / 2;
-                if (which % 2 == 0) {
-                    copyTextToClipboard("LiveMonitor Channel Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
-                    Toast.makeText(this, "Copied channel log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
-                } else {
-                    showSelectableLogPart(chunks, partIndex);
-                }
-            })
-            .setNegativeButton("Cancel", null)
+            .setView(scrollView)
+            .setNegativeButton("Close", null)
             .show();
     }
 

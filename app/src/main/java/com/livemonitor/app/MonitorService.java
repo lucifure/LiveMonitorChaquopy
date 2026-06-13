@@ -1516,13 +1516,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        /*
-         * Prefer the no-PO-token android_vr DASH recorder first. Current YouTube
-         * behavior returns separate DASH video/audio for this client without a PO
-         * token, and yt-dlp can merge those streams directly to the final MP4.
-         */
-        if (!isBlank(finalMp4OutputPath)) {
-            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+        for (String extractorArg : extractorArgs) {
+            attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
                 videoUrl,
                 outputPath,
