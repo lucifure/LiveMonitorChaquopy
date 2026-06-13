@@ -254,11 +254,6 @@ public class RecorderCommandBuilder {
         args.add("--merge-output-format");
         args.add("mp4");
 
-        if (!isBlank(tempDirectoryPath)) {
-            args.add("-P");
-            args.add("temp:" + tempDirectoryPath.trim());
-        }
-
         args.add("-o");
         args.add(outputMp4Path);
         args.add(videoUrl);
