@@ -1516,13 +1516,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        /*
-         * Prefer the no-PO-token android_vr DASH recorder first. Current YouTube
-         * behavior returns separate DASH video/audio for this client without a PO
-         * token, and yt-dlp can merge those streams directly to the final MP4.
-         */
-        if (!isBlank(finalMp4OutputPath)) {
-            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+        for (String extractorArg : extractorArgs) {
+            attempts.add(buildYtDlpPrimaryRecordAttempt(
                 builder,
                 videoUrl,
                 outputPath,
@@ -2128,9 +2123,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean cancelRequested = false;
 
         try {
-            if (FFmpegRunner.isRunning(recordingId)
+            boolean recorderProcessRunning = FFmpegRunner.isRunning(recordingId)
                 || YtDlpRunner.isRecording(recordingId)
-                || activeYoutubedlAndroidRecordings.contains(recordingId)) {
+                || activeYoutubedlAndroidRecordings.contains(recordingId);
+
+            if (!networkAvailable) {
+                stalledRecording.markPausedNetwork("Network unavailable; keeping recorded files until internet returns.");
+                storage.upsertRecording(stalledRecording);
+                activeRecordings.remove(stalledRecording.getId());
+                activeRecordings.remove(channelId);
+                progressTracker.untrack(stalledRecording);
+                broadcastRecordingUpdated("Recording paused until network returns.");
+                return;
+            }
+
+            String resolvedChannelId = resolveChannelId(channel.getUrl());
+            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+
+            if (recorderProcessRunning && liveInfo != null && stalledRecording.matchesVideo(liveInfo.videoId)) {
                 stalledRecording.setDiagnosticMessage(
                     "No file growth detected; keeping the active recorder alive while reconnect retries continue."
                 );
@@ -2140,15 +2150,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
                     channel,
-                    "Recording progress stalled; active recorder is still running.",
+                    "Recording progress stalled; active recorder is still running and the live stream is still active.",
                     "recordingId=" + recordingId
                 );
                 broadcastRecordingUpdated("Recorder reconnect is still running.");
                 return;
             }
-
-            String resolvedChannelId = resolveChannelId(channel.getUrl());
-            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
 
             if (liveInfo == null) {
                 activeRecordings.remove(stalledRecording.getId());
