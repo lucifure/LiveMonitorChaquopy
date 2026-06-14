@@ -1757,7 +1757,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String description = (mwebPoToken
                 ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
                 : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
-            + ", format=bv*[height<=480]+ba/b DASH"
+            + ", format=" + RecorderCommandBuilder.buildDashFormatSelector(appSettings) + " DASH"
             + (appSettings != null && appSettings.isLiveFromStartEnabled()
                 ? ", liveFromStart=" + allowLiveFromStart
                 : "");
