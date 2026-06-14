@@ -209,7 +209,8 @@ public class RecorderCommandBuilder {
      * only the extractor identity to the yt-dlp-recommended mweb token+cookies
      * form; otherwise keep the original no-PO-token android_vr chain.
      */
-    public List<String> buildAndroidVrDashRecordArgs(
+    public List<String> buildDashRecordArgs(
+        String playerClient,
         String videoUrl,
         String outputMp4Path,
         String tempDirectoryPath,
@@ -238,9 +239,12 @@ public class RecorderCommandBuilder {
         }
 
         args.add("--extractor-args");
-        String mwebPoTokenExtractorArgs = buildMwebPoTokenExtractorArgs(settings);
+        String normalizedPlayerClient = normalizePlayerClient(playerClient);
+        String mwebPoTokenExtractorArgs = "mweb".equals(normalizedPlayerClient)
+            ? buildMwebPoTokenExtractorArgs(settings)
+            : "";
         args.add(isBlank(mwebPoTokenExtractorArgs)
-            ? "youtube:player_client=android_vr"
+            ? "youtube:player_client=" + normalizedPlayerClient
             : mwebPoTokenExtractorArgs);
         args.add("--hls-use-mpegts");
         args.add("--no-part");
@@ -282,14 +286,48 @@ public class RecorderCommandBuilder {
         args.add("-o");
         args.add(outputFile == null ? outputMp4Path : outputFile.getName());
 
-        // Pass cookies without allowing settings to replace the selected
-        // extractor args. The mweb PO-token path is only selected above when
-        // cookies exist, so token and cookies are applied together or not at all.
-        addSettingsYtDlpArgs(args, settings, false);
+        // Only mweb supports the cookies/PO-token path. Other player clients can
+        // reject cookies and be skipped by yt-dlp, so keep them cookie-free.
+        if ("mweb".equals(normalizedPlayerClient)) {
+            addSettingsYtDlpArgs(args, settings, false);
+        }
 
         args.add(videoUrl);
 
         return Collections.unmodifiableList(args);
+    }
+
+    /**
+     * Backward-compatible wrapper for callers which still request the historical
+     * android_vr DASH recorder explicitly.
+     */
+    public List<String> buildAndroidVrDashRecordArgs(
+        String videoUrl,
+        String outputMp4Path,
+        String tempDirectoryPath,
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        boolean allowLiveFromStart,
+        boolean allowWaitForVideo
+    ) {
+        return buildDashRecordArgs(
+            "android_vr",
+            videoUrl,
+            outputMp4Path,
+            tempDirectoryPath,
+            settings,
+            remoteConfig,
+            allowLiveFromStart,
+            allowWaitForVideo
+        );
+    }
+
+    private String normalizePlayerClient(String playerClient) {
+        if (isBlank(playerClient)) {
+            return "android_vr";
+        }
+
+        return playerClient.trim().toLowerCase(java.util.Locale.US);
     }
 
     private String buildMwebPoTokenExtractorArgs(AppSettings settings) {
