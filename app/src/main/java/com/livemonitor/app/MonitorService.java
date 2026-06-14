@@ -1323,6 +1323,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + (attemptIndex + 1)
                     + "/"
                     + attempts.size()
+                    + ", playerClient="
+                    + attempt.playerClient
                     + ", "
                     + attempt.describe()
                     + ", retries=infinite, command="
@@ -1372,6 +1374,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
 
                 if (exitCode == 0) {
+                    if (recordingHasAnyOutputData(recording)) {
+                        saveLastWorkingPlayerClient(attempt, channel);
+                    }
                     log(
                         LogItem.LEVEL_SUCCESS,
                         LogItem.SOURCE_RECORDER,
@@ -1391,6 +1396,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         + ")"
                 );
 
+                if (isClientLevelFailure(lastFailureReason)
+                    && attemptIndex + 1 < attempts.size()
+                    && !recordingHasAnyOutputData(recording)) {
+                    logClientLevelFailure(channel, recording, attempt, lastFailureReason);
+                    safeDelete(recording.getCurrentTempSegmentPath());
+                    attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
+                    continue;
+                }
+
                 if (isHttp429Error(lastFailureReason)) {
                     return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
                 }
@@ -1402,6 +1416,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
 
                 lastFailureReason = addYtDlpAccessGuidance(errorMessage + " (" + attempt.describe() + ")");
+
+                if (isClientLevelFailure(lastFailureReason)
+                    && attemptIndex + 1 < attempts.size()
+                    && !recordingHasAnyOutputData(recording)) {
+                    logClientLevelFailure(channel, recording, attempt, lastFailureReason);
+                    safeDelete(recording.getCurrentTempSegmentPath());
+                    attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
+                    continue;
+                }
 
                 if (isHttp429Error(lastFailureReason)) {
                     return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
@@ -1417,7 +1440,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return true;
             }
 
-            if (attemptIndex + 1 < attempts.size() && !currentRecordingSegmentHasData(recording)) {
+            if (attemptIndex + 1 < attempts.size() && !recordingHasAnyOutputData(recording)) {
                 log(
                     LogItem.LEVEL_WARNING,
                     LogItem.SOURCE_RECORDER,
@@ -1450,6 +1473,72 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             liveInfo,
             lastFailureReason
         );
+    }
+
+    private void saveLastWorkingPlayerClient(YtDlpResolveAttempt attempt, ChannelItem channel) {
+        if (attempt == null || isBlank(attempt.playerClient) || storage == null) {
+            return;
+        }
+
+        storage.setLastWorkingPlayerClient(attempt.playerClient);
+        log(
+            LogItem.LEVEL_SUCCESS,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "yt-dlp player client succeeded; saved as last-working client.",
+            "playerClient=" + attempt.playerClient
+        );
+    }
+
+    private int skipRemainingAttemptsForPlayerClient(
+        List<YtDlpResolveAttempt> attempts,
+        int currentIndex,
+        String playerClient
+    ) {
+        if (attempts == null || isBlank(playerClient)) {
+            return currentIndex;
+        }
+
+        int index = currentIndex;
+
+        while (index + 1 < attempts.size()
+            && playerClient.equals(attempts.get(index + 1).playerClient)) {
+            index++;
+        }
+
+        return index;
+    }
+
+    private void logClientLevelFailure(
+        ChannelItem channel,
+        RecordingItem recording,
+        YtDlpResolveAttempt attempt,
+        String reason
+    ) {
+        log(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "yt-dlp player client failed before writing data; trying next player client.",
+            "recordingId="
+                + (recording == null ? "" : recording.getId())
+                + ", playerClient="
+                + (attempt == null ? "" : attempt.playerClient)
+                + ", reason="
+                + shortenForLog(reason, 300)
+        );
+    }
+
+    private boolean isClientLevelFailure(String output) {
+        if (output == null) {
+            return false;
+        }
+
+        String normalized = output.toLowerCase(java.util.Locale.US);
+        return normalized.contains("no video formats found")
+            || normalized.contains("http error 429")
+            || normalized.contains("sign in to confirm you")
+            || normalized.contains("skipping client");
     }
 
     private boolean shouldStopRecorderAfterUserRequest(
@@ -1514,9 +1603,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = new ArrayList<>();
         boolean retryWithoutLiveFromStart = appSettings != null && appSettings.isLiveFromStartEnabled();
 
-        if (!isBlank(finalMp4OutputPath)) {
-            attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+        if (isBlank(finalMp4OutputPath)) {
+            return attempts;
+        }
+
+        List<String> playerClients = buildPlayerClientAttemptOrder(config);
+
+        for (String playerClient : playerClients) {
+            attempts.add(buildDashPrimaryRecordAttempt(
                 builder,
+                playerClient,
                 videoUrl,
                 finalMp4OutputPath,
                 tempDirectoryPath,
@@ -1527,8 +1623,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ));
 
             if (retryWithoutLiveFromStart) {
-                attempts.add(buildAndroidVrDashPrimaryRecordAttempt(
+                attempts.add(buildDashPrimaryRecordAttempt(
                     builder,
+                    playerClient,
                     videoUrl,
                     finalMp4OutputPath,
                     tempDirectoryPath,
@@ -1543,8 +1640,42 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return attempts;
     }
 
-    private YtDlpResolveAttempt buildAndroidVrDashPrimaryRecordAttempt(
+    private List<String> buildPlayerClientAttemptOrder(RemoteConfig config) {
+        List<String> clients = new ArrayList<>();
+        addUniquePlayerClient(clients, storage == null ? "" : storage.getLastWorkingPlayerClient());
+
+        List<String> configuredClients = config == null
+            ? new RemoteConfig().getYtDlpPlayerClientFallback()
+            : config.getYtDlpPlayerClientFallback();
+
+        for (String client : configuredClients) {
+            addUniquePlayerClient(clients, client);
+        }
+
+        if (clients.isEmpty()) {
+            addUniquePlayerClient(clients, "android_vr");
+        }
+
+        return clients;
+    }
+
+    private void addUniquePlayerClient(List<String> clients, String client) {
+        String normalized = normalizePlayerClient(client);
+
+        if (isBlank(normalized) || clients.contains(normalized)) {
+            return;
+        }
+
+        clients.add(normalized);
+    }
+
+    private String normalizePlayerClient(String client) {
+        return isBlank(client) ? "" : client.trim().toLowerCase(java.util.Locale.US);
+    }
+
+    private YtDlpResolveAttempt buildDashPrimaryRecordAttempt(
         RecorderCommandBuilder builder,
+        String playerClient,
         String videoUrl,
         String outputPath,
         String tempDirectoryPath,
@@ -1553,8 +1684,25 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean allowLiveFromStart,
         boolean allowWaitForVideo
     ) {
+        String normalizedClient = normalizePlayerClient(playerClient);
+        boolean mwebPoToken = "mweb".equals(normalizedClient)
+            && appSettings != null
+            && appSettings.hasYtDlpCookies()
+            && appSettings.hasYtDlpPoToken();
+        String extractorArgs = mwebPoToken
+            ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
+            : "youtube:player_client=" + normalizedClient;
+        String description = (mwebPoToken
+                ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
+                : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
+            + ", format=bv*[height<=480]+ba/b DASH"
+            + (appSettings != null && appSettings.isLiveFromStartEnabled()
+                ? ", liveFromStart=" + allowLiveFromStart
+                : "");
+
         return new YtDlpResolveAttempt(
-            builder.buildAndroidVrDashRecordArgs(
+            builder.buildDashRecordArgs(
+                normalizedClient,
                 videoUrl,
                 outputPath,
                 tempDirectoryPath,
@@ -1563,17 +1711,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 allowLiveFromStart,
                 allowWaitForVideo
             ),
-            appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
-                ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
-                : "youtube:player_client=android_vr",
+            extractorArgs,
             allowLiveFromStart,
-            (appSettings != null && appSettings.hasYtDlpCookies() && appSettings.hasYtDlpPoToken()
-                ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
-                : "youtube:player_client=android_vr, noPoToken=true")
-                + ", format=bv*[height<=480]+ba/b DASH"
-                + (appSettings != null && appSettings.isLiveFromStartEnabled()
-                    ? ", liveFromStart=" + allowLiveFromStart
-                    : "")
+            description,
+            normalizedClient
         );
     }
 
@@ -1622,8 +1763,32 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ),
             extractorArg,
             allowLiveFromStart,
-            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart)
+            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart),
+            extractPlayerClientFromExtractorArgs(extractorArg)
         );
+    }
+
+    private String extractPlayerClientFromExtractorArgs(String extractorArgs) {
+        if (isBlank(extractorArgs)) {
+            return "";
+        }
+
+        String marker = "player_client=";
+        String value = extractorArgs;
+        int index = value.indexOf(marker);
+
+        if (index < 0) {
+            return "";
+        }
+
+        value = value.substring(index + marker.length());
+        int semicolon = value.indexOf(';');
+
+        if (semicolon >= 0) {
+            value = value.substring(0, semicolon);
+        }
+
+        return normalizePlayerClient(value);
     }
 
     private boolean handleYtDlpPrimaryLiveNotReady(
@@ -3377,6 +3542,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
     }
 
+    private boolean recordingHasAnyOutputData(RecordingItem recording) {
+        return currentRecordingSegmentHasData(recording)
+            || fileHasData(recording == null ? "" : recording.getFinalMp4Path());
+    }
+
     private boolean currentRecordingSegmentHasData(RecordingItem recording) {
         if (recording == null || isBlank(recording.getCurrentTempSegmentPath())) {
             return false;
@@ -3384,6 +3554,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             File file = new File(recording.getCurrentTempSegmentPath());
+            return file.exists() && file.length() > 0L;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean fileHasData(String path) {
+        if (isBlank(path)) {
+            return false;
+        }
+
+        try {
+            File file = new File(path);
             return file.exists() && file.length() > 0L;
         } catch (RuntimeException ignored) {
             return false;
@@ -3422,6 +3605,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + (attemptIndex + 1)
                     + "/"
                     + attempts.size()
+                    + ", playerClient="
+                    + attempt.playerClient
                     + ", "
                     + attempt.describe()
                     + ", timeoutSeconds="
@@ -3524,18 +3709,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LogItem.SOURCE_RECORDER,
             channel,
             message,
-            "channel=nightly, reason=" + reason
+            "channel=stable, reason=" + reason
         );
 
         try {
-            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel._NIGHTLY);
+            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel._STABLE);
 
             log(
                 LogItem.LEVEL_SUCCESS,
                 LogItem.SOURCE_REMOTE_CONFIG,
                 null,
                 "youtubedl-android runtime updated.",
-                "Updated bundled yt-dlp from the nightly channel. Continuing yt-dlp-first resolution."
+                "Updated bundled yt-dlp from the stable channel. Continuing yt-dlp-first resolution."
             );
 
             return true;
@@ -3602,7 +3787,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             ),
             extractorArg,
             allowLiveFromStart,
-            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart)
+            buildYtDlpExtractorAttemptDescription(extractorArg, allowLiveFromStart),
+            extractPlayerClientFromExtractorArgs(extractorArg)
         );
     }
 
@@ -5157,17 +5343,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         final String extractorArgs;
         final boolean allowLiveFromStart;
         final String description;
+        final String playerClient;
 
         YtDlpResolveAttempt(
             List<String> args,
             String extractorArgs,
             boolean allowLiveFromStart,
-            String description
+            String description,
+            String playerClient
         ) {
             this.args = args;
             this.extractorArgs = extractorArgs == null ? "" : extractorArgs;
             this.allowLiveFromStart = allowLiveFromStart;
             this.description = description == null ? "" : description;
+            this.playerClient = playerClient == null ? "" : playerClient;
         }
 
         String describe() {
