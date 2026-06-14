@@ -75,6 +75,15 @@ public class PoTokenRefreshWorker extends Worker {
         AppStorage storage = new AppStorage(ctx);
         AppSettings settings = storage.loadSettings();
 
+        String lastWorkingClient = storage.getLastWorkingPlayerClient();
+        if ("android_vr".equals(lastWorkingClient)) {
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "PO token background auto-refresh skipped because android_vr is the last working player client."
+            ));
+            return Result.success();
+        }
+
         if (!settings.isYtDlpPoTokenRefreshNeeded(System.currentTimeMillis())) {
             return Result.success();
         }
@@ -160,13 +169,13 @@ public class PoTokenRefreshWorker extends Worker {
                 storage.appendLog(LogItem.warning(
                     LogItem.SOURCE_REMOTE_CONFIG,
                     "PO token background auto-refresh timed out after "
-                        + WEBVIEW_TIMEOUT_SECONDS + "s. Will retry next cycle."
+                        + WEBVIEW_TIMEOUT_SECONDS + "s. Backing off until the next scheduled cycle."
                 ));
-                return Result.retry();
+                return Result.success();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return Result.retry();
+            return Result.success();
         }
 
         if (tokenSaved.get()) {
@@ -181,6 +190,6 @@ public class PoTokenRefreshWorker extends Worker {
                 + "YouTube session may have expired. "
                 + "Notification sent — open YouTube PO Token Setup to re-sign in."
         ));
-        return Result.retry();
+        return Result.success();
     }
 }

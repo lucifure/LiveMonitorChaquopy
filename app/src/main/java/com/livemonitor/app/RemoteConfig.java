@@ -34,6 +34,7 @@ public class RemoteConfig {
     private static final String JSON_YTDLP_EXECUTABLE = "ytDlpExecutable";
     private static final String JSON_YTDLP_EXTRACTOR_ARGS = "ytDlpExtractorArgs";
     private static final String JSON_YTDLP_EXTRA_ARGS = "ytDlpExtraArgs";
+    private static final String JSON_YTDLP_PLAYER_CLIENT_FALLBACK = "ytDlpPlayerClientFallback";
     private static final String JSON_YTDLP_COOKIES_PATH = "ytDlpCookiesPath";
     private static final String JSON_YTDLP_COOKIES_FROM_BROWSER = "ytDlpCookiesFromBrowser";
     private static final String JSON_YTDLP_COOKIE_HEADER = "ytDlpCookieHeader";
@@ -56,6 +57,7 @@ public class RemoteConfig {
     private String ytDlpExecutable;
     private String ytDlpExtractorArgs;
     private List<String> ytDlpExtraArgs;
+    private List<String> ytDlpPlayerClientFallback;
     private String ytDlpCookiesPath;
     private String ytDlpCookiesFromBrowser;
     private String ytDlpCookieHeader;
@@ -79,6 +81,7 @@ public class RemoteConfig {
         this.ytDlpExecutable = "yt-dlp";
         this.ytDlpExtractorArgs = "";
         this.ytDlpExtraArgs = new ArrayList<>();
+        this.ytDlpPlayerClientFallback = buildDefaultPlayerClientFallback();
         this.ytDlpCookiesPath = "";
         this.ytDlpCookiesFromBrowser = "";
         this.ytDlpCookieHeader = "";
@@ -103,6 +106,7 @@ public class RemoteConfig {
         String ytDlpExecutable,
         String ytDlpExtractorArgs,
         List<String> ytDlpExtraArgs,
+        List<String> ytDlpPlayerClientFallback,
         String ytDlpCookiesPath,
         String ytDlpCookiesFromBrowser,
         String ytDlpCookieHeader,
@@ -125,6 +129,7 @@ public class RemoteConfig {
         this.ytDlpExecutable = isBlank(ytDlpExecutable) ? "yt-dlp" : ytDlpExecutable.trim();
         this.ytDlpExtractorArgs = nullToEmpty(ytDlpExtractorArgs).trim();
         this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+        this.ytDlpPlayerClientFallback = sanitizePlayerClientFallback(ytDlpPlayerClientFallback);
         this.ytDlpCookiesPath = nullToEmpty(ytDlpCookiesPath).trim();
         this.ytDlpCookiesFromBrowser = nullToEmpty(ytDlpCookiesFromBrowser).trim();
         this.ytDlpCookieHeader = nullToEmpty(ytDlpCookieHeader).trim();
@@ -190,6 +195,19 @@ public class RemoteConfig {
             }
         }
 
+        List<String> ytDlpPlayerClientFallback = new ArrayList<>();
+        JSONArray ytDlpPlayerClientFallbackArray = json.optJSONArray(JSON_YTDLP_PLAYER_CLIENT_FALLBACK);
+
+        if (ytDlpPlayerClientFallbackArray != null) {
+            for (int i = 0; i < ytDlpPlayerClientFallbackArray.length(); i++) {
+                String client = ytDlpPlayerClientFallbackArray.optString(i, "").trim();
+
+                if (!client.isEmpty()) {
+                    ytDlpPlayerClientFallback.add(client);
+                }
+            }
+        }
+
         RemoteConfig defaults = new RemoteConfig();
 
         return new RemoteConfig(
@@ -203,6 +221,9 @@ public class RemoteConfig {
             json.optString(JSON_YTDLP_EXECUTABLE, defaults.getYtDlpExecutable()),
             json.optString(JSON_YTDLP_EXTRACTOR_ARGS, defaults.getYtDlpExtractorArgs()),
             ytDlpExtraArgs.isEmpty() ? defaults.getYtDlpExtraArgs() : ytDlpExtraArgs,
+            ytDlpPlayerClientFallback.isEmpty()
+                ? defaults.getYtDlpPlayerClientFallback()
+                : ytDlpPlayerClientFallback,
             json.optString(JSON_YTDLP_COOKIES_PATH, defaults.getYtDlpCookiesPath()),
             json.optString(JSON_YTDLP_COOKIES_FROM_BROWSER, defaults.getYtDlpCookiesFromBrowser()),
             json.optString(JSON_YTDLP_COOKIE_HEADER, defaults.getYtDlpCookieHeader()),
@@ -251,6 +272,14 @@ public class RemoteConfig {
         }
 
         json.put(JSON_YTDLP_EXTRA_ARGS, ytDlpExtraArgsArray);
+
+        JSONArray ytDlpPlayerClientFallbackArray = new JSONArray();
+
+        for (String client : ytDlpPlayerClientFallback) {
+            ytDlpPlayerClientFallbackArray.put(client);
+        }
+
+        json.put(JSON_YTDLP_PLAYER_CLIENT_FALLBACK, ytDlpPlayerClientFallbackArray);
         json.put(JSON_YTDLP_COOKIES_PATH, ytDlpCookiesPath);
         json.put(JSON_YTDLP_COOKIES_FROM_BROWSER, ytDlpCookiesFromBrowser);
         json.put(JSON_YTDLP_COOKIE_HEADER, ytDlpCookieHeader);
@@ -326,7 +355,7 @@ public class RemoteConfig {
         return ageMillis >= 0L && ageMillis <= ttlMillis;
     }
 
-        public String toSummary() {
+    public String toSummary() {
         return "RemoteConfig{"
             + "version=" + configVersion
             + ", minAppVersion=" + minAppVersion
@@ -344,6 +373,7 @@ public class RemoteConfig {
             + ", extractorMode=" + youtubeExtractorMode
             + ", ytDlpExecutable=" + ytDlpExecutable
             + ", ytDlpExtraArgs=" + ytDlpExtraArgs.size()
+            + ", ytDlpPlayerClientFallback=" + ytDlpPlayerClientFallback
             + ", ytDlpCookies=" + hasYtDlpCookies()
             + ", javaHlsFallback=" + javaHlsFallbackEnabled
             + ", innertubeBaseUrl=" + innertubeBaseUrl
@@ -557,6 +587,40 @@ public class RemoteConfig {
             + "Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
     }
 
+    private static List<String> buildDefaultPlayerClientFallback() {
+        List<String> clients = new ArrayList<>();
+        clients.add("android_vr");
+        clients.add("tv");
+        clients.add("web");
+        clients.add("mweb");
+        clients.add("ios");
+        clients.add("tv_embedded");
+        return clients;
+    }
+
+    private static List<String> sanitizePlayerClientFallback(List<String> values) {
+        List<String> clients = new ArrayList<>();
+        List<String> source = values == null || values.isEmpty()
+            ? buildDefaultPlayerClientFallback()
+            : values;
+
+        for (String value : source) {
+            String normalized = nullToEmpty(value).trim().toLowerCase(Locale.US);
+
+            if (normalized.isEmpty() || clients.contains(normalized)) {
+                continue;
+            }
+
+            clients.add(normalized);
+        }
+
+        if (clients.isEmpty()) {
+            clients.addAll(buildDefaultPlayerClientFallback());
+        }
+
+        return clients;
+    }
+
     private static String normalizeExtractorMode(String mode) {
         String normalized = nullToEmpty(mode).trim().toLowerCase(Locale.US);
 
@@ -624,6 +688,10 @@ public class RemoteConfig {
 
     public List<String> getYtDlpExtraArgs() {
         return Collections.unmodifiableList(ytDlpExtraArgs);
+    }
+
+    public List<String> getYtDlpPlayerClientFallback() {
+        return Collections.unmodifiableList(ytDlpPlayerClientFallback);
     }
 
     public String getYtDlpCookiesPath() {
@@ -726,6 +794,10 @@ public class RemoteConfig {
 
     public void setYtDlpExtraArgs(List<String> ytDlpExtraArgs) {
         this.ytDlpExtraArgs = sanitizeStringList(ytDlpExtraArgs);
+    }
+
+    public void setYtDlpPlayerClientFallback(List<String> ytDlpPlayerClientFallback) {
+        this.ytDlpPlayerClientFallback = sanitizePlayerClientFallback(ytDlpPlayerClientFallback);
     }
 
     public void setYtDlpCookiesPath(String ytDlpCookiesPath) {
