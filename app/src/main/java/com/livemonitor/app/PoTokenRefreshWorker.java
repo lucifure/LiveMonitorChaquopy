@@ -22,6 +22,7 @@ import androidx.work.WorkerParameters;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 
 /**
  * WorkManager periodic worker that silently refreshes the GVS PO token
@@ -49,6 +50,11 @@ public class PoTokenRefreshWorker extends Worker {
      * do not reset the clock on an already-running schedule.
      */
     public static void scheduleIfNeeded(Context context) {
+        if (shouldSkipAutoRefreshForAndroidVr(context)) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME);
+            return;
+        }
+
         Constraints constraints = new Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build();
@@ -75,11 +81,10 @@ public class PoTokenRefreshWorker extends Worker {
         AppStorage storage = new AppStorage(ctx);
         AppSettings settings = storage.loadSettings();
 
-        String lastWorkingClient = storage.getLastWorkingPlayerClient();
-        if ("android_vr".equals(lastWorkingClient)) {
+        if (shouldSkipAutoRefreshForAndroidVr(ctx)) {
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_REMOTE_CONFIG,
-                "PO token background auto-refresh skipped because android_vr is the last working player client."
+                "PO token background auto-refresh skipped because android_vr is the active yt-dlp client path."
             ));
             return Result.success();
         }
@@ -191,5 +196,28 @@ public class PoTokenRefreshWorker extends Worker {
                 + "Notification sent — open YouTube PO Token Setup to re-sign in."
         ));
         return Result.success();
+    }
+
+    private static boolean shouldSkipAutoRefreshForAndroidVr(Context context) {
+        if (context == null) {
+            return false;
+        }
+
+        AppStorage storage = new AppStorage(context);
+        if ("android_vr".equals(storage.getLastWorkingPlayerClient())) {
+            return true;
+        }
+
+        RemoteConfig remoteConfig = storage.loadRemoteConfig();
+        List<String> fallbackClients = remoteConfig == null
+            ? null
+            : remoteConfig.getYtDlpPlayerClientFallback();
+        if (fallbackClients == null || fallbackClients.isEmpty()) {
+            return false;
+        }
+
+        String firstClient = fallbackClients.get(0);
+        return firstClient != null
+            && "android_vr".equals(firstClient.trim().toLowerCase(java.util.Locale.US));
     }
 }
