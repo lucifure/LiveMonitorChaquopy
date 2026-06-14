@@ -3524,18 +3524,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LogItem.SOURCE_RECORDER,
             channel,
             message,
-            "channel=nightly, reason=" + reason
+            "channel=stable, reason=" + reason
         );
 
         try {
-            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel._NIGHTLY);
+            YoutubeDL.getInstance().updateYoutubeDL(getApplicationContext(), UpdateChannel._STABLE);
 
             log(
                 LogItem.LEVEL_SUCCESS,
                 LogItem.SOURCE_REMOTE_CONFIG,
                 null,
                 "youtubedl-android runtime updated.",
-                "Updated bundled yt-dlp from the nightly channel. Continuing yt-dlp-first resolution."
+                "Updated bundled yt-dlp from the stable channel. Continuing yt-dlp-first resolution."
             );
 
             return true;
