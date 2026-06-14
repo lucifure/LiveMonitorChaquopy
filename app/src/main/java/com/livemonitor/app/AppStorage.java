@@ -34,6 +34,7 @@ public class AppStorage {
     private static final String KEY_SETTINGS = "settings_json";
     private static final String KEY_REMOTE_CONFIG = "remote_config_json";
     private static final String KEY_LOGS = "logs_json";
+    private static final String KEY_LAST_WORKING_PLAYER_CLIENT = "last_working_player_client";
 
     private static final int DEFAULT_MAX_LOGS = 2_000;
     private static final int DEFAULT_MAX_RECORDINGS = 500;
@@ -439,6 +440,24 @@ public class AppStorage {
                 .putString(KEY_REMOTE_CONFIG, "")
                 .apply();
         }
+    }
+
+
+    public synchronized String getLastWorkingPlayerClient() {
+        return preferences.getString(KEY_LAST_WORKING_PLAYER_CLIENT, "");
+    }
+
+    public synchronized void setLastWorkingPlayerClient(String client) {
+        String normalized = client == null ? "" : client.trim().toLowerCase(java.util.Locale.US);
+
+        if (normalized.isEmpty()) {
+            preferences.edit().remove(KEY_LAST_WORKING_PLAYER_CLIENT).apply();
+            return;
+        }
+
+        preferences.edit()
+            .putString(KEY_LAST_WORKING_PLAYER_CLIENT, normalized)
+            .apply();
     }
 
     public synchronized List<LogItem> loadLogs() {
