@@ -271,9 +271,68 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (channel == null) return;
 
         activeLoops.remove(channel.getId());
+        stopActiveRecordingForRemovedChannel(channel);
         notificationHelper.cancelChannelNotification(channel);
         storage.removeChannel(channel.getId());
         broadcastChannelUpdated("Channel removed.");
+    }
+
+    private void stopActiveRecordingForRemovedChannel(ChannelItem channel) {
+        if (channel == null || isBlank(channel.getId())) {
+            return;
+        }
+
+        RecordingItem recording = findActiveRecordingForChannel(channel.getId());
+        if (recording == null) {
+            return;
+        }
+
+        activeRecordings.remove(channel.getId());
+        activeRecordings.remove(recording.getId());
+        activeRecordings.remove(recording.getChannelId());
+        progressTracker.untrack(recording);
+
+        recording.markStoppedByUser();
+        recording.showInDownloading();
+        storage.upsertRecording(recording);
+
+        cancelActiveRecording(recording);
+        waitForRecordingFileAfterCancellation(recording);
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        boolean savedPlayableFile = saveStoppedRecordingForDownloads(
+            latest == null ? recording : latest,
+            channel
+        );
+
+        log(
+            savedPlayableFile ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            savedPlayableFile
+                ? "Active recording stopped because channel was removed."
+                : "Active recording stopped because channel was removed, but no playable file was found.",
+            "recordingId=" + recording.getId()
+        );
+    }
+
+    private RecordingItem findActiveRecordingForChannel(String channelId) {
+        if (isBlank(channelId)) {
+            return null;
+        }
+
+        RecordingItem recording = activeRecordings.get(channelId);
+        if (recording != null) {
+            return recording;
+        }
+
+        for (RecordingItem candidate : activeRecordings.values()) {
+            if (candidate != null && channelId.equals(candidate.getChannelId())) {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private void handleStopChannel(Intent intent) {

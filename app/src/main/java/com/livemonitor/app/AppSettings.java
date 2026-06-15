@@ -843,7 +843,11 @@ public class AppSettings {
     }
 
     public boolean isYtDlpPoTokenRefreshNeeded(long nowMillis) {
-        if (!hasYtDlpPoToken() || ytDlpPoTokenUpdatedAt <= 0L) {
+        if (!hasYtDlpPoToken()) {
+            return false;
+        }
+
+        if (ytDlpPoTokenUpdatedAt <= 0L) {
             return true;
         }
 
