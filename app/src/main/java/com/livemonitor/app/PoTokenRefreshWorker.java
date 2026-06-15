@@ -49,6 +49,24 @@ public class PoTokenRefreshWorker extends Worker {
      * do not reset the clock on an already-running schedule.
      */
     public static void scheduleIfNeeded(Context context) {
+        if (context == null) {
+            return;
+        }
+
+        Context appContext = context.getApplicationContext();
+        AppStorage storage = new AppStorage(appContext);
+        AppSettings settings = storage.loadSettings();
+        RemoteConfig remoteConfig = storage.loadRemoteConfig();
+
+        if (!isAutomaticRefreshNeeded(settings, remoteConfig, storage.getLastWorkingPlayerClient())) {
+            WorkManager.getInstance(appContext).cancelUniqueWork(WORK_NAME);
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "PO token background auto-refresh skipped (android_vr/no-PO-token path is active)."
+            ));
+            return;
+        }
+
         Constraints constraints = new Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build();
@@ -61,11 +79,35 @@ public class PoTokenRefreshWorker extends Worker {
         .setInitialDelay(1, TimeUnit.HOURS)
         .build();
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
             WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request
         );
+    }
+
+    private static boolean isAutomaticRefreshNeeded(
+        AppSettings settings,
+        RemoteConfig remoteConfig,
+        String lastWorkingPlayerClient
+    ) {
+        if (settings == null) {
+            return false;
+        }
+
+        boolean hasCookies = settings.hasYtDlpCookies()
+            || (remoteConfig != null && remoteConfig.hasYtDlpCookies());
+        if (!hasCookies) {
+            String normalizedClient = normalizePlayerClient(lastWorkingPlayerClient);
+            return !"".equals(normalizedClient) && !"android_vr".equals(normalizedClient);
+        }
+
+        return settings.hasYtDlpPoToken()
+            && settings.isYtDlpPoTokenRefreshNeeded(System.currentTimeMillis());
+    }
+
+    private static String normalizePlayerClient(String playerClient) {
+        return playerClient == null ? "" : playerClient.trim().toLowerCase(java.util.Locale.US);
     }
 
     @NonNull
@@ -74,6 +116,15 @@ public class PoTokenRefreshWorker extends Worker {
         Context ctx = getApplicationContext();
         AppStorage storage = new AppStorage(ctx);
         AppSettings settings = storage.loadSettings();
+        RemoteConfig remoteConfig = storage.loadRemoteConfig();
+
+        if (!isAutomaticRefreshNeeded(settings, remoteConfig, storage.getLastWorkingPlayerClient())) {
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "PO token background auto-refresh skipped (android_vr/no-PO-token path is active)."
+            ));
+            return Result.success();
+        }
 
         if (!settings.isYtDlpPoTokenRefreshNeeded(System.currentTimeMillis())) {
             return Result.success();
