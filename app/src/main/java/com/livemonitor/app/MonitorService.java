@@ -274,10 +274,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem activeRecording = findActiveRecordingForChannel(channel.getId());
 
         if (activeRecording != null) {
-            activeRecordings.remove(activeRecording.getId());
-            activeRecordings.remove(activeRecording.getChannelId());
-            activeRecordings.remove(channel.getId());
-            progressTracker.untrack(activeRecording);
+            removeActiveRecordingTracking(channel.getId(), activeRecording);
             activeRecording.markStoppedByUser();
             activeRecording.showInDownloading();
             storage.upsertRecording(activeRecording);
@@ -327,6 +324,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return null;
+    }
+
+    private void removeActiveRecordingTracking(String channelId, RecordingItem recording) {
+        if (recording != null) {
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(recording.getChannelId());
+            progressTracker.untrack(recording);
+        }
+
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
     }
 
     private void handleStopChannel(Intent intent) {
@@ -1748,7 +1757,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String description = (mwebPoToken
                 ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
                 : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
-            + ", format=bv*[height<=480]+ba/b DASH"
+            + ", format=" + RecorderCommandBuilder.buildDashFormatSelector(appSettings) + " DASH"
             + (appSettings != null && appSettings.isLiveFromStartEnabled()
                 ? ", liveFromStart=" + allowLiveFromStart
                 : "");

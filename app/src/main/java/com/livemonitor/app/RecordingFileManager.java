@@ -8,8 +8,10 @@ import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Handles recording file/folder paths.
@@ -152,6 +154,8 @@ public class RecordingFileManager {
 
         scanRecoverableTsFilesInDirectory(getTempDirectory(), recoverable, settings);
         scanRecoverableTsFilesInDirectory(getRecoverableDirectory(), recoverable, settings);
+        scanRecoverableDashSidecarsInDirectory(getTempDirectory(), recoverable, settings);
+        scanRecoverableDashSidecarsInDirectory(getRecoverableDirectory(), recoverable, settings);
 
         return recoverable;
     }
@@ -409,6 +413,109 @@ public class RecordingFileManager {
             item.markRecoverable("Recovered unfinished TS file from storage scan.");
             output.add(item);
         }
+    }
+
+    private void scanRecoverableDashSidecarsInDirectory(
+        File directory,
+        List<RecordingItem> output,
+        AppSettings settings
+    ) {
+        if (directory == null || output == null || !directory.exists()) {
+            return;
+        }
+
+        File[] files = directory.listFiles();
+
+        if (files == null || files.length == 0) {
+            return;
+        }
+
+        Map<String, List<File>> sidecarsByBaseName = new LinkedHashMap<>();
+
+        for (File file : files) {
+            if (file == null || !file.isFile() || file.length() <= 0L) {
+                continue;
+            }
+
+            String baseName = dashSidecarBaseName(file.getName());
+
+            if (isBlank(baseName)) {
+                continue;
+            }
+
+            List<File> sidecars = sidecarsByBaseName.get(baseName);
+
+            if (sidecars == null) {
+                sidecars = new ArrayList<>();
+                sidecarsByBaseName.put(baseName, sidecars);
+            }
+
+            sidecars.add(file);
+        }
+
+        for (Map.Entry<String, List<File>> entry : sidecarsByBaseName.entrySet()) {
+            List<File> sidecars = entry.getValue();
+
+            if (sidecars == null || sidecars.size() < 2) {
+                continue;
+            }
+
+            File largestSidecar = sidecars.get(0);
+
+            for (File sidecar : sidecars) {
+                if (sidecar != null && sidecar.length() > largestSidecar.length()) {
+                    largestSidecar = sidecar;
+                }
+            }
+
+            String baseName = entry.getKey();
+            RecordingItem item = new RecordingItem(
+                "",
+                "Recovered DASH Recording",
+                "",
+                extractVideoIdFromFileName(baseName),
+                "",
+                baseName,
+                settings.getDownloadQuality(),
+                largestSidecar.getAbsolutePath(),
+                new File(getCompletedDirectory(), baseName + ".mp4").getAbsolutePath()
+            );
+
+            item.markRecoverable("Recovered unfinished yt-dlp DASH sidecars from storage scan.");
+            output.add(item);
+        }
+    }
+
+    private static String dashSidecarBaseName(String fileName) {
+        if (isBlank(fileName)) {
+            return "";
+        }
+
+        String lowerName = fileName.toLowerCase(Locale.US);
+
+        if (!lowerName.endsWith(".mp4") && !lowerName.endsWith(".webm") && !lowerName.endsWith(".m4a")) {
+            return "";
+        }
+
+        int formatMarker = lowerName.lastIndexOf(".f");
+
+        if (formatMarker <= 0) {
+            return "";
+        }
+
+        String formatSuffix = lowerName.substring(formatMarker + 2, lowerName.lastIndexOf('.'));
+
+        if (formatSuffix.isEmpty()) {
+            return "";
+        }
+
+        for (int index = 0; index < formatSuffix.length(); index++) {
+            if (!Character.isDigit(formatSuffix.charAt(index))) {
+                return "";
+            }
+        }
+
+        return fileName.substring(0, formatMarker);
     }
 
     private String buildRecoveredMp4Path(String tsFileName) {

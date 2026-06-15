@@ -22,6 +22,7 @@ import androidx.work.WorkerParameters;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 
 /**
  * WorkManager periodic worker that silently refreshes the GVS PO token
@@ -49,6 +50,19 @@ public class PoTokenRefreshWorker extends Worker {
      * do not reset the clock on an already-running schedule.
      */
     public static void scheduleIfNeeded(Context context) {
+        AppStorage storage = new AppStorage(context);
+        AppSettings settings = storage.loadSettings();
+        RemoteConfig remoteConfig = storage.loadRemoteConfig();
+
+        if (!requiresPoTokenAutoRefresh(storage, settings, remoteConfig)) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME);
+            storage.appendLog(LogItem.info(
+                LogItem.SOURCE_REMOTE_CONFIG,
+                "PO token background auto-refresh skipped (android_vr/no-PO-token path is active)."
+            ));
+            return;
+        }
+
         Constraints constraints = new Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build();
@@ -74,12 +88,12 @@ public class PoTokenRefreshWorker extends Worker {
         Context ctx = getApplicationContext();
         AppStorage storage = new AppStorage(ctx);
         AppSettings settings = storage.loadSettings();
+        RemoteConfig remoteConfig = storage.loadRemoteConfig();
 
-        String lastWorkingClient = storage.getLastWorkingPlayerClient();
-        if ("android_vr".equals(lastWorkingClient)) {
+        if (!requiresPoTokenAutoRefresh(storage, settings, remoteConfig)) {
             storage.appendLog(LogItem.info(
                 LogItem.SOURCE_REMOTE_CONFIG,
-                "PO token background auto-refresh skipped because android_vr is the last working player client."
+                "PO token background auto-refresh skipped (android_vr/no-PO-token path is active)."
             ));
             return Result.success();
         }
@@ -191,5 +205,60 @@ public class PoTokenRefreshWorker extends Worker {
                 + "Notification sent — open YouTube PO Token Setup to re-sign in."
         ));
         return Result.success();
+    }
+
+    private static boolean requiresPoTokenAutoRefresh(
+        AppStorage storage,
+        AppSettings settings,
+        RemoteConfig remoteConfig
+    ) {
+        if (storage == null || settings == null) {
+            return false;
+        }
+
+        boolean hasConfiguredCookies = settings.hasYtDlpCookies()
+            || (remoteConfig != null && remoteConfig.hasYtDlpCookies());
+        boolean hasCachedPoToken = settings.hasYtDlpPoToken();
+
+        if (!hasConfiguredCookies && !hasCachedPoToken) {
+            return false;
+        }
+
+        String lastWorkingClient = storage.getLastWorkingPlayerClient();
+
+        if (clientMayUsePoToken(lastWorkingClient)) {
+            return true;
+        }
+
+        List<String> fallbackClients = remoteConfig == null
+            ? null
+            : remoteConfig.getYtDlpPlayerClientFallback();
+
+        if (fallbackClients == null || fallbackClients.isEmpty()) {
+            return hasCachedPoToken && !"android_vr".equals(lastWorkingClient);
+        }
+
+        String firstClient = fallbackClients.get(0);
+
+        if ("android_vr".equals(normalizePlayerClient(firstClient)) && !hasConfiguredCookies) {
+            return false;
+        }
+
+        for (String client : fallbackClients) {
+            if (clientMayUsePoToken(client)) {
+                return hasConfiguredCookies || hasCachedPoToken;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean clientMayUsePoToken(String client) {
+        String normalized = normalizePlayerClient(client);
+        return "mweb".equals(normalized) || "web".equals(normalized);
+    }
+
+    private static String normalizePlayerClient(String client) {
+        return client == null ? "" : client.trim().toLowerCase(java.util.Locale.US);
     }
 }

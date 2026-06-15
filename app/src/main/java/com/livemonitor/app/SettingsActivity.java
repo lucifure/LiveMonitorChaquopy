@@ -19,6 +19,9 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.yausername.youtubedl_android.YoutubeDL;
+import com.yausername.youtubedl_android.YoutubeDLRequest;
+
 /**
  * Settings screen.
  *
@@ -57,6 +60,7 @@ public class SettingsActivity extends AppCompatActivity {
     private CheckBox batteryOptimizationCheckBox;
     private CheckBox remoteConfigCheckBox;
     private EditText remoteConfigUrlInput;
+    private TextView ytDlpDiagnosticsStatusText;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -159,6 +163,10 @@ public class SettingsActivity extends AppCompatActivity {
             root,
             "Skip unavailable fragments and keep retrying"
         );
+        addLabel(
+            root,
+            "Concurrent recordings: no fixed app limit; new recordings are gated by the schedule window and available storage."
+        );
         ytDlpCookieHeaderInput = addEditText(
             root,
             "YouTube Cookie header for yt-dlp (optional)",
@@ -175,6 +183,18 @@ public class SettingsActivity extends AppCompatActivity {
         youtubeSignInButton.setText("Open YouTube session / PO token setup");
         youtubeSignInButton.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
         root.addView(youtubeSignInButton);
+
+        Button diagnosticsButton = new Button(this);
+        diagnosticsButton.setAllCaps(false);
+        diagnosticsButton.setText("Run yt-dlp diagnostics");
+        diagnosticsButton.setOnClickListener(v -> runYtDlpDiagnostics());
+        root.addView(diagnosticsButton);
+
+        ytDlpDiagnosticsStatusText = new TextView(this);
+        ytDlpDiagnosticsStatusText.setTextSize(13);
+        ytDlpDiagnosticsStatusText.setPadding(0, dp(4), 0, dp(10));
+        ytDlpDiagnosticsStatusText.setText("Diagnostics not run yet.");
+        root.addView(ytDlpDiagnosticsStatusText);
 
         ytDlpExtractorArgsInput = addEditText(
             root,
@@ -361,6 +381,45 @@ public class SettingsActivity extends AppCompatActivity {
         storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Settings saved."));
 
         Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void runYtDlpDiagnostics() {
+        if (ytDlpDiagnosticsStatusText != null) {
+            ytDlpDiagnosticsStatusText.setText("Running yt-dlp diagnostics...");
+        }
+
+        new Thread(() -> {
+            String result;
+
+            try {
+                YoutubeDL youtubeDL = YoutubeDL.getInstance();
+                youtubeDL.init(getApplicationContext());
+                String version = String.valueOf(
+                    youtubeDL.getClass()
+                        .getMethod("version", android.content.Context.class)
+                        .invoke(youtubeDL, getApplicationContext())
+                );
+
+                YoutubeDLRequest request = new YoutubeDLRequest("https://www.youtube.com/@NASA/live");
+                request.addOption("--skip-download");
+                request.addOption("--simulate");
+                request.addOption("--socket-timeout", "10");
+                request.addOption("--extractor-args", "youtube:player_client=android_vr");
+                youtubeDL.getInfo(request);
+
+                result = "yt-dlp healthy. Version: " + version + ". Test extraction: android_vr live URL OK.";
+            } catch (Exception e) {
+                result = "yt-dlp diagnostics failed: " + e.getMessage();
+            }
+
+            String finalResult = result;
+            runOnUiThread(() -> {
+                if (ytDlpDiagnosticsStatusText != null) {
+                    ytDlpDiagnosticsStatusText.setText(finalResult);
+                }
+                Toast.makeText(this, finalResult, Toast.LENGTH_LONG).show();
+            });
+        }, "YtDlpSettingsDiagnostics").start();
     }
 
     private void onSaveLocationSelected(Uri uri, String displayName) {
