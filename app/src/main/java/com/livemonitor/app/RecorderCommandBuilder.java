@@ -264,7 +264,7 @@ public class RecorderCommandBuilder {
         args.add("--force-ipv4");
         args.add("--no-check-certificates");
         args.add("-f");
-        args.add("bv*[height<=480]+ba/b");
+        args.add(buildDashFormatSelector(settings));
         args.add("--merge-output-format");
         args.add("mp4");
 
@@ -286,9 +286,7 @@ public class RecorderCommandBuilder {
         args.add("-o");
         args.add(outputFile == null ? outputMp4Path : outputFile.getName());
 
-        // Only mweb supports the cookies/PO-token path. Other player clients can
-        // reject cookies and be skipped by yt-dlp, so keep them cookie-free.
-        if ("mweb".equals(normalizedPlayerClient)) {
+        if (shouldIncludeSettingsYtDlpArgs(normalizedPlayerClient)) {
             addSettingsYtDlpArgs(args, settings, false);
         }
 
@@ -676,6 +674,42 @@ public class RecorderCommandBuilder {
 
             index--;
         }
+    }
+
+    private boolean shouldIncludeSettingsYtDlpArgs(String normalizedPlayerClient) {
+        /*
+         * Keep the proven android_vr DASH path cookie-free even if the user has
+         * saved cookies for another client. YouTube can reject android_vr
+         * extraction when cookies are attached, so only the mweb PO-token/cookie
+         * identity receives settings-level yt-dlp auth args.
+         */
+        if ("android_vr".equals(normalizedPlayerClient)) {
+            return false;
+        }
+
+        return "mweb".equals(normalizedPlayerClient);
+    }
+
+    public static String buildDashFormatSelector(AppSettings settings) {
+        String quality = settings == null ? AppSettings.QUALITY_480P : settings.getDownloadQuality();
+
+        if (AppSettings.QUALITY_360P.equals(quality)) {
+            return "bv*[height<=360]+ba/b";
+        }
+
+        if (AppSettings.QUALITY_720P.equals(quality)) {
+            return "bv*[height<=720]+ba/b";
+        }
+
+        if (AppSettings.QUALITY_1080P.equals(quality)) {
+            return "bv*[height<=1080]+ba/b";
+        }
+
+        if (AppSettings.QUALITY_BEST.equals(quality)) {
+            return "bv*+ba/b";
+        }
+
+        return "bv*[height<=480]+ba/b";
     }
 
 

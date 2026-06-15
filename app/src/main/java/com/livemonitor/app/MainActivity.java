@@ -605,7 +605,54 @@ public class MainActivity extends AppCompatActivity {
         String permission = hasCustomFolder && hasPersistedWritePermission(settings.getSaveLocationUri())
             ? "write permission valid"
             : hasCustomFolder ? "write permission needs reselect" : "using app storage";
-        binding.storageHealthText.setText("Free space: " + freeSpace + "\nSelected folder: " + folder + "\nFolder status: " + permission);
+        binding.storageHealthText.setText(
+            "Free space: " + freeSpace
+                + "\nRecording time left: " + estimateRecordingTimeRemaining(baseDir.getUsableSpace())
+                + "\nSelected folder: " + folder
+                + "\nFolder status: " + permission
+        );
+    }
+
+    private String estimateRecordingTimeRemaining(long freeBytes) {
+        long bytesPerSecond = estimateActiveRecordingBytesPerSecond();
+
+        if (bytesPerSecond <= 0L) {
+            bytesPerSecond = (150L * 1024L * 1024L) / 3600L;
+        }
+
+        if (freeBytes <= 0L || bytesPerSecond <= 0L) {
+            return "unknown";
+        }
+
+        long secondsRemaining = freeBytes / bytesPerSecond;
+        long hours = secondsRemaining / 3600L;
+        long minutes = (secondsRemaining % 3600L) / 60L;
+
+        if (hours <= 0L) {
+            return minutes + " min at current/default rate";
+        }
+
+        return hours + "h " + minutes + "m at current/default rate";
+    }
+
+    private long estimateActiveRecordingBytesPerSecond() {
+        long totalBytes = 0L;
+        long totalSeconds = 0L;
+
+        for (RecordingItem recording : storage.loadActiveRecordings()) {
+            if (recording == null || recording.getBytesRecorded() <= 0L || recording.getDurationSeconds() < 60L) {
+                continue;
+            }
+
+            totalBytes += recording.getBytesRecorded();
+            totalSeconds += recording.getDurationSeconds();
+        }
+
+        if (totalBytes <= 0L || totalSeconds <= 0L) {
+            return 0L;
+        }
+
+        return Math.max(1L, totalBytes / totalSeconds);
     }
 
     private void updateDownloadSummary(List<RecordingItem> recordings) {
