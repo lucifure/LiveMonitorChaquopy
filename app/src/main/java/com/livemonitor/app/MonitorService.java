@@ -272,7 +272,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (channel == null) return;
 
         activeLoops.remove(channel.getId());
-        liveFallbackLogState.remove(channel.getId());
         stopActiveRecordingForRemovedChannel(channel);
         notificationHelper.cancelChannelNotification(channel);
         storage.removeChannel(channel.getId());
