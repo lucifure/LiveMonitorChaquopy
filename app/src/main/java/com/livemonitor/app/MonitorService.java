@@ -69,6 +69,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Boolean> activeLoops = new ConcurrentHashMap<>();
     private final Map<String, RecordingItem> activeRecordings = new ConcurrentHashMap<>();
     private final Set<String> activeYoutubedlAndroidRecordings = ConcurrentHashMap.newKeySet();
+    private final Set<String> ytDlpFragmentEndSignals = ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> ytDlpFragmentErrorCounts = new ConcurrentHashMap<>();
     private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
     private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
@@ -1962,13 +1964,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             @Override
             public Unit invoke(Float progress, Long etaSeconds, String line) {
                 if (!isBlank(line)) {
+                    String shortLine = shortenForLog(line, 500);
+                    boolean fragmentErrorSignal = isYtDlpFragmentErrorSignal(line);
+                    boolean fragmentEndSignal = shouldFinalizeForYtDlpFragmentSignal(processId, line);
+
                     log(
-                        LogItem.LEVEL_DEBUG,
+                        fragmentErrorSignal ? LogItem.LEVEL_WARNING : LogItem.LEVEL_DEBUG,
                         LogItem.SOURCE_RECORDER,
                         channel,
-                        "youtubedl-android recorder output.",
-                        shortenForLog(line, 500)
+                        fragmentErrorSignal
+                            ? "youtubedl-android fragment download signal."
+                            : "youtubedl-android recorder output.",
+                        shortLine
                     );
+
+                    if (fragmentEndSignal && ytDlpFragmentEndSignals.add(processId)) {
+                        executor.execute(() -> finalizeLikelyEndedRecording(processId, "yt-dlp reported fragment download failures: " + shortLine));
+                    }
                 }
                 return Unit.INSTANCE;
             }
@@ -1981,10 +1993,88 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             executeYoutubedlAndroidRequest(request, processId, callback);
         } finally {
             activeYoutubedlAndroidRecordings.remove(processId);
+            ytDlpFragmentEndSignals.remove(processId);
+            ytDlpFragmentErrorCounts.remove(processId);
             diagnosticsThread.interrupt();
         }
 
         return 0;
+    }
+
+    private boolean isYtDlpFragmentErrorSignal(String line) {
+        if (isBlank(line)) {
+            return false;
+        }
+
+        String lower = line.toLowerCase(java.util.Locale.US);
+
+        return lower.contains("http error 404")
+            || lower.contains("did not get any data blocks")
+            || lower.contains("video is no longer live")
+            || (lower.contains("retrying fragment") && lower.contains("not found"));
+    }
+
+    private boolean shouldFinalizeForYtDlpFragmentSignal(String processId, String line) {
+        if (isBlank(processId) || isBlank(line)) {
+            return false;
+        }
+
+        String lower = line.toLowerCase(java.util.Locale.US);
+        if (lower.contains("video is no longer live") || lower.contains("did not get any data blocks")) {
+            return true;
+        }
+
+        if (lower.contains("http error 404") || (lower.contains("retrying fragment") && lower.contains("not found"))) {
+            int count = ytDlpFragmentErrorCounts.merge(processId, 1, Integer::sum);
+            return count >= 3;
+        }
+
+        return false;
+    }
+
+    private void finalizeLikelyEndedRecording(String recordingId, String reason) {
+        if (isBlank(recordingId)) {
+            return;
+        }
+
+        RecordingItem recording = storage.findRecordingById(recordingId);
+
+        if (recording == null || !recording.isActive()) {
+            return;
+        }
+
+        String channelId = recording.getChannelId();
+        ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+
+        activeRecordings.remove(recording.getId());
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
+        progressTracker.untrack(recording);
+        cancelActiveRecording(recording);
+        waitForRecordingFileAfterCancellation(recording);
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        RecordingItem toSave = latest == null ? recording : latest;
+        toSave.setDiagnosticMessage(reason);
+        storage.upsertRecording(toSave);
+        boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
+
+        if (channel != null) {
+            channel.markRecordingFinished();
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        log(
+            saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
+            "recordingId=" + recordingId + ", reason=" + reason
+        );
+        broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
     }
 
     private void executeYoutubedlAndroidRequest(
@@ -2633,19 +2723,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
 
             if (recorderProcessRunning && liveInfo != null && stalledRecording.matchesVideo(liveInfo.videoId)) {
-                stalledRecording.setDiagnosticMessage(
-                    "No file growth detected; keeping the active recorder alive while reconnect retries continue."
+                finalizeLikelyEndedRecording(
+                    recordingId,
+                    "No recorder file growth for the stall threshold even though /live still reports the same video."
                 );
-                storage.upsertRecording(stalledRecording);
-
-                log(
-                    LogItem.LEVEL_WARNING,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "Recording progress stalled; active recorder is still running and the live stream is still active.",
-                    "recordingId=" + recordingId
-                );
-                broadcastRecordingUpdated("Recorder reconnect is still running.");
                 return;
             }
 
