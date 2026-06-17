@@ -111,8 +111,8 @@ public class LogSettingsActivity extends AppCompatActivity {
         );
         debugLogsCheckBox = addCheckBox(
             root,
-            "Detailed DEBUG logs",
-            "Extra details. Leave off for normal phone use."
+            "Verbose / debug logging",
+            "Re-enable high-frequency diagnostics and repeated live-fallback confirmations. Leave off for normal phone use."
         );
 
         LinearLayout buttonRow = new LinearLayout(this);

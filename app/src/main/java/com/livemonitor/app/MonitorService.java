@@ -71,6 +71,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Set<String> activeYoutubedlAndroidRecordings = ConcurrentHashMap.newKeySet();
     private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
+    private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
@@ -271,9 +272,69 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (channel == null) return;
 
         activeLoops.remove(channel.getId());
+        liveFallbackLogState.remove(channel.getId());
+        stopActiveRecordingForRemovedChannel(channel);
         notificationHelper.cancelChannelNotification(channel);
         storage.removeChannel(channel.getId());
         broadcastChannelUpdated("Channel removed.");
+    }
+
+    private void stopActiveRecordingForRemovedChannel(ChannelItem channel) {
+        if (channel == null || isBlank(channel.getId())) {
+            return;
+        }
+
+        RecordingItem recording = findActiveRecordingForChannel(channel.getId());
+        if (recording == null) {
+            return;
+        }
+
+        activeRecordings.remove(channel.getId());
+        activeRecordings.remove(recording.getId());
+        activeRecordings.remove(recording.getChannelId());
+        progressTracker.untrack(recording);
+
+        recording.markStoppedByUser();
+        recording.showInDownloading();
+        storage.upsertRecording(recording);
+
+        cancelActiveRecording(recording);
+        waitForRecordingFileAfterCancellation(recording);
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        boolean savedPlayableFile = saveStoppedRecordingForDownloads(
+            latest == null ? recording : latest,
+            channel
+        );
+
+        log(
+            savedPlayableFile ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            savedPlayableFile
+                ? "Active recording stopped because channel was removed."
+                : "Active recording stopped because channel was removed, but no playable file was found.",
+            "recordingId=" + recording.getId()
+        );
+    }
+
+    private RecordingItem findActiveRecordingForChannel(String channelId) {
+        if (isBlank(channelId)) {
+            return null;
+        }
+
+        RecordingItem recording = activeRecordings.get(channelId);
+        if (recording != null) {
+            return recording;
+        }
+
+        for (RecordingItem candidate : activeRecordings.values()) {
+            if (candidate != null && channelId.equals(candidate.getChannelId())) {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private void handleStopChannel(Intent intent) {
@@ -573,6 +634,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return false;
         }
 
+        long sourceBytesBeforeMerge = Math.max(0L, videoFile.length())
+            + Math.max(0L, audioFile.length());
+        String sourceSummary = describeMergeSourceFiles(videoFile, audioFile);
+
         if (!ensureRecordingStorageAvailable(channel, estimateDashMergeRequiredBytes(sidecars))) {
             recording.markRecoverable("Not enough free storage to merge stopped DASH recording. " + fileManager.getStorageSummary());
             storage.upsertRecording(recording);
@@ -605,6 +670,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return false;
             }
 
+            File finalFile = new File(recording.getFinalMp4Path());
+            long mergedBytes = Math.max(0L, finalFile.length());
+
+            if (isSuspiciouslySmallMerge(sourceBytesBeforeMerge, mergedBytes)) {
+                String details = "mergedBytes="
+                    + mergedBytes
+                    + ", sourceBytes="
+                    + sourceBytesBeforeMerge
+                    + ", sources="
+                    + sourceSummary
+                    + ", output="
+                    + recording.getFinalMp4Path();
+                recording.markRecoverable("Stopped DASH merge output is much smaller than its source fragments. " + details);
+                storage.upsertRecording(recording);
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Stopped DASH merge output is suspiciously small.",
+                    details
+                );
+                broadcastRecordingUpdated("Stopped recording needs review; merged file is smaller than its fragments.");
+                return false;
+            }
+
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
@@ -630,6 +720,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, channel, "Stopped DASH merge error.", normalizeErrorMessage(e));
             return false;
         }
+    }
+
+    private boolean isSuspiciouslySmallMerge(long sourceBytes, long mergedBytes) {
+        if (sourceBytes <= 0L || mergedBytes <= 0L) {
+            return false;
+        }
+
+        long missingBytes = sourceBytes - mergedBytes;
+        return missingBytes > 5L * 1024L * 1024L && mergedBytes * 100L < sourceBytes * 80L;
+    }
+
+    private String describeMergeSourceFiles(File videoFile, File audioFile) {
+        return describeMergeSourceFile(videoFile) + "; " + describeMergeSourceFile(audioFile);
+    }
+
+    private String describeMergeSourceFile(File file) {
+        if (file == null) {
+            return "null";
+        }
+
+        return file.getName() + "=" + Math.max(0L, file.length()) + "B";
     }
 
     private List<File> findYtDlpDashSidecarFiles(RecordingItem recording) {
@@ -2027,6 +2138,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     break;
                 }
 
+                if (!isVerboseDebugLoggingEnabled()) {
+                    continue;
+                }
+
                 log(
                     LogItem.LEVEL_INFO,
                     LogItem.SOURCE_RECORDER,
@@ -2103,7 +2218,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             File[] files = directory.listFiles();
-            int fileCount = files == null ? 0 : files.length;
+            int fileCount = 0;
             long totalBytes = 0L;
             StringBuilder sample = new StringBuilder();
             String outputBase = getOutputTemplateBaseName(outputTemplate);
@@ -2115,17 +2230,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     }
 
                     long length = Math.max(0L, file.length());
-                    totalBytes += length;
                     String name = file.getName();
-                    boolean relevant = isBlank(outputBase)
-                        || name.startsWith(outputBase)
-                        || name.endsWith(".part")
-                        || name.endsWith(".ytdl")
-                        || name.endsWith(".m4s")
-                        || name.endsWith(".ts")
-                        || name.endsWith(".mp4");
+                    boolean relevant = isBlank(outputBase) || name.startsWith(outputBase);
 
-                    if (relevant && sample.length() < 350) {
+                    if (!relevant) {
+                        continue;
+                    }
+
+                    fileCount++;
+                    totalBytes += length;
+
+                    if (sample.length() < 350) {
                         if (sample.length() > 0) {
                             sample.append("; ");
                         }
@@ -3330,39 +3445,59 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return null;
             }
 
-            if (isBlank(hlsManifestUrl)) {
-                log(
-                    LogItem.LEVEL_INFO,
-                    LogItem.SOURCE_SERVICE,
-                    null,
-                    "Channel /live fallback ignored a non-active live event.",
-                    "channelId="
-                        + channelId
-                        + ", videoId="
-                        + videoId
-                        + ", response="
-                        + summarizeInnertubeResponseForLog(playerResponse)
-                );
-                return null;
-            }
-
             String status = playabilityStatus == null
                 ? ""
                 : playabilityStatus.optString("status", "");
 
-            log(
-                LogItem.LEVEL_INFO,
-                LogItem.SOURCE_SERVICE,
-                null,
-                "Channel /live fallback found an active live video.",
-                "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
-            );
+            if (isBlank(hlsManifestUrl)) {
+                String responseSummary = summarizeInnertubeResponseForLog(playerResponse);
+                if (shouldLogLiveFallbackState(channelId, "inactive:" + videoId + ":" + status)) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_SERVICE,
+                        null,
+                        "Channel /live fallback ignored a non-active live event.",
+                        "channelId="
+                            + channelId
+                            + ", videoId="
+                            + videoId
+                            + ", response="
+                            + responseSummary
+                    );
+                }
+                return null;
+            }
+
+            if (shouldLogLiveFallbackState(channelId, "active:" + videoId + ":" + status)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_SERVICE,
+                    null,
+                    "Channel /live fallback found an active live video.",
+                    "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
+                );
+            }
 
             return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);
         } catch (Exception e) {
             Log.w(TAG, "channel /live fallback failed", e);
             return null;
         }
+    }
+
+    private boolean shouldLogLiveFallbackState(String channelId, String state) {
+        if (isVerboseDebugLoggingEnabled()) {
+            return true;
+        }
+
+        String key = isBlank(channelId) ? "unknown" : channelId.trim();
+        String normalizedState = state == null ? "" : state;
+        String previousState = liveFallbackLogState.put(key, normalizedState);
+        return !normalizedState.equals(previousState);
+    }
+
+    private boolean isVerboseDebugLoggingEnabled() {
+        return settings != null && settings.isLogDebugEnabled();
     }
 
 
