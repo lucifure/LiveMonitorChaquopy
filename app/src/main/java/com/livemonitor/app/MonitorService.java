@@ -2028,6 +2028,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (lower.contains("did not get any data blocks")
             || lower.contains("http error 404")
             || (lower.contains("retrying fragment") && lower.contains("not found"))) {
+        if (lower.contains("video is no longer live") || lower.contains("did not get any data blocks")) {
+            return true;
+        }
+
+        if (lower.contains("http error 404") || (lower.contains("retrying fragment") && lower.contains("not found"))) {
             int count = ytDlpFragmentErrorCounts.merge(processId, 1, Integer::sum);
             return count >= 3;
         }
@@ -2054,7 +2059,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             activeRecordings.remove(channelId);
         }
         progressTracker.untrack(recording);
-        cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
+        cancelActiveRecording(recording);
         waitForRecordingFileAfterCancellation(recording);
 
         RecordingItem latest = storage.findRecordingById(recording.getId());
