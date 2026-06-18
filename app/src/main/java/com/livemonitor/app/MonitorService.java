@@ -1980,7 +1980,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     );
 
                     if (fragmentEndSignal && ytDlpFragmentEndSignals.add(processId)) {
-                        executor.execute(() -> finalizeLikelyEndedRecording(processId, "yt-dlp reported fragment download failures: " + shortLine));
+                        executor.execute(() -> finalizeLikelyEndedRecording(
+                            processId,
+                            "yt-dlp reported fragment download failures: " + shortLine
+                        ));
                     }
                 }
                 return Unit.INSTANCE;
@@ -2028,11 +2031,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (lower.contains("did not get any data blocks")
             || lower.contains("http error 404")
             || (lower.contains("retrying fragment") && lower.contains("not found"))) {
-        if (lower.contains("video is no longer live") || lower.contains("did not get any data blocks")) {
-            return true;
-        }
-
-        if (lower.contains("http error 404") || (lower.contains("retrying fragment") && lower.contains("not found"))) {
             int count = ytDlpFragmentErrorCounts.merge(processId, 1, Integer::sum);
             return count >= 3;
         }
@@ -2059,7 +2057,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             activeRecordings.remove(channelId);
         }
         progressTracker.untrack(recording);
-        cancelActiveRecording(recording);
+        cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
         waitForRecordingFileAfterCancellation(recording);
 
         RecordingItem latest = storage.findRecordingById(recording.getId());
