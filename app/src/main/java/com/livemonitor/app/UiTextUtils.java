@@ -119,6 +119,9 @@ public final class UiTextUtils {
         if (RecordingItem.STATUS_STOPPED_BY_USER.equals(status)) {
             return "Stopped by user";
         }
+        if (RecordingItem.STATUS_STOPPED_BY_SYSTEM.equals(status)) {
+            return "Stopped by system";
+        }
 
         if (RecordingItem.STATUS_RECOVERABLE.equals(status)) {
             return "Recoverable";

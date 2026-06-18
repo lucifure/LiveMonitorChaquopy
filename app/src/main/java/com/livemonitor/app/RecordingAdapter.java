@@ -388,6 +388,10 @@ public class RecordingAdapter extends BaseAdapter {
             return "⏹ Stopped";
         }
 
+        if (RecordingItem.STATUS_STOPPED_BY_SYSTEM.equals(status)) {
+            return "⚠️ Stopped";
+        }
+
         if (RecordingItem.STATUS_RECOVERABLE.equals(status)) {
             return "Recover";
         }
@@ -451,6 +455,7 @@ public class RecordingAdapter extends BaseAdapter {
         if (RecordingItem.STATUS_COMPLETED.equals(status)) return "Saved";
         if (RecordingItem.STATUS_FAILED.equals(status)) return "Failed";
         if (RecordingItem.STATUS_STOPPED_BY_USER.equals(status)) return "Stopped by user";
+        if (RecordingItem.STATUS_STOPPED_BY_SYSTEM.equals(status)) return "Stopped by system";
         if (RecordingItem.STATUS_RECOVERABLE.equals(status)) return "Stalled / recoverable";
         return "Status update";
     }
