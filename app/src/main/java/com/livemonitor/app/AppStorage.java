@@ -35,6 +35,8 @@ public class AppStorage {
     private static final String KEY_REMOTE_CONFIG = "remote_config_json";
     private static final String KEY_LOGS = "logs_json";
     private static final String KEY_LAST_WORKING_PLAYER_CLIENT = "last_working_player_client";
+    private static final String KEY_LAST_NETWORK_LOST_AT = "last_network_lost_at";
+    private static final String KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE = "last_missed_stream_checked_outage";
 
     private static final int DEFAULT_MAX_LOGS = 2_000;
     private static final int DEFAULT_MAX_RECORDINGS = 500;
@@ -49,6 +51,28 @@ public class AppStorage {
 
     public Context getContext() {
         return appContext;
+    }
+
+    public synchronized void saveNetworkLostAt(long lostAtMillis) {
+        preferences.edit().putLong(KEY_LAST_NETWORK_LOST_AT, Math.max(0L, lostAtMillis)).apply();
+    }
+
+    public synchronized long loadNetworkLostAt() {
+        return preferences.getLong(KEY_LAST_NETWORK_LOST_AT, 0L);
+    }
+
+    public synchronized void clearNetworkLostAt() {
+        preferences.edit().remove(KEY_LAST_NETWORK_LOST_AT).apply();
+    }
+
+    public synchronized boolean markMissedStreamOutageChecked(long lostAtMillis, long restoredAtMillis) {
+        String outageKey = Math.max(0L, lostAtMillis) + ":" + Math.max(0L, restoredAtMillis);
+        String previous = preferences.getString(KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE, "");
+        if (outageKey.equals(previous)) {
+            return false;
+        }
+        preferences.edit().putString(KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE, outageKey).apply();
+        return true;
     }
 
     public synchronized List<ChannelItem> loadChannels() {

@@ -41,6 +41,7 @@ public class RecordingItem {
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";
     public static final String STATUS_STOPPED_BY_USER = "STOPPED_BY_USER";
+    public static final String STATUS_STOPPED_BY_SYSTEM = "STOPPED_BY_SYSTEM";
     public static final String STATUS_RECOVERABLE = "RECOVERABLE";
 
     private static final String JSON_ID = "id";
@@ -314,6 +315,14 @@ public class RecordingItem {
 
     public void markStoppedByUser() {
         status = STATUS_STOPPED_BY_USER;
+        errorMessage = "Stopped by user request.";
+        finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
+        touch();
+    }
+
+    public void markStoppedBySystem(String reason) {
+        status = STATUS_STOPPED_BY_SYSTEM;
+        errorMessage = nullToEmpty(reason);
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
         touch();
     }
@@ -356,6 +365,7 @@ public class RecordingItem {
         return STATUS_COMPLETED.equals(status)
             || STATUS_FAILED.equals(status)
             || STATUS_STOPPED_BY_USER.equals(status)
+            || STATUS_STOPPED_BY_SYSTEM.equals(status)
             || STATUS_RECOVERABLE.equals(status);
     }
 

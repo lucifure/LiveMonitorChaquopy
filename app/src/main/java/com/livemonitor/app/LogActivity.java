@@ -14,6 +14,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.List;
+
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -23,8 +25,6 @@ import androidx.appcompat.app.AppCompatActivity;
  * Shows logs from all channels and app components.
  */
 public class LogActivity extends AppCompatActivity {
-
-    private static final int CLIPBOARD_SAFE_CHUNK_CHARS = 90_000;
 
     private AppStorage storage;
     private LogAdapter adapter;
@@ -151,17 +151,17 @@ public class LogActivity extends AppCompatActivity {
             return;
         }
 
-        if (text.length() <= CLIPBOARD_SAFE_CHUNK_CHARS) {
+        if (text.length() <= ClipboardLogSplitter.MAX_CLIPBOARD_CHARS_PER_PART) {
             copyTextToClipboard("LiveMonitor Global Log", text);
             Toast.makeText(this, "Full log copied.", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        showChunkedCopyDialog(splitLogForClipboard(text));
+        showChunkedCopyDialog(text, ClipboardLogSplitter.split(text));
     }
 
-    private void showChunkedCopyDialog(String[] chunks) {
-        if (chunks == null || chunks.length == 0) {
+    private void showChunkedCopyDialog(String fullText, List<ClipboardLogSplitter.Part> chunks) {
+        if (chunks == null || chunks.size() == 0) {
             Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -175,11 +175,22 @@ public class LogActivity extends AppCompatActivity {
         helpText.setPadding(0, 0, 0, dp(8));
         content.addView(helpText);
 
-        for (int i = 0; i < chunks.length; i++) {
+        Button viewFullButton = new Button(this);
+        viewFullButton.setAllCaps(false);
+        viewFullButton.setText("View/select full log");
+        viewFullButton.setOnClickListener(v -> showSelectableLogText("Full log", fullText));
+        content.addView(viewFullButton);
+
+        for (int i = 0; i < chunks.size(); i++) {
             final int partIndex = i;
 
             TextView partLabel = new TextView(this);
-            partLabel.setText("Part " + (i + 1) + " of " + chunks.length + " (" + chunks[i].length() + " chars)");
+            ClipboardLogSplitter.Part part = chunks.get(i);
+            partLabel.setText(
+                "Part " + (i + 1) + " of " + chunks.size()
+                    + ": lines " + part.getStartLine() + "–" + part.getEndLine()
+                    + " (" + part.length() + " chars)"
+            );
             partLabel.setPadding(0, dp(8), 0, dp(4));
             content.addView(partLabel);
 
@@ -190,8 +201,8 @@ public class LogActivity extends AppCompatActivity {
             copyPartButton.setAllCaps(false);
             copyPartButton.setText("Copy");
             copyPartButton.setOnClickListener(v -> {
-                copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
-                Toast.makeText(this, "Copied log part " + (partIndex + 1) + " of " + chunks.length + ".", Toast.LENGTH_SHORT).show();
+                copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.size(), chunks.get(partIndex).getText());
+                Toast.makeText(this, "Copied log part " + (partIndex + 1) + " of " + chunks.size() + ".", Toast.LENGTH_SHORT).show();
             });
             row.addView(copyPartButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -210,15 +221,22 @@ public class LogActivity extends AppCompatActivity {
         scrollView.addView(content);
 
         new AlertDialog.Builder(this)
-            .setTitle("Log split into " + chunks.length + " parts")
+            .setTitle("Log split into " + chunks.size() + " parts")
             .setView(scrollView)
             .setNegativeButton("Close", null)
             .show();
     }
 
-    private void showSelectableGlobalLogPart(String[] chunks, int partIndex) {
+    private void showSelectableGlobalLogPart(List<ClipboardLogSplitter.Part> chunks, int partIndex) {
+        showSelectableLogText(
+            "Log part " + (partIndex + 1) + " of " + chunks.size(),
+            chunks.get(partIndex).getText()
+        );
+    }
+
+    private void showSelectableLogText(String title, String text) {
         TextView logTextView = new TextView(this);
-        logTextView.setText(chunks[partIndex]);
+        logTextView.setText(text);
         logTextView.setTextIsSelectable(true);
         logTextView.setTextSize(12);
         logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -227,46 +245,14 @@ public class LogActivity extends AppCompatActivity {
         scrollView.addView(logTextView);
 
         new AlertDialog.Builder(this)
-            .setTitle("Log part " + (partIndex + 1) + " of " + chunks.length)
+            .setTitle(title)
             .setView(scrollView)
-            .setPositiveButton("Copy this part", (dialog, which) -> {
-                copyTextToClipboard("LiveMonitor Global Log part " + (partIndex + 1) + " of " + chunks.length, chunks[partIndex]);
-                Toast.makeText(this, "Copied log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
+            .setPositiveButton("Copy all shown text", (dialog, which) -> {
+                copyTextToClipboard(title, text);
+                Toast.makeText(this, "Copied selected log view.", Toast.LENGTH_SHORT).show();
             })
             .setNegativeButton("Close", null)
             .show();
-    }
-
-    private String[] splitLogForClipboard(String text) {
-        int safeChunkCount = Math.max(2, (int) Math.ceil(text.length() / (double) CLIPBOARD_SAFE_CHUNK_CHARS));
-        int targetChunkLength = (int) Math.ceil(text.length() / (double) safeChunkCount);
-        String[] chunks = new String[safeChunkCount];
-
-        int start = 0;
-        for (int i = 0; i < safeChunkCount; i++) {
-            int end;
-            if (i == safeChunkCount - 1) {
-                end = text.length();
-            } else {
-                end = findChunkEnd(text, start, Math.min(text.length(), start + targetChunkLength));
-            }
-
-            chunks[i] = text.substring(start, end).trim();
-            start = end;
-        }
-
-        return chunks;
-    }
-
-    private int findChunkEnd(String text, int start, int preferredEnd) {
-        int minEnd = Math.min(text.length(), start + Math.max(1, CLIPBOARD_SAFE_CHUNK_CHARS / 2));
-        int newline = text.lastIndexOf('\n', preferredEnd);
-
-        if (newline >= minEnd) {
-            return newline + 1;
-        }
-
-        return preferredEnd;
     }
 
     private void copyTextToClipboard(String label, String text) {
