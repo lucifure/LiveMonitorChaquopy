@@ -271,12 +271,10 @@ public class RecorderCommandBuilder {
         File outputFile = isBlank(outputMp4Path) ? null : new File(outputMp4Path);
 
         /*
-         * Use an absolute output path for youtubedl-android. Its request
-         * wrapper can collapse repeated -P/--paths options, which leaves
-         * yt-dlp running without a reliable home directory and produces the
-         * observed stuck 0 B recorder diagnostics. Keeping the final output
-         * absolute matches the Termux-style command while still allowing a
-         * separate temp directory when the wrapper preserves it.
+         * Keep the final output path absolute. If youtubedl-android or yt-dlp
+         * drops/collapses --paths during a resume, a filename-only template can
+         * resolve as /<filename> and fail with Errno 30 against the filesystem
+         * root instead of writing under the app recordings directory.
          */
         if (!isBlank(tempDirectoryPath)) {
             args.add("--paths");
@@ -284,7 +282,7 @@ public class RecorderCommandBuilder {
         }
 
         args.add("-o");
-        args.add(outputFile == null ? outputMp4Path : outputFile.getName());
+        args.add(outputFile == null ? outputMp4Path : outputFile.getAbsolutePath());
 
         // Only mweb supports the cookies/PO-token path. Other player clients can
         // reject cookies and be skipped by yt-dlp, so keep them cookie-free.

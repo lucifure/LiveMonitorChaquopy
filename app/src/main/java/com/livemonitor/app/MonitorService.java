@@ -1403,6 +1403,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
+            String validationError = validateYtDlpRecordingOutputPath(attempt.args);
+            if (!isBlank(validationError)) {
+                lastFailureReason = validationError + " (" + attempt.describe() + ")";
+                log(
+                    LogItem.LEVEL_ERROR,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Refusing to start yt-dlp recorder with unsafe output path.",
+                    lastFailureReason
+                );
+                return startFfmpegFallbackAfterYtDlpFailure(channelId, channel, recording, liveInfo, lastFailureReason);
+            }
 
             String ytDlpRecorderMode = attempt.allowLiveFromStart
                 ? "live-from-start"
@@ -1460,10 +1472,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         attempt.args,
                         recording.getCurrentTempSegmentPath(),
                         message -> log(
-                            LogItem.LEVEL_DEBUG,
+                            isReadOnlyFilesystemError(message) ? LogItem.LEVEL_ERROR : LogItem.LEVEL_DEBUG,
                             LogItem.SOURCE_RECORDER,
                             channel,
-                            "yt-dlp recorder output.",
+                            isReadOnlyFilesystemError(message)
+                                ? "yt-dlp recorder filesystem write failure."
+                                : "yt-dlp recorder output.",
                             shortenForLog(message, 500)
                         )
                     );
@@ -1523,6 +1537,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             } catch (Exception e) {
                 String errorMessage = normalizeErrorMessage(e);
+
+                if (isReadOnlyFilesystemError(errorMessage)) {
+                    return handleReadOnlyFilesystemRecordingFailure(channelId, channel, recording, errorMessage);
+                }
 
                 if (isLiveNotReadyError(errorMessage)) {
                     return handleYtDlpPrimaryLiveNotReady(channelId, channel, recording, errorMessage);
@@ -1640,6 +1658,104 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 + ", reason="
                 + shortenForLog(reason, 300)
         );
+    }
+
+    private boolean handleReadOnlyFilesystemRecordingFailure(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String reason
+    ) {
+        String writeCheck = verifyRecordingDirectoryWritable();
+        String details = "recordingId="
+            + (recording == null ? "" : recording.getId())
+            + ", reason="
+            + reason
+            + ", writeCheck="
+            + writeCheck;
+
+        log(
+            LogItem.LEVEL_ERROR,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Recording directory became read-only or yt-dlp output path was malformed.",
+            details
+        );
+
+        if (recording != null) {
+            recording.markRecoverable("Recorder filesystem write failed. " + reason + " " + writeCheck);
+            storage.upsertRecording(recording);
+
+            if (recordingHasAnyOutputData(recording)) {
+                activeRecordings.remove(recording.getId());
+                activeRecordings.remove(recording.getChannelId());
+                if (!isBlank(channelId)) {
+                    activeRecordings.remove(channelId);
+                }
+                progressTracker.untrack(recording);
+                cancelActiveRecording(recording, "read-only filesystem failure");
+                saveStoppedRecordingForDownloads(recording, channel);
+                broadcastRecordingUpdated("Existing recording data was salvaged after a filesystem write failure.");
+                return true;
+            }
+        }
+
+        broadcastRecordingUpdated("Recorder filesystem write failed; recording is recoverable.");
+        return false;
+    }
+
+    private String validateYtDlpRecordingOutputPath(List<String> args) {
+        String outputTemplate = findYtDlpOptionValue(args, "-o");
+        if (isBlank(outputTemplate)) {
+            return "yt-dlp output template is empty.";
+        }
+
+        try {
+            File outputFile = new File(outputTemplate);
+            if (!outputFile.isAbsolute()) {
+                return "yt-dlp output template must be absolute: " + outputTemplate;
+            }
+
+            File baseDir = fileManager == null ? null : fileManager.getBaseRecordingDirectory();
+            if (baseDir == null) {
+                return "recordings base directory is unavailable.";
+            }
+
+            String outputPath = outputFile.getCanonicalPath();
+            String basePath = baseDir.getCanonicalPath();
+            if (!outputPath.equals(basePath) && !outputPath.startsWith(basePath + File.separator)) {
+                return "yt-dlp output template is outside recordings directory: " + outputPath;
+            }
+        } catch (Exception e) {
+            return "yt-dlp output template validation failed: " + normalizeErrorMessage(e);
+        }
+
+        return "";
+    }
+
+    private String verifyRecordingDirectoryWritable() {
+        try {
+            File directory = fileManager == null ? null : fileManager.getTempDirectory();
+            if (directory == null) {
+                return "temp directory unavailable";
+            }
+            if (!directory.exists() && !directory.mkdirs()) {
+                return "temp directory could not be created: " + directory.getAbsolutePath();
+            }
+            File probe = File.createTempFile("write-test", ".tmp", directory);
+            safeDelete(probe.getAbsolutePath());
+            return "writable=" + directory.getAbsolutePath();
+        } catch (Exception e) {
+            return "not writable: " + normalizeErrorMessage(e);
+        }
+    }
+
+    private boolean isReadOnlyFilesystemError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+        String lower = message.toLowerCase(java.util.Locale.US);
+        return lower.contains("read-only file system") || lower.contains("errno 30");
     }
 
     private boolean isClientLevelFailure(String output) {
@@ -3843,7 +3959,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private boolean recordingHasAnyOutputData(RecordingItem recording) {
         return currentRecordingSegmentHasData(recording)
-            || fileHasData(recording == null ? "" : recording.getFinalMp4Path());
+            || fileHasData(recording == null ? "" : recording.getFinalMp4Path())
+            || !findYtDlpDashSidecarFiles(recording).isEmpty();
     }
 
     private boolean currentRecordingSegmentHasData(RecordingItem recording) {
