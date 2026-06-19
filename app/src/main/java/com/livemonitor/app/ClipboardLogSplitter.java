@@ -5,7 +5,7 @@ import java.util.List;
 
 /** Splits copyable logs into conservative clipboard chunks without losing line boundaries. */
 public final class ClipboardLogSplitter {
-    public static final int MAX_CLIPBOARD_CHARS_PER_PART = 4_000;
+    public static final int MAX_CLIPBOARD_CHARS_PER_PART = 45_000;
 
     private ClipboardLogSplitter() {}
 

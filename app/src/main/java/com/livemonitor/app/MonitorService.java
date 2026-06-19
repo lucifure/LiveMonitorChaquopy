@@ -2095,14 +2095,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         shortLine
                     );
 
-                    if (isReadOnlyFilesystemError(line) && ytDlpFragmentEndSignals.add(processId)) {
-                        executor.execute(() -> handleReadOnlyFilesystemRecordingFailure(
-                            channel == null ? "" : channel.getId(),
-                            channel,
-                            storage.findRecordingById(processId),
-                            shortLine
-                        ));
-                    } else if (fragmentEndSignal && ytDlpFragmentEndSignals.add(processId)) {
+                    if (fragmentEndSignal && ytDlpFragmentEndSignals.add(processId)) {
                         executor.execute(() -> finalizeLikelyEndedRecording(
                             processId,
                             "yt-dlp reported fragment download failures: " + shortLine
@@ -2136,8 +2129,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String lower = line.toLowerCase(java.util.Locale.US);
 
         return lower.contains("http error 404")
-            || lower.contains("read-only file system")
-            || lower.contains("errno 30")
             || lower.contains("did not get any data blocks")
             || lower.contains("video is no longer live")
             || (lower.contains("retrying fragment") && lower.contains("not found"));

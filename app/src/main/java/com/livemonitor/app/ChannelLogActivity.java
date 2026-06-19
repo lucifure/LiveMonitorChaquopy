@@ -160,10 +160,10 @@ public class ChannelLogActivity extends AppCompatActivity {
             return;
         }
 
-        showChunkedCopyDialog(text, ClipboardLogSplitter.split(text));
+        showChunkedCopyDialog(ClipboardLogSplitter.split(text));
     }
 
-    private void showChunkedCopyDialog(String fullText, List<ClipboardLogSplitter.Part> chunks) {
+    private void showChunkedCopyDialog(List<ClipboardLogSplitter.Part> chunks) {
         if (chunks == null || chunks.size() == 0) {
             Toast.makeText(this, "Channel log is empty.", Toast.LENGTH_SHORT).show();
             return;
@@ -177,12 +177,6 @@ public class ChannelLogActivity extends AppCompatActivity {
         helpText.setText("Choose Copy to place a safe-sized part on the clipboard, or View/Select to select only the lines you need.");
         helpText.setPadding(0, 0, 0, dp(8));
         content.addView(helpText);
-
-        Button viewFullButton = new Button(this);
-        viewFullButton.setAllCaps(false);
-        viewFullButton.setText("View/select full log");
-        viewFullButton.setOnClickListener(v -> showSelectableLogText("Full log", fullText));
-        content.addView(viewFullButton);
 
         for (int i = 0; i < chunks.size(); i++) {
             final int partIndex = i;
@@ -231,15 +225,8 @@ public class ChannelLogActivity extends AppCompatActivity {
     }
 
     private void showSelectableChannelLogPart(List<ClipboardLogSplitter.Part> chunks, int partIndex) {
-        showSelectableLogText(
-            "Log part " + (partIndex + 1) + " of " + chunks.size(),
-            chunks.get(partIndex).getText()
-        );
-    }
-
-    private void showSelectableLogText(String title, String text) {
         TextView logTextView = new TextView(this);
-        logTextView.setText(text);
+        logTextView.setText(chunks.get(partIndex).getText());
         logTextView.setTextIsSelectable(true);
         logTextView.setTextSize(12);
         logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -248,11 +235,11 @@ public class ChannelLogActivity extends AppCompatActivity {
         scrollView.addView(logTextView);
 
         new AlertDialog.Builder(this)
-            .setTitle(title)
+            .setTitle("Channel log part " + (partIndex + 1) + " of " + chunks.size())
             .setView(scrollView)
-            .setPositiveButton("Copy all shown text", (dialog, which) -> {
-                copyTextToClipboard(title, text);
-                Toast.makeText(this, "Copied selected log view.", Toast.LENGTH_SHORT).show();
+            .setPositiveButton("Copy this part", (dialog, which) -> {
+                copyTextToClipboard("LiveMonitor Channel Log part " + (partIndex + 1) + " of " + chunks.size(), chunks.get(partIndex).getText());
+                Toast.makeText(this, "Copied channel log part " + (partIndex + 1) + ".", Toast.LENGTH_SHORT).show();
             })
             .setNegativeButton("Close", null)
             .show();
