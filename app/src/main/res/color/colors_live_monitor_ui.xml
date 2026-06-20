@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background -->
+    <color name="lm_bg">#0D0D0D</color>
+    <color name="lm_card_bg">#1A1F26</color>
+    <color name="lm_card_bg_elevated">#1E242C</color>
+
+    <!-- Text -->
+    <color name="lm_text_primary">#FFFFFF</color>
+    <color name="lm_text_secondary">#9AA5B1</color>
+    <color name="lm_text_tertiary">#6B7480</color>
+
+    <!-- Accent (blue, matching the new sample) -->
+    <color name="lm_accent_blue">#3DA9FC</color>
+    <color name="lm_accent_blue_glow">#5DC1FF</color>
+    <color name="lm_accent_blue_dark">#1E6FA8</color>
+
+    <!-- Status colors -->
+    <color name="lm_status_recording_bg">#1B3A2A</color>
+    <color name="lm_status_recording_text">#4CD964</color>
+    <color name="lm_status_stopped_bg">#3A1F1F</color>
+    <color name="lm_status_stopped_text">#FF5C5C</color>
+    <color name="lm_status_paused_bg">#2A2A2A</color>
+    <color name="lm_status_paused_text">#B0B0B0</color>
+
+    <!-- Buttons -->
+    <color name="lm_btn_neutral_bg">#2A2F36</color>
+    <color name="lm_btn_delete_bg">#3A2222</color>
+    <color name="lm_btn_delete_text">#E57373</color>
+
+    <!-- Divider -->
+    <color name="lm_divider">#2A2F36</color>
+</resources>
