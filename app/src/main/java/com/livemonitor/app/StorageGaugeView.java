@@ -30,15 +30,12 @@ public class StorageGaugeView extends View {
         int track = ContextCompat.getColor(context, R.color.lm_btn_neutral_bg);
         int accent = ContextCompat.getColor(context, R.color.lm_accent_blue_glow);
         trackPaint.setStyle(Paint.Style.STROKE);
-        trackPaint.setStrokeWidth(dp(18));
         trackPaint.setStrokeCap(Paint.Cap.ROUND);
         trackPaint.setColor(track);
         glowPaint.setStyle(Paint.Style.STROKE);
-        glowPaint.setStrokeWidth(dp(30));
         glowPaint.setStrokeCap(Paint.Cap.ROUND);
         glowPaint.setColor(withAlpha(accent, 90));
         arcPaint.setStyle(Paint.Style.STROKE);
-        arcPaint.setStrokeWidth(dp(20));
         arcPaint.setStrokeCap(Paint.Cap.ROUND);
         arcPaint.setColor(accent);
     }
@@ -50,6 +47,7 @@ public class StorageGaugeView extends View {
 
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        configureStrokeWidths();
         float pad = Math.max(glowPaint.getStrokeWidth(), arcPaint.getStrokeWidth()) / 2f + dp(2);
         arcBounds.set(pad, pad, getWidth() - pad, getHeight() - pad);
         canvas.drawArc(arcBounds, GAUGE_START_DEGREES, GAUGE_SWEEP_DEGREES, false, trackPaint);
@@ -58,6 +56,13 @@ public class StorageGaugeView extends View {
             canvas.drawArc(arcBounds, GAUGE_START_DEGREES, sweep, false, glowPaint);
             canvas.drawArc(arcBounds, GAUGE_START_DEGREES, sweep, false, arcPaint);
         }
+    }
+
+    private void configureStrokeWidths() {
+        float size = Math.max(1f, Math.min(getWidth(), getHeight()));
+        trackPaint.setStrokeWidth(Math.max(dp(8), size * 0.08f));
+        glowPaint.setStrokeWidth(Math.max(dp(12), size * 0.13f));
+        arcPaint.setStrokeWidth(Math.max(dp(9), size * 0.09f));
     }
 
     private float dp(int value) { return value * getResources().getDisplayMetrics().density; }
