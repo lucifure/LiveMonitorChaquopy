@@ -3,7 +3,6 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -135,8 +134,9 @@ public class ChannelAdapter extends BaseAdapter {
     private ChannelViewHolder createViewHolder() {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setBackground(rounded(Color.rgb(26, 26, 26), dp(16), Color.rgb(42, 42, 42)));
+        root.setPadding(dp(24), dp(20), dp(24), dp(20));
+        root.setBackgroundResource(R.drawable.lm_glass_card_background);
+        root.setElevation(dp(8));
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -144,8 +144,8 @@ public class ChannelAdapter extends BaseAdapter {
 
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextSize(24);
+        title.setTypeface(Typeface.DEFAULT);
         title.setSingleLine(false);
 
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
@@ -157,57 +157,69 @@ public class ChannelAdapter extends BaseAdapter {
 
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
-        statusBadge.setTextSize(12);
+        statusBadge.setTextSize(14);
         statusBadge.setGravity(Gravity.CENTER);
-        statusBadge.setPadding(dp(8), dp(4), dp(8), dp(4));
+        statusBadge.setPadding(dp(14), dp(6), dp(14), dp(6));
         topRow.addView(statusBadge);
 
         TextView url = new TextView(context);
-        url.setTextColor(Color.rgb(190, 190, 190));
-        url.setTextSize(13);
+        url.setTextColor(Color.rgb(194, 202, 211));
+        url.setTextSize(16);
         url.setSingleLine(false);
         url.setPadding(0, dp(4), 0, 0);
 
         TextView details = new TextView(context);
-        details.setTextColor(Color.rgb(160, 160, 160));
-        details.setTextSize(12);
+        details.setTextColor(Color.rgb(194, 202, 211));
+        details.setTextSize(16);
         details.setSingleLine(false);
         details.setPadding(0, dp(4), 0, 0);
 
         LinearLayout buttonRow = new LinearLayout(context);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.END);
-        buttonRow.setPadding(0, dp(8), 0, 0);
+        buttonRow.setPadding(0, dp(16), 0, 0);
 
         Button pauseResume = new Button(context);
         pauseResume.setAllCaps(false);
+        pauseResume.setTextColor(Color.rgb(214, 220, 228));
+        pauseResume.setTextSize(18);
+        pauseResume.setBackgroundResource(R.drawable.lm_glass_button_background);
 
         Button stop = new Button(context);
         stop.setAllCaps(false);
-        stop.setText("Stop");
+        stop.setText("■  Stop");
+        stop.setTextColor(Color.rgb(214, 220, 228));
+        stop.setTextSize(18);
+        stop.setBackgroundResource(R.drawable.lm_glass_button_background);
 
         Button delete = new Button(context);
         delete.setAllCaps(false);
-        delete.setText("Delete");
+        delete.setText("▰  Delete");
+        delete.setTextColor(Color.rgb(214, 220, 228));
+        delete.setTextSize(18);
+        delete.setBackgroundResource(R.drawable.lm_glass_button_background);
 
         buttonRow.addView(
             pauseResume,
             new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                0,
+                dp(52),
+                1f
             )
         );
 
         LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            0,
+            dp(52),
+            1f
         );
         stopParams.leftMargin = dp(8);
         buttonRow.addView(stop, stopParams);
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            0,
+            dp(52),
+            1f
         );
         deleteParams.leftMargin = dp(8);
         buttonRow.addView(delete, deleteParams);
@@ -242,9 +254,9 @@ public class ChannelAdapter extends BaseAdapter {
         holder.title.setText(channel.getDisplayTitle());
         holder.url.setText(channel.getUrl());
         holder.statusBadge.setText(formatStatus(channel.getStatus()));
-        holder.statusBadge.setBackgroundColor(statusColor(channel.getStatus()));
+        applyStatusBadge(holder.statusBadge, channel.getStatus());
         holder.details.setText(buildDetails(channel));
-        holder.pauseResume.setText(channel.shouldMonitor() ? "Pause" : "Resume");
+        holder.pauseResume.setText(channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume");
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
@@ -312,11 +324,11 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         if (ChannelItem.STATUS_RECORDING.equals(status)) {
-            return "Recording";
+            return "RECORDING";
         }
 
         if (ChannelItem.STATUS_PAUSED_BY_USER.equals(status)) {
-            return "Paused";
+            return "PAUSED";
         }
 
         if (ChannelItem.STATUS_PAUSED_NETWORK.equals(status)) {
@@ -332,47 +344,36 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         if (ChannelItem.STATUS_STOPPED.equals(status)) {
-            return "Stopped";
+            return "STOPPED";
         }
 
         return "Idle";
     }
 
-    private int statusColor(String status) {
-        if (ChannelItem.STATUS_RECORDING.equals(status)) {
-            return Color.rgb(255, 107, 107);
-        }
-
-        if (ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
-            return Color.rgb(255, 128, 0);
-        }
-
-        if (ChannelItem.STATUS_WAITING_FOR_LIVE.equals(status)) {
-            return Color.rgb(22, 199, 132);
-        }
-
-        if (ChannelItem.STATUS_RETRYING.equals(status)) {
-            return Color.rgb(255, 170, 0);
-        }
-
-        if (ChannelItem.STATUS_FAILED.equals(status)) {
-            return Color.rgb(180, 0, 0);
+    private void applyStatusBadge(TextView badge, String status) {
+        if (ChannelItem.STATUS_RECORDING.equals(status)
+            || ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_recording_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+            return;
         }
 
         if (ChannelItem.STATUS_PAUSED_BY_USER.equals(status)
             || ChannelItem.STATUS_PAUSED_NETWORK.equals(status)) {
-            return Color.rgb(100, 100, 100);
+            badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_paused_text));
+            return;
         }
 
-        return Color.rgb(80, 120, 200);
-    }
+        if (ChannelItem.STATUS_STOPPED.equals(status)
+            || ChannelItem.STATUS_FAILED.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_stopped_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_stopped_text));
+            return;
+        }
 
-    private GradientDrawable rounded(int color, int radius, int strokeColor) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        drawable.setStroke(dp(1), strokeColor);
-        return drawable;
+        badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+        badge.setTextColor(context.getResources().getColor(R.color.lm_accent_blue_glow));
     }
 
     private int dp(int value) {

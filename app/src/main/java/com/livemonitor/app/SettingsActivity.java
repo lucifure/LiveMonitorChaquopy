@@ -57,6 +57,7 @@ public class SettingsActivity extends AppCompatActivity {
     private CheckBox batteryOptimizationCheckBox;
     private CheckBox remoteConfigCheckBox;
     private EditText remoteConfigUrlInput;
+    private CheckBox verboseDebugLoggingCheckBox;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -212,6 +213,8 @@ public class SettingsActivity extends AppCompatActivity {
             "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json"
         );
 
+        verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
+
         Button batteryButton = new Button(this);
         batteryButton.setAllCaps(false);
         batteryButton.setText("Open Battery Optimization Settings");
@@ -270,6 +273,7 @@ public class SettingsActivity extends AppCompatActivity {
             settings.isRequestBatteryOptimizationExemption()
         );
         remoteConfigCheckBox.setChecked(settings.isRemoteConfigEnabled());
+        verboseDebugLoggingCheckBox.setChecked(settings.isLogDebugEnabled());
 
         if (settings.getRemoteConfigUrl().trim().isEmpty()) {
             remoteConfigUrlInput.setText(
@@ -356,6 +360,7 @@ public class SettingsActivity extends AppCompatActivity {
         );
         settings.setRemoteConfigEnabled(remoteConfigCheckBox.isChecked());
         settings.setRemoteConfigUrl(remoteConfigUrlInput.getText().toString().trim());
+        settings.setLogDebugEnabled(verboseDebugLoggingCheckBox.isChecked());
 
         storage.saveSettings(settings);
         storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Settings saved."));

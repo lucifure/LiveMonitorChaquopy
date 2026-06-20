@@ -11,8 +11,7 @@
   using Paint.Cap.ROUND and a BlurMaskFilter or layered shadow for the glow)
   rather than pure XML, since static XML <rotate>/<clip> drawables can't
   reliably animate or precisely match an arbitrary percentage with rounded
-  caps. A placeholder ImageView + percentage TextView is wired up below;
-  swap the ImageView for a custom `StorageGaugeView` once built.
+  caps. The placeholder has been replaced with `StorageGaugeView`; the centered labels remain overlaid.
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -168,13 +167,10 @@
                         android:layout_height="180dp"
                         android:layout_marginBottom="16dp">
 
-                        <ImageView
+                        <com.livemonitor.app.StorageGaugeView
                             android:id="@+id/storageGaugeRing"
                             android:layout_width="match_parent"
-                            android:layout_height="match_parent"
-                            android:src="@drawable/lm_storage_ring_track" />
-
-                        <!-- TODO: swap for custom StorageGaugeView arc here -->
+                            android:layout_height="match_parent" />
 
                         <LinearLayout
                             android:layout_width="wrap_content"

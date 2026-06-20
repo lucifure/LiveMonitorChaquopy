@@ -97,6 +97,17 @@ public class ChannelLogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        Button viewSelectButton = new Button(this);
+        viewSelectButton.setAllCaps(false);
+        viewSelectButton.setText("View/Select");
+        viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
+        LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        viewSelectParams.leftMargin = dp(8);
+        buttonRow.addView(viewSelectButton, viewSelectParams);
+
         LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -161,6 +172,38 @@ public class ChannelLogActivity extends AppCompatActivity {
         }
 
         showChunkedCopyDialog(ClipboardLogSplitter.split(text));
+    }
+
+    private void viewSelectFullLog() {
+        String text = storage.buildCopyTextForChannel(channelId);
+
+        if (text.trim().isEmpty()) {
+            Toast.makeText(this, "Channel log is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        showSelectableText(channelTitle, text, "LiveMonitor Channel Log - " + channelTitle);
+    }
+
+    private void showSelectableText(String title, String text, String clipboardLabel) {
+        TextView logTextView = new TextView(this);
+        logTextView.setText(text);
+        logTextView.setTextIsSelectable(true);
+        logTextView.setTextSize(12);
+        logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(logTextView);
+
+        new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(scrollView)
+            .setPositiveButton("Copy all", (dialog, which) -> {
+                copyTextToClipboard(clipboardLabel, text);
+                Toast.makeText(this, "Visible channel log copied.", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("Close", null)
+            .show();
     }
 
     private void showChunkedCopyDialog(List<ClipboardLogSplitter.Part> chunks) {
