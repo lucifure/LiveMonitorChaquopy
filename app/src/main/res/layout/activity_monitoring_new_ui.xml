@@ -1,0 +1,460 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Live Monitor — Monitoring screen (new look)
+  Direction: dark background, rounded cards, blue accent + glow,
+  circular storage gauge, pill-shaped status badges.
+
+  NOTE ON THE STORAGE GAUGE:
+  True circular "gauge with glow and rounded progress cap" (like the sample)
+  is best implemented as a small custom View (extends View, draws two arcs
+  with Paint — one dim full-circle track, one bright partial-progress arc
+  using Paint.Cap.ROUND and a BlurMaskFilter or layered shadow for the glow)
+  rather than pure XML, since static XML <rotate>/<clip> drawables can't
+  reliably animate or precisely match an arbitrary percentage with rounded
+  caps. A placeholder ImageView + percentage TextView is wired up below;
+  swap the ImageView for a custom `StorageGaugeView` once built.
+-->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/lm_bg"
+    android:padding="20dp">
+
+    <!-- ===================== HEADER ===================== -->
+    <RelativeLayout
+        android:id="@+id/headerLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="20dp">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/appName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Live Monitor"
+                android:textColor="@color/lm_text_primary"
+                android:textSize="26sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/configStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Remote config ready"
+                android:textColor="@color/lm_accent_blue_glow"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/btnSettings"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_alignParentRight="true"
+            android:layout_centerVertical="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Settings"
+            android:padding="6dp"
+            android:src="@android:drawable/ic_menu_manage"
+            app:tint="@color/lm_text_secondary" />
+    </RelativeLayout>
+
+    <!-- ===================== ADD CHANNEL INPUT ===================== -->
+    <LinearLayout
+        android:id="@+id/inputLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/headerLayout"
+        android:layout_marginBottom="20dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etChannelUrl"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:background="@drawable/lm_input_background"
+            android:hint="Paste YouTube channel URL..."
+            android:imeOptions="actionDone"
+            android:inputType="textUri"
+            android:paddingHorizontal="18dp"
+            android:singleLine="true"
+            android:textColor="@color/lm_text_primary"
+            android:textColorHint="@color/lm_text_tertiary"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnAdd"
+            android:layout_width="wrap_content"
+            android:layout_height="52dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/lm_button_primary_background"
+            android:paddingHorizontal="22dp"
+            android:text="+ ADD"
+            android:textAllCaps="true"
+            android:textColor="@color/lm_bg"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- ===================== SCROLLABLE CONTENT ===================== -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/inputLayout"
+        android:clipToPadding="false"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingBottom="80dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:letterSpacing="0.08"
+                android:text="ACTIVE RECORDINGS"
+                android:textColor="@color/lm_text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- ============== STORAGE HEALTH CARD ============== -->
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                app:cardBackgroundColor="@color/lm_card_bg"
+                app:cardCornerRadius="20dp"
+                app:cardElevation="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:padding="24dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="16dp"
+                        android:text="Storage health"
+                        android:textColor="@color/lm_text_primary"
+                        android:textSize="15sp" />
+
+                    <!--
+                      Circular gauge placeholder. Replace this FrameLayout's
+                      ImageView with a custom StorageGaugeView(context) that
+                      draws: (1) a full dim circular track, (2) a bright blue
+                      arc from the top, sweeping clockwise proportional to
+                      `freePercent`, drawn with Paint.Cap.ROUND and a soft
+                      glow (e.g. setShadowLayer on the Paint, or draw the
+                      arc twice — a wider blurred copy underneath the crisp
+                      arc — to fake a glow on hardware-accelerated canvases
+                      where BlurMaskFilter is unsupported).
+                    -->
+                    <FrameLayout
+                        android:layout_width="180dp"
+                        android:layout_height="180dp"
+                        android:layout_marginBottom="16dp">
+
+                        <ImageView
+                            android:id="@+id/storageGaugeRing"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:src="@drawable/lm_storage_ring_track" />
+
+                        <!-- TODO: swap for custom StorageGaugeView arc here -->
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center"
+                            android:gravity="center"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/tvFreeSpaceValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="323.52"
+                                android:textColor="@color/lm_text_primary"
+                                android:textSize="30sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvFreeSpaceLabel"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="GB Free (81%)"
+                                android:textColor="@color/lm_text_secondary"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_horizontal"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:drawablePadding="6dp"
+                            android:gravity="center"
+                            android:text="Default App Storage"
+                            android:textColor="@color/lm_text_secondary"
+                            android:textSize="12sp" />
+
+                        <View
+                            android:layout_width="1dp"
+                            android:layout_height="14dp"
+                            android:background="@color/lm_divider" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:drawablePadding="6dp"
+                            android:gravity="center"
+                            android:text="Status: Optimized"
+                            android:textColor="@color/lm_text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- ============== CHANNEL CARD (repeat per channel) ============== -->
+            <!-- This card represents one item; in the RecyclerView adapter,
+                 inflate one of these per ChannelItem and bind:
+                   tvChannelName, tvChannelUrl, tvSubStatus, statusBadge text/bg,
+                   and click listeners for btnResume / btnStop / btnDelete. -->
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                app:cardBackgroundColor="@color/lm_card_bg"
+                app:cardCornerRadius="20dp"
+                app:cardElevation="0dp">
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:id="@+id/tvChannelName"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_toStartOf="@+id/statusBadge"
+                        android:text="youtube.com/@darth_mb"
+                        android:textColor="@color/lm_text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <!-- Status badge: swap background/text/color in code based on state:
+                         RECORDING -> lm_status_recording_background / lm_status_recording_text
+                         STOPPED   -> lm_status_stopped_background   / lm_status_stopped_text
+                         PAUSED    -> lm_status_paused_background    / lm_status_paused_text -->
+                    <TextView
+                        android:id="@+id/statusBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_alignParentEnd="true"
+                        android:background="@drawable/lm_status_recording_background"
+                        android:paddingHorizontal="14dp"
+                        android:paddingVertical="5dp"
+                        android:text="RECORDING"
+                        android:textColor="@color/lm_status_recording_text"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvChannelUrl"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_below="@id/tvChannelName"
+                        android:layout_marginTop="4dp"
+                        android:text="https://youtube.com/@darth_mb"
+                        android:textColor="@color/lm_text_secondary"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/tvSubStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_below="@id/tvChannelUrl"
+                        android:layout_marginTop="2dp"
+                        android:text="Monitoring paused"
+                        android:textColor="@color/lm_text_tertiary"
+                        android:textSize="12sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_below="@id/tvSubStatus"
+                        android:layout_marginTop="14dp"
+                        android:orientation="horizontal"
+                        android:weightSum="3">
+
+                        <Button
+                            android:id="@+id/btnResume"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="6dp"
+                            android:background="@drawable/lm_button_neutral_background"
+                            android:drawableStart="@android:drawable/ic_media_play"
+                            android:drawablePadding="4dp"
+                            android:drawableTint="@color/lm_text_primary"
+                            android:gravity="center"
+                            android:text="Resume"
+                            android:textAllCaps="false"
+                            android:textColor="@color/lm_text_primary"
+                            android:textSize="12sp" />
+
+                        <Button
+                            android:id="@+id/btnStop"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginHorizontal="6dp"
+                            android:background="@drawable/lm_button_neutral_background"
+                            android:gravity="center"
+                            android:text="Stop"
+                            android:textAllCaps="false"
+                            android:textColor="@color/lm_text_primary"
+                            android:textSize="12sp" />
+
+                        <Button
+                            android:id="@+id/btnDelete"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/lm_button_delete_background"
+                            android:gravity="center"
+                            android:text="Delete"
+                            android:textAllCaps="false"
+                            android:textColor="@color/lm_btn_delete_text"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </RelativeLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- Additional channel cards render here via RecyclerView -->
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ===================== BOTTOM NAV BAR ===================== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_alignParentBottom="true"
+        android:background="@color/lm_bg"
+        android:orientation="horizontal"
+        android:weightSum="4">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@android:drawable/ic_menu_myplaces"
+                app:tint="@color/lm_accent_blue" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Monitoring"
+                android:textColor="@color/lm_accent_blue"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@android:drawable/stat_sys_download"
+                app:tint="@color/lm_text_secondary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Downloads"
+                android:textColor="@color/lm_text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@android:drawable/ic_menu_save"
+                app:tint="@color/lm_text_secondary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Storage"
+                android:textColor="@color/lm_text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@android:drawable/ic_menu_recent_history"
+                app:tint="@color/lm_text_secondary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Events"
+                android:textColor="@color/lm_text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+</RelativeLayout>
