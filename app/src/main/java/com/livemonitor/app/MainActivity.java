@@ -608,10 +608,20 @@ public class MainActivity extends AppCompatActivity {
         String permission = hasCustomFolder && hasPersistedWritePermission(settings.getSaveLocationUri())
             ? "write permission valid"
             : hasCustomFolder ? "write permission needs reselect" : "using app storage";
+        String freeValue = freeSpace;
+        String freeUnit = "free";
+        int unitSeparator = freeSpace.lastIndexOf(' ');
+        if (unitSeparator > 0 && unitSeparator < freeSpace.length() - 1) {
+            freeValue = freeSpace.substring(0, unitSeparator);
+            freeUnit = freeSpace.substring(unitSeparator + 1) + " Free";
+        }
+        String optimizedLabel = hasCustomFolder && permission.contains("needs")
+            ? "Status: Reselect folder"
+            : "Status: Optimized";
         binding.storageGaugeView.setFreePercent(freePercent);
-        binding.storageFreeValueText.setText(freeSpace);
-        binding.storageFreeLabelText.setText(freePercent + "% free");
-        binding.storageHealthText.setText("Selected folder: " + folder + "\nFolder status: " + permission);
+        binding.storageFreeValueText.setText(freeValue);
+        binding.storageFreeLabelText.setText(freeUnit + " (" + freePercent + "%)");
+        binding.storageHealthText.setText(optimizedLabel);
     }
 
     private void updateDownloadSummary(List<RecordingItem> recordings) {
