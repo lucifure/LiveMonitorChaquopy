@@ -10,6 +10,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.net.Uri;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
@@ -132,11 +134,31 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        setupMonitoringListHeader();
         binding.channelListView.setAdapter(channelAdapter);
-        binding.channelListView.setEmptyView(binding.emptyMonitoringText);
 
         binding.recordingListView.setAdapter(recordingAdapter);
         binding.recordingListView.setEmptyView(binding.emptyDownloadsText);
+    }
+
+
+    private void setupMonitoringListHeader() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+
+        moveToHeader(binding.monitoringHeader, header);
+        moveToHeader(binding.storageHealthCard, header);
+        moveToHeader(binding.emptyMonitoringText, header);
+
+        binding.channelListView.addHeaderView(header, null, false);
+    }
+
+    private static void moveToHeader(View view, LinearLayout header) {
+        ViewGroup parent = (ViewGroup) view.getParent();
+        if (parent != null) {
+            parent.removeView(view);
+        }
+        header.addView(view);
     }
 
     private void setupClickListeners() {
