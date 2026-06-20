@@ -92,6 +92,17 @@ public class LogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        Button viewSelectButton = new Button(this);
+        viewSelectButton.setAllCaps(false);
+        viewSelectButton.setText("View/Select");
+        viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
+        LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        viewSelectParams.leftMargin = dp(8);
+        buttonRow.addView(viewSelectButton, viewSelectParams);
+
         LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -158,6 +169,38 @@ public class LogActivity extends AppCompatActivity {
         }
 
         showChunkedCopyDialog(ClipboardLogSplitter.split(text));
+    }
+
+    private void viewSelectFullLog() {
+        String text = storage.buildCopyTextForAllLogs();
+
+        if (text.trim().isEmpty()) {
+            Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        showSelectableText("Global Log", text, "LiveMonitor Global Log");
+    }
+
+    private void showSelectableText(String title, String text, String clipboardLabel) {
+        TextView logTextView = new TextView(this);
+        logTextView.setText(text);
+        logTextView.setTextIsSelectable(true);
+        logTextView.setTextSize(12);
+        logTextView.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(logTextView);
+
+        new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(scrollView)
+            .setPositiveButton("Copy all", (dialog, which) -> {
+                copyTextToClipboard(clipboardLabel, text);
+                Toast.makeText(this, "Visible log copied.", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("Close", null)
+            .show();
     }
 
     private void showChunkedCopyDialog(List<ClipboardLogSplitter.Part> chunks) {
