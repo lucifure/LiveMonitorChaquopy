@@ -3,7 +3,6 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -136,7 +135,7 @@ public class ChannelAdapter extends BaseAdapter {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setBackground(rounded(Color.rgb(26, 26, 26), dp(16), Color.rgb(42, 42, 42)));
+        root.setBackgroundResource(R.drawable.lm_card_background);
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -242,7 +241,7 @@ public class ChannelAdapter extends BaseAdapter {
         holder.title.setText(channel.getDisplayTitle());
         holder.url.setText(channel.getUrl());
         holder.statusBadge.setText(formatStatus(channel.getStatus()));
-        holder.statusBadge.setBackgroundColor(statusColor(channel.getStatus()));
+        applyStatusBadge(holder.statusBadge, channel.getStatus());
         holder.details.setText(buildDetails(channel));
         holder.pauseResume.setText(channel.shouldMonitor() ? "Pause" : "Resume");
 
@@ -338,41 +337,30 @@ public class ChannelAdapter extends BaseAdapter {
         return "Idle";
     }
 
-    private int statusColor(String status) {
-        if (ChannelItem.STATUS_RECORDING.equals(status)) {
-            return Color.rgb(255, 107, 107);
-        }
-
-        if (ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
-            return Color.rgb(255, 128, 0);
-        }
-
-        if (ChannelItem.STATUS_WAITING_FOR_LIVE.equals(status)) {
-            return Color.rgb(22, 199, 132);
-        }
-
-        if (ChannelItem.STATUS_RETRYING.equals(status)) {
-            return Color.rgb(255, 170, 0);
-        }
-
-        if (ChannelItem.STATUS_FAILED.equals(status)) {
-            return Color.rgb(180, 0, 0);
+    private void applyStatusBadge(TextView badge, String status) {
+        if (ChannelItem.STATUS_RECORDING.equals(status)
+            || ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_recording_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+            return;
         }
 
         if (ChannelItem.STATUS_PAUSED_BY_USER.equals(status)
             || ChannelItem.STATUS_PAUSED_NETWORK.equals(status)) {
-            return Color.rgb(100, 100, 100);
+            badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_paused_text));
+            return;
         }
 
-        return Color.rgb(80, 120, 200);
-    }
+        if (ChannelItem.STATUS_STOPPED.equals(status)
+            || ChannelItem.STATUS_FAILED.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_stopped_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_stopped_text));
+            return;
+        }
 
-    private GradientDrawable rounded(int color, int radius, int strokeColor) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        drawable.setStroke(dp(1), strokeColor);
-        return drawable;
+        badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+        badge.setTextColor(context.getResources().getColor(R.color.lm_accent_blue_glow));
     }
 
     private int dp(int value) {

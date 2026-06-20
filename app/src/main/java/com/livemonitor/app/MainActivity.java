@@ -599,13 +599,19 @@ public class MainActivity extends AppCompatActivity {
         AppSettings settings = storage.loadSettings();
         java.io.File externalDir = getExternalFilesDir(null);
         java.io.File baseDir = externalDir == null ? getFilesDir() : externalDir;
-        String freeSpace = RecordingProgressTracker.formatBytes(baseDir.getUsableSpace());
+        long usable = baseDir.getUsableSpace();
+        long total = baseDir.getTotalSpace();
+        String freeSpace = RecordingProgressTracker.formatBytes(usable);
+        int freePercent = total <= 0L ? 0 : Math.round((usable * 100f) / total);
         String folder = settings.getSaveLocationDisplayName();
         boolean hasCustomFolder = !settings.getSaveLocationUri().trim().isEmpty();
         String permission = hasCustomFolder && hasPersistedWritePermission(settings.getSaveLocationUri())
             ? "write permission valid"
             : hasCustomFolder ? "write permission needs reselect" : "using app storage";
-        binding.storageHealthText.setText("Free space: " + freeSpace + "\nSelected folder: " + folder + "\nFolder status: " + permission);
+        binding.storageGaugeView.setFreePercent(freePercent);
+        binding.storageFreeValueText.setText(freeSpace);
+        binding.storageFreeLabelText.setText(freePercent + "% free");
+        binding.storageHealthText.setText("Selected folder: " + folder + "\nFolder status: " + permission);
     }
 
     private void updateDownloadSummary(List<RecordingItem> recordings) {

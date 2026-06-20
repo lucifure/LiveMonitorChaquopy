@@ -147,14 +147,52 @@
                     android:textStyle="bold"
                     android:textSize="15sp" />
 
+                <FrameLayout
+                    android:layout_width="150dp"
+                    android:layout_height="150dp"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="12dp">
+
+                    <com.livemonitor.app.StorageGaugeView
+                        android:id="@+id/storageGaugeView"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/storageFreeValueText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Checking"
+                            android:textColor="@color/text"
+                            android:textSize="24sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/storageFreeLabelText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Free space"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </FrameLayout>
+
                 <TextView
                     android:id="@+id/storageHealthText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Free space: checking..."
+                    android:text="Selected folder: checking..."
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp"
-                    android:paddingTop="6dp" />
+                    android:gravity="center"
+                    android:paddingTop="10dp" />
             </LinearLayout>
 
             <TextView
