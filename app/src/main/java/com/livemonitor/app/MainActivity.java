@@ -603,6 +603,7 @@ public class MainActivity extends AppCompatActivity {
         long total = baseDir.getTotalSpace();
         String freeSpace = RecordingProgressTracker.formatBytes(usable);
         int freePercent = total <= 0L ? 0 : Math.round((usable * 100f) / total);
+        String folder = settings.getSaveLocationDisplayName();
         boolean hasCustomFolder = !settings.getSaveLocationUri().trim().isEmpty();
         String permission = hasCustomFolder && hasPersistedWritePermission(settings.getSaveLocationUri())
             ? "write permission valid"
