@@ -1362,13 +1362,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         LiveInfo liveInfo,
         YtDlpPrimaryRecorderDecision primaryRecorderDecision
     ) {
-        String videoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
+        String resolvedVideoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
             ? liveInfo.videoUrl
             : recording.getVideoUrl();
 
-        if (isBlank(videoUrl)) {
-            videoUrl = YouTubeUrlUtils.buildWatchUrl(recording.getVideoId());
+        if (isBlank(resolvedVideoUrl)) {
+            resolvedVideoUrl = YouTubeUrlUtils.buildWatchUrl(recording.getVideoId());
         }
+
+        String videoUrl = buildPrimaryRecorderInputUrl(channel, resolvedVideoUrl);
 
         if (isBlank(videoUrl)) {
             return false;
@@ -1817,6 +1819,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
         broadcastRecordingUpdated(message);
         return true;
+    }
+
+    private String buildPrimaryRecorderInputUrl(ChannelItem channel, String resolvedVideoUrl) {
+        String channelLiveUrl = buildChannelLiveUrl(channel == null ? "" : channel.getUrl());
+        if (!isBlank(channelLiveUrl)) {
+            return channelLiveUrl;
+        }
+        return resolvedVideoUrl;
+    }
+
+    private String buildChannelLiveUrl(String channelUrl) {
+        if (isBlank(channelUrl) || YouTubeUrlUtils.isDirectVideoUrl(channelUrl)) {
+            return "";
+        }
+
+        String trimmed = channelUrl.trim().replaceAll("/+$", "");
+        if (trimmed.endsWith("/live")) {
+            return trimmed;
+        }
+        return trimmed + "/live";
     }
 
     private List<YtDlpResolveAttempt> buildYtDlpPrimaryRecordAttempts(
@@ -3533,10 +3555,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        String copyDetails = buildSelectedFolderCopyDetails(recording, source, folderName);
+        if (recording.isCopiedToSelectedFolder()) {
+            log(LogItem.LEVEL_INFO, LogItem.SOURCE_STORAGE, channel, "Skipping selected-folder copy; recording was already copied.", copyDetails);
+            return;
+        }
+
         recording.markCopyingToFolder(folderName);
         storage.upsertRecording(recording);
         broadcastRecordingUpdated("Copying to selected folder…");
-        log(LogItem.LEVEL_INFO, LogItem.SOURCE_STORAGE, channel, "Copying to selected folder.", folderName);
+        log(LogItem.LEVEL_INFO, LogItem.SOURCE_STORAGE, channel, "Copying to selected folder.", copyDetails);
 
         try {
             Uri parentUri = DocumentsContract.buildDocumentUriUsingTree(
@@ -3569,14 +3597,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             recording.markCompleted(source.getAbsolutePath());
-            recording.setSavedToDisplay(folderName);
-            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_STORAGE, channel, "Saved to selected folder.", folderName);
+            recording.markCopiedToSelectedFolder(folderName);
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_STORAGE, channel, "Saved to selected folder.", copyDetails);
             broadcastRecordingUpdated("Saved to: " + folderName);
         } catch (Exception e) {
             recording.markCompleted(source.getAbsolutePath());
             recording.setSavedToDisplay("App storage (folder copy failed: " + normalizeErrorMessage(e) + ")");
-            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Folder copy failed.", normalizeErrorMessage(e));
+            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Folder copy failed.", copyDetails + ", error=" + normalizeErrorMessage(e));
         }
+    }
+
+    private String buildSelectedFolderCopyDetails(RecordingItem recording, File source, String folderName) {
+        if (recording == null) {
+            return "folder=" + folderName;
+        }
+        return "recordingId=" + recording.getId()
+            + ", videoId=" + recording.getVideoId()
+            + ", source=" + (source == null ? "" : source.getAbsolutePath())
+            + ", folder=" + folderName;
     }
 
 
