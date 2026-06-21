@@ -94,7 +94,7 @@ public class LogActivity extends AppCompatActivity {
 
         Button viewSelectButton = new Button(this);
         viewSelectButton.setAllCaps(false);
-        viewSelectButton.setText("View/Select");
+        viewSelectButton.setText("View/Select & Copy");
         viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
         LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -192,15 +192,22 @@ public class LogActivity extends AppCompatActivity {
         ScrollView scrollView = new ScrollView(this);
         scrollView.addView(logTextView);
 
-        new AlertDialog.Builder(this)
-            .setTitle(title)
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+            .setTitle(title + " · " + ClipboardLogSplitter.countLines(text) + " lines")
+            .setMessage("Drag-select any range, or use Select All from Android's text-selection toolbar for manual copy control.")
             .setView(scrollView)
-            .setPositiveButton("Copy all", (dialog, which) -> {
+            .setNegativeButton("Close", null);
+
+        if (text.length() <= ClipboardLogSplitter.MAX_CLIPBOARD_CHARS_PER_PART) {
+            builder.setPositiveButton("Copy all", (dialog, which) -> {
                 copyTextToClipboard(clipboardLabel, text);
-                Toast.makeText(this, "Visible log copied.", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("Close", null)
-            .show();
+                Toast.makeText(this, "Full visible log copied.", Toast.LENGTH_SHORT).show();
+            });
+        } else {
+            builder.setNeutralButton("Split copy", (dialog, which) -> showChunkedCopyDialog(ClipboardLogSplitter.split(text)));
+        }
+
+        builder.show();
     }
 
     private void showChunkedCopyDialog(List<ClipboardLogSplitter.Part> chunks) {
@@ -214,7 +221,8 @@ public class LogActivity extends AppCompatActivity {
         content.setPadding(dp(12), 0, dp(12), 0);
 
         TextView helpText = new TextView(this);
-        helpText.setText("Choose Copy to place a safe-sized part on the clipboard, or View/Select to select only the lines you need.");
+        int totalLines = chunks.get(chunks.size() - 1).getEndLine();
+        helpText.setText("Total lines: " + totalLines + ". Choose Copy to place one safe-sized part on the clipboard, or View/Select & Copy to manually select exact lines.");
         helpText.setPadding(0, 0, 0, dp(8));
         content.addView(helpText);
 

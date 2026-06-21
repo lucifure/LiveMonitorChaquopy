@@ -238,14 +238,17 @@ public class RecorderCommandBuilder {
             args.add("--live-from-start");
         }
 
-        args.add("--extractor-args");
         String normalizedPlayerClient = normalizePlayerClient(playerClient);
+        boolean autoPlayerClient = "auto".equals(normalizedPlayerClient);
         String mwebPoTokenExtractorArgs = "mweb".equals(normalizedPlayerClient)
             ? buildMwebPoTokenExtractorArgs(settings)
             : "";
-        args.add(isBlank(mwebPoTokenExtractorArgs)
-            ? "youtube:player_client=" + normalizedPlayerClient
-            : mwebPoTokenExtractorArgs);
+        if (!autoPlayerClient) {
+            args.add("--extractor-args");
+            args.add(isBlank(mwebPoTokenExtractorArgs)
+                ? "youtube:player_client=" + normalizedPlayerClient
+                : mwebPoTokenExtractorArgs);
+        }
         args.add("--hls-use-mpegts");
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
@@ -325,7 +328,8 @@ public class RecorderCommandBuilder {
             return "android_vr";
         }
 
-        return playerClient.trim().toLowerCase(java.util.Locale.US);
+        String normalized = playerClient.trim().toLowerCase(java.util.Locale.US);
+        return "auto".equals(normalized) ? "auto" : normalized;
     }
 
     private String buildMwebPoTokenExtractorArgs(AppSettings settings) {
