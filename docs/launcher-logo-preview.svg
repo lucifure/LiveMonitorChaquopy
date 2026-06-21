@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img" aria-labelledby="title desc">
+  <title id="title">Live Monitor launcher logo preview</title>
+  <desc id="desc">Dark teal rounded-square app icon with cyan broadcast arcs, a video play button, and a download arrow.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#05161A"/>
+      <stop offset="1" stop-color="#082C32"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="26" y1="34" x2="82" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#80F6FF"/>
+      <stop offset="1" stop-color="#2EC6D1"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.7" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.11 0 0 0 0 0.85 0 0 0 0 0.90 0 0 0 0.75 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="brushed" width="108" height="4" patternUnits="userSpaceOnUse">
+      <path d="M0 0H108" stroke="#70EEF7" stroke-opacity="0.10" stroke-width="0.35"/>
+      <path d="M0 2H108" stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="0.25"/>
+    </pattern>
+  </defs>
+
+  <rect x="6" y="6" width="96" height="96" rx="10" fill="url(#bg)"/>
+  <circle cx="54" cy="54" r="44" fill="#0A2A30" opacity="0.72"/>
+  <rect x="6" y="6" width="96" height="96" rx="10" fill="url(#brushed)" opacity="0.8"/>
+
+  <g filter="url(#softGlow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 78A42 42 0 1 1 88 78" stroke="#66EAF4" stroke-width="5.4" opacity="0.92"/>
+    <path d="M31 72A30 30 0 1 1 77 72" stroke="#5EDDE7" stroke-width="4.2" opacity="0.88"/>
+  </g>
+
+  <g filter="url(#softGlow)">
+    <rect x="26" y="34" width="56" height="36" rx="8" fill="#000000" opacity="0.30" transform="translate(1 2)"/>
+    <rect x="26" y="34" width="56" height="36" rx="8" fill="url(#screen)" opacity="0.94"/>
+    <path d="M49 43V65L67 54Z" fill="#123C43" opacity="0.78"/>
+    <path d="M49 43V65L67 54Z" fill="none" stroke="#7CF6FF" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>
+  </g>
+
+  <g filter="url(#softGlow)" fill="none" stroke="#67EAF5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M54 69V88M42 78L54 90L66 78" stroke-width="5" opacity="0.95"/>
+    <path d="M40 96H68" stroke-width="4" opacity="0.95"/>
+  </g>
+</svg>
