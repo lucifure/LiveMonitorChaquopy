@@ -194,7 +194,7 @@ public class ChannelAdapter extends BaseAdapter {
 
         Button delete = new Button(context);
         delete.setAllCaps(false);
-        delete.setText("▰  Delete");
+        delete.setText("Delete");
         delete.setTextColor(Color.rgb(214, 220, 228));
         delete.setTextSize(18);
         delete.setBackgroundResource(R.drawable.lm_glass_button_background);

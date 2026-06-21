@@ -67,6 +67,7 @@ public class RecordingItem {
     private static final String JSON_CONVERTED_AT = "convertedAt";
     private static final String JSON_HIDDEN_FROM_DOWNLOADING = "hiddenFromDownloading";
     private static final String JSON_SAVED_TO_DISPLAY = "savedToDisplay";
+    private static final String JSON_COPIED_TO_SELECTED_FOLDER = "copiedToSelectedFolder";
 
     private String id;
     private String channelId;
@@ -91,6 +92,7 @@ public class RecordingItem {
     private long convertedAt;
     private boolean hiddenFromDownloading;
     private String savedToDisplay;
+    private boolean copiedToSelectedFolder;
 
     public RecordingItem(
         String channelId,
@@ -128,6 +130,7 @@ public class RecordingItem {
         this.convertedAt = 0L;
         this.hiddenFromDownloading = false;
         this.savedToDisplay = "";
+        this.copiedToSelectedFolder = false;
     }
 
     public RecordingItem(
@@ -153,7 +156,8 @@ public class RecordingItem {
         long finishedAt,
         long convertedAt,
         boolean hiddenFromDownloading,
-        String savedToDisplay
+        String savedToDisplay,
+        boolean copiedToSelectedFolder
     ) {
         this.id = isBlank(id) ? UUID.randomUUID().toString() : id;
         this.channelId = nullToEmpty(channelId);
@@ -178,6 +182,7 @@ public class RecordingItem {
         this.convertedAt = Math.max(0L, convertedAt);
         this.hiddenFromDownloading = hiddenFromDownloading;
         this.savedToDisplay = nullToEmpty(savedToDisplay);
+        this.copiedToSelectedFolder = copiedToSelectedFolder;
     }
 
     public static RecordingItem fromJson(JSONObject json) throws JSONException {
@@ -208,7 +213,8 @@ public class RecordingItem {
             json.optLong(JSON_FINISHED_AT, 0L),
             json.optLong(JSON_CONVERTED_AT, 0L),
             json.optBoolean(JSON_HIDDEN_FROM_DOWNLOADING, false),
-            json.optString(JSON_SAVED_TO_DISPLAY, "")
+            json.optString(JSON_SAVED_TO_DISPLAY, ""),
+            json.optBoolean(JSON_COPIED_TO_SELECTED_FOLDER, false)
         );
     }
 
@@ -242,6 +248,7 @@ public class RecordingItem {
         json.put(JSON_CONVERTED_AT, convertedAt);
         json.put(JSON_HIDDEN_FROM_DOWNLOADING, hiddenFromDownloading);
         json.put(JSON_SAVED_TO_DISPLAY, savedToDisplay);
+        json.put(JSON_COPIED_TO_SELECTED_FOLDER, copiedToSelectedFolder);
 
         return json;
     }
@@ -379,6 +386,18 @@ public class RecordingItem {
 
     public void setSavedToDisplay(String savedToDisplay) {
         this.savedToDisplay = nullToEmpty(savedToDisplay);
+        touch();
+    }
+
+    public boolean isCopiedToSelectedFolder() {
+        return copiedToSelectedFolder;
+    }
+
+    public void markCopiedToSelectedFolder(String folderDisplayName) {
+        copiedToSelectedFolder = true;
+        if (!isBlank(folderDisplayName)) {
+            savedToDisplay = folderDisplayName.trim();
+        }
         touch();
     }
 
