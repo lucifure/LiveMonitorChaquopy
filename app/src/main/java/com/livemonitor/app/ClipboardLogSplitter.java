@@ -9,6 +9,20 @@ public final class ClipboardLogSplitter {
 
     private ClipboardLogSplitter() {}
 
+    public static int countLines(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+
+        int lines = 1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n' && i < text.length() - 1) {
+                lines++;
+            }
+        }
+        return lines;
+    }
+
     public static List<Part> split(String text) {
         List<Part> parts = new ArrayList<>();
         if (text == null || text.isEmpty()) {

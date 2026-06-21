@@ -1871,6 +1871,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private List<String> buildPlayerClientAttemptOrder(RemoteConfig config) {
         List<String> clients = new ArrayList<>();
+
+        /*
+         * Try yt-dlp's own YouTube client auto-selection before forcing android_vr.
+         * Termux succeeds this way more often, and it lets yt-dlp attach its current
+         * default request identity/headers instead of our explicit extractor arg.
+         */
+        addUniquePlayerClient(clients, "auto");
         addUniquePlayerClient(clients, storage == null ? "" : storage.getLastWorkingPlayerClient());
 
         List<String> configuredClients = config == null
@@ -1914,16 +1921,21 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean allowWaitForVideo
     ) {
         String normalizedClient = normalizePlayerClient(playerClient);
+        boolean autoClient = "auto".equals(normalizedClient);
         boolean mwebPoToken = "mweb".equals(normalizedClient)
             && appSettings != null
             && appSettings.hasYtDlpCookies()
             && appSettings.hasYtDlpPoToken();
-        String extractorArgs = mwebPoToken
-            ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
-            : "youtube:player_client=" + normalizedClient;
-        String description = (mwebPoToken
-                ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
-                : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
+        String extractorArgs = autoClient
+            ? RecorderCommandBuilder.EXTRACTOR_ARGS_NONE
+            : mwebPoToken
+                ? "youtube:player_client=mweb;po_token=mweb.gvs+<redacted>;player-skip=webpage,configs"
+                : "youtube:player_client=" + normalizedClient;
+        String description = (autoClient
+                ? "youtube:player_client=auto, no explicit extractor args"
+                : mwebPoToken
+                    ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
+                    : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
             + ", format=bv*[height<=480]+ba/b DASH"
             + (appSettings != null && appSettings.isLiveFromStartEnabled()
                 ? ", liveFromStart=" + allowLiveFromStart
