@@ -23,8 +23,8 @@ public class RecordingProgressTracker {
     }
 
     private static final long DEFAULT_UPDATE_INTERVAL_MS = 2_000L;
-    private static final long STALL_WARNING_AFTER_MS = 2L * 60L * 1_000L;
-    private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 2L * 60L * 1_000L;
+    private static final long STALL_WARNING_AFTER_MS = 3L * 60L * 1_000L;
+    private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 30L * 1_000L;
 
     private final AppStorage storage;
     private final Map<String, TrackedRecording> trackedRecordings;
