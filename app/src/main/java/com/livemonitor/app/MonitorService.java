@@ -549,10 +549,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             if (channel != null) {
                 activeLoops.remove(channel.getId());
-                channel.markPausedByUser();
+                channel.markStopped();
                 storage.upsertChannel(channel);
                 notificationHelper.showChannelMonitoringNotification(channel);
-                broadcastChannelUpdated("Monitoring paused after recording stop.");
+                broadcastChannelUpdated("Monitoring stopped after recording stop.");
             }
         }
 

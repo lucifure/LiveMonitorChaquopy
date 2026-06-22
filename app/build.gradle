@@ -97,45 +97,83 @@ def writeLauncherPng(File outputFile, int size, boolean roundIcon) {
     def graphics = image.createGraphics()
     graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
     graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+    graphics.setRenderingHint(java.awt.RenderingHints.KEY_STROKE_CONTROL, java.awt.RenderingHints.VALUE_STROKE_PURE)
 
-    def background = new java.awt.GradientPaint(0, 0, new java.awt.Color(18, 31, 50), size, size, new java.awt.Color(13, 71, 161))
+    def background = new java.awt.GradientPaint(0, 0, new java.awt.Color(5, 22, 26), size, size, new java.awt.Color(8, 44, 50))
     graphics.setPaint(background)
     if (roundIcon) {
-        graphics.fillOval(((int) Math.round(size * 0.04f)), ((int) Math.round(size * 0.04f)), ((int) Math.round(size * 0.92f)), ((int) Math.round(size * 0.92f)))
+        graphics.fillOval(((int) Math.round(size * 0.03f)), ((int) Math.round(size * 0.03f)), ((int) Math.round(size * 0.94f)), ((int) Math.round(size * 0.94f)))
     } else {
         graphics.fillRoundRect(0, 0, size, size, ((int) Math.round(size * 0.20f)), ((int) Math.round(size * 0.20f)))
     }
 
-    int screenX = ((int) Math.round(size * 0.17f))
-    int screenY = ((int) Math.round(size * 0.28f))
-    int screenW = ((int) Math.round(size * 0.66f))
-    int screenH = ((int) Math.round(size * 0.42f))
-    int stroke = Math.max(2, ((int) Math.round(size * 0.045f)))
-
-    graphics.setColor(new java.awt.Color(16, 32, 51))
-    graphics.fillRoundRect(screenX, screenY, screenW, screenH, stroke * 2, stroke * 2)
-    graphics.setStroke(new java.awt.BasicStroke(stroke, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    graphics.setColor(java.awt.Color.WHITE)
-    graphics.drawRoundRect(screenX, screenY, screenW, screenH, stroke * 2, stroke * 2)
-
-    int[][] points = [
-            [((int) Math.round(size * 0.25f)), ((int) Math.round(size * 0.52f))],
-            [((int) Math.round(size * 0.34f)), ((int) Math.round(size * 0.52f))],
-            [((int) Math.round(size * 0.39f)), ((int) Math.round(size * 0.40f))],
-            [((int) Math.round(size * 0.48f)), ((int) Math.round(size * 0.61f))],
-            [((int) Math.round(size * 0.55f)), ((int) Math.round(size * 0.45f))],
-            [((int) Math.round(size * 0.62f)), ((int) Math.round(size * 0.52f))],
-            [((int) Math.round(size * 0.75f)), ((int) Math.round(size * 0.52f))],
-    ]
-    graphics.setStroke(new java.awt.BasicStroke(Math.max(3, ((int) Math.round(size * 0.045f))), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    graphics.setColor(new java.awt.Color(0, 230, 118))
-    for (int i = 0; i < points.length - 1; i++) {
-        graphics.drawLine(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+    // Subtle brushed-metal texture like the reference, generated at build time so no binary art is committed.
+    graphics.setStroke(new java.awt.BasicStroke(1f))
+    for (int y = 0; y < size; y += Math.max(1, (int) Math.round(size * 0.018f))) {
+        int alpha = (y % 4 == 0) ? 30 : 14
+        graphics.setColor(new java.awt.Color(112, 238, 247, alpha))
+        graphics.drawLine(0, y, size, y)
     }
 
-    int badge = Math.max(6, ((int) Math.round(size * 0.085f)))
-    graphics.setColor(new java.awt.Color(255, 61, 0))
-    graphics.fillOval(((int) Math.round(size * 0.70f)), ((int) Math.round(size * 0.17f)), badge, badge)
+    def center = size / 2f
+    def cyan = new java.awt.Color(94, 224, 234)
+    def cyanBright = new java.awt.Color(128, 246, 255)
+    def glow = new java.awt.Color(28, 217, 230, 80)
+
+    def drawIconArc = { float radius, float start, float extent ->
+        def diameter = radius * 2f
+        graphics.draw(new java.awt.geom.Arc2D.Float((float) (center - radius), (float) (center - radius), (float) diameter, (float) diameter, (float) start, (float) extent, java.awt.geom.Arc2D.OPEN))
+    }
+    def drawIconDownloadArrow = { ->
+        def path = new java.awt.geom.Path2D.Float()
+        path.moveTo(size * 0.50f, size * 0.660f)
+        path.lineTo(size * 0.50f, size * 0.835f)
+        path.moveTo(size * 0.390f, size * 0.745f)
+        path.lineTo(size * 0.50f, size * 0.855f)
+        path.lineTo(size * 0.610f, size * 0.745f)
+        path.moveTo(size * 0.375f, size * 0.925f)
+        path.lineTo(size * 0.625f, size * 0.925f)
+        graphics.draw(path)
+    }
+
+    graphics.setColor(glow)
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(5f, size * 0.060f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    drawIconArc((float) (size * 0.37f), 132f, -264f)
+    drawIconArc((float) (size * 0.27f), 132f, -264f)
+
+    graphics.setColor(cyan)
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(3f, size * 0.050f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    drawIconArc((float) (size * 0.37f), 132f, -264f)
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(2f, size * 0.039f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    drawIconArc((float) (size * 0.27f), 132f, -264f)
+
+    int screenX = ((int) Math.round(size * 0.245f))
+    int screenY = ((int) Math.round(size * 0.315f))
+    int screenW = ((int) Math.round(size * 0.510f))
+    int screenH = ((int) Math.round(size * 0.340f))
+    int radius = Math.max(6, ((int) Math.round(size * 0.075f)))
+    graphics.setColor(new java.awt.Color(0, 0, 0, 95))
+    graphics.fillRoundRect(screenX + 1, screenY + Math.max(1, ((int) Math.round(size / 42f))), screenW, screenH, radius, radius)
+    graphics.setPaint(new java.awt.GradientPaint(screenX, screenY, cyanBright, screenX + screenW, screenY + screenH, new java.awt.Color(46, 198, 209)))
+    graphics.fillRoundRect(screenX, screenY, screenW, screenH, radius, radius)
+
+    def play = new java.awt.geom.Path2D.Float()
+    play.moveTo(size * 0.465f, size * 0.405f)
+    play.lineTo(size * 0.465f, size * 0.600f)
+    play.lineTo(size * 0.640f, size * 0.502f)
+    play.closePath()
+    graphics.setColor(new java.awt.Color(12, 55, 62, 175))
+    graphics.fill(play)
+    graphics.setColor(cyanBright)
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(1.2f, size * 0.014f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    graphics.draw(play)
+
+    graphics.setColor(new java.awt.Color(28, 217, 230, 90))
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(7f, size * 0.070f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    drawIconDownloadArrow()
+    graphics.setColor(cyanBright)
+    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(3f, size * 0.050f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+    drawIconDownloadArrow()
 
     graphics.dispose()
     javax.imageio.ImageIO.write(image, 'png', outputFile)

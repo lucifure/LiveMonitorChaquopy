@@ -134,8 +134,8 @@ public class ChannelAdapter extends BaseAdapter {
     private ChannelViewHolder createViewHolder() {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(24), dp(20), dp(24), dp(20));
-        root.setBackgroundResource(R.drawable.lm_glass_card_background);
+        root.setPadding(dp(16), dp(12), dp(16), dp(12));
+        root.setBackgroundResource(R.drawable.lm_card_background);
         root.setElevation(dp(8));
 
         LinearLayout topRow = new LinearLayout(context);
@@ -144,7 +144,7 @@ public class ChannelAdapter extends BaseAdapter {
 
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
-        title.setTextSize(24);
+        title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT);
         title.setSingleLine(false);
 
@@ -157,60 +157,60 @@ public class ChannelAdapter extends BaseAdapter {
 
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
-        statusBadge.setTextSize(14);
+        statusBadge.setTextSize(12);
         statusBadge.setGravity(Gravity.CENTER);
-        statusBadge.setPadding(dp(14), dp(6), dp(14), dp(6));
+        statusBadge.setPadding(dp(10), dp(4), dp(10), dp(4));
         topRow.addView(statusBadge);
 
         TextView url = new TextView(context);
         url.setTextColor(Color.rgb(194, 202, 211));
-        url.setTextSize(16);
+        url.setTextSize(12);
         url.setSingleLine(false);
         url.setPadding(0, dp(4), 0, 0);
 
         TextView details = new TextView(context);
         details.setTextColor(Color.rgb(194, 202, 211));
-        details.setTextSize(16);
+        details.setTextSize(11);
         details.setSingleLine(false);
         details.setPadding(0, dp(4), 0, 0);
 
         LinearLayout buttonRow = new LinearLayout(context);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.END);
-        buttonRow.setPadding(0, dp(16), 0, 0);
+        buttonRow.setPadding(0, dp(10), 0, 0);
 
         Button pauseResume = new Button(context);
         pauseResume.setAllCaps(false);
         pauseResume.setTextColor(Color.rgb(214, 220, 228));
-        pauseResume.setTextSize(18);
-        pauseResume.setBackgroundResource(R.drawable.lm_glass_button_background);
+        pauseResume.setTextSize(14);
+        pauseResume.setBackgroundResource(R.drawable.lm_button_neutral_background);
 
         Button stop = new Button(context);
         stop.setAllCaps(false);
         stop.setText("■  Stop");
         stop.setTextColor(Color.rgb(214, 220, 228));
-        stop.setTextSize(18);
-        stop.setBackgroundResource(R.drawable.lm_glass_button_background);
+        stop.setTextSize(14);
+        stop.setBackgroundResource(R.drawable.lm_button_delete_background);
 
         Button delete = new Button(context);
         delete.setAllCaps(false);
         delete.setText("Delete");
         delete.setTextColor(Color.rgb(214, 220, 228));
-        delete.setTextSize(18);
-        delete.setBackgroundResource(R.drawable.lm_glass_button_background);
+        delete.setTextSize(14);
+        delete.setBackgroundResource(R.drawable.lm_button_delete_background);
 
         buttonRow.addView(
             pauseResume,
             new LinearLayout.LayoutParams(
                 0,
-                dp(52),
+                dp(36),
                 1f
             )
         );
 
         LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
             0,
-            dp(52),
+            dp(36),
             1f
         );
         stopParams.leftMargin = dp(8);
@@ -218,7 +218,7 @@ public class ChannelAdapter extends BaseAdapter {
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
             0,
-            dp(52),
+            dp(36),
             1f
         );
         deleteParams.leftMargin = dp(8);

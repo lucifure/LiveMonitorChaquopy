@@ -397,8 +397,8 @@ public class MainActivity extends AppCompatActivity {
 
         new AlertDialog.Builder(this)
             .setTitle("Stop and save recording?")
-            .setMessage("Stop this recording now, remove it from Downloading, save the recorded file in Downloaded Files, and keep monitoring the channel for the next live stream?")
-            .setNegativeButton("Cancel", null)
+            .setMessage("Stop and save this recording? Monitoring for this channel will also be paused.")
+            .setNegativeButton("Keep Recording", null)
             .setPositiveButton("Stop & Save", (dialog, which) -> stopDownload(recording))
             .show();
     }
@@ -435,6 +435,16 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        ChannelItem channel = storage.findChannelById(recording.getChannelId());
+        if (channel != null) {
+            channel.markStopped();
+            storage.upsertChannel(channel);
+        }
+
+        recording.markStoppedByUser();
+        recording.showInDownloading();
+        storage.upsertRecording(recording);
+
         Intent intent = new Intent(this, MonitorService.class);
         intent.setAction(LiveMonitorActions.ACTION_STOP_RECORDING);
         intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
@@ -442,7 +452,7 @@ public class MainActivity extends AppCompatActivity {
         startServiceCompat(intent);
 
         refreshAll();
-        Toast.makeText(this, "Stopping and saving recording…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Stopping, saving, and pausing monitoring…", Toast.LENGTH_SHORT).show();
     }
 
     private void startMonitoringService(ChannelItem channel) {
@@ -560,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void refreshAll() {
+        reconcileStaleRecordingCards();
         List<ChannelItem> channels = loadVisibleMonitoringChannels();
         channelAdapter.setChannels(channels);
 
@@ -590,6 +601,52 @@ public class MainActivity extends AppCompatActivity {
             binding.emptyDownloadsText.setVisibility(
                 recordings.isEmpty() ? View.VISIBLE : View.GONE
             );
+        }
+    }
+
+
+    private void reconcileStaleRecordingCards() {
+        long now = System.currentTimeMillis();
+        boolean changed = false;
+        List<RecordingItem> recordings = storage.loadRecordings();
+
+        for (RecordingItem recording : recordings) {
+            if (recording == null || !RecordingItem.STATUS_RECORDING.equals(recording.getStatus())) {
+                continue;
+            }
+
+            ChannelItem channel = storage.findChannelById(recording.getChannelId());
+            boolean channelStillRecordingSameVideo = channel != null
+                && channel.isRecording()
+                && (recording.getVideoId().trim().isEmpty() || channel.isSameCurrentVideo(recording.getVideoId()));
+            boolean staleForUi = now - recording.getUpdatedAt() > 3L * 60L * 1_000L;
+
+            if (channelStillRecordingSameVideo && !staleForUi) {
+                continue;
+            }
+
+            if (recording.hasExistingFinalMp4File()) {
+                recording.markCompleted(recording.getFinalMp4Path());
+                recording.hideFromDownloading();
+            } else if (recording.hasExistingTempTsFile()) {
+                recording.markStoppedBySystem("UI reconciled stale REC state; recorder is no longer active.");
+                recording.hideFromDownloading();
+            } else {
+                recording.markStoppedBySystem("UI reconciled stale REC state; no active recorder exists.");
+                recording.hideFromDownloading();
+            }
+            storage.upsertRecording(recording);
+
+            if (channel != null && channel.isRecording()) {
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+            }
+            changed = true;
+        }
+
+        if (changed) {
+            storage.appendLog(LogItem.warning(LogItem.SOURCE_UI, "Reconciled stale recording UI state."));
         }
     }
 

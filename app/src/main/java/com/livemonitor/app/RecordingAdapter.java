@@ -10,7 +10,6 @@ import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -136,7 +135,8 @@ public class RecordingAdapter extends BaseAdapter {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setBackground(rounded(Color.rgb(26, 26, 26), dp(16), Color.rgb(42, 42, 42)));
+        root.setBackgroundResource(R.drawable.lm_card_background);
+        root.setElevation(dp(6));
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -144,7 +144,7 @@ public class RecordingAdapter extends BaseAdapter {
 
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
+        title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setSingleLine(false);
 
@@ -166,21 +166,26 @@ public class RecordingAdapter extends BaseAdapter {
 
         TextView subtitle = new TextView(context);
         subtitle.setTextColor(Color.rgb(190, 190, 190));
-        subtitle.setTextSize(13);
+        subtitle.setTextSize(12);
         subtitle.setPadding(0, dp(4), 0, 0);
 
         TextView details = new TextView(context);
         details.setTextColor(Color.rgb(160, 160, 160));
-        details.setTextSize(12);
+        details.setTextSize(11);
         details.setPadding(0, dp(4), 0, 0);
 
-        ProgressBar progressBar = new ProgressBar(
-            context,
-            null,
-            android.R.attr.progressBarStyleHorizontal
+        RecordingLagProgressView progressBar = new RecordingLagProgressView(context);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(8)
         );
-        progressBar.setMax(100);
-        progressBar.setPadding(0, dp(8), 0, 0);
+        progressParams.topMargin = dp(8);
+        progressBar.setLayoutParams(progressParams);
+
+        TextView progressLabel = new TextView(context);
+        progressLabel.setTextColor(Color.rgb(150, 160, 168));
+        progressLabel.setTextSize(11);
+        progressLabel.setPadding(0, dp(4), 0, 0);
 
         LinearLayout statsRow = new LinearLayout(context);
         statsRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -210,27 +215,32 @@ public class RecordingAdapter extends BaseAdapter {
         Button openButton = new Button(context);
         openButton.setAllCaps(false);
         openButton.setText("▶ Open");
+        openButton.setBackgroundResource(R.drawable.lm_button_primary_background);
+        openButton.setTextColor(Color.WHITE);
 
         Button pauseResumeButton = new Button(context);
         pauseResumeButton.setAllCaps(false);
         pauseResumeButton.setText("Pause");
+        pauseResumeButton.setBackgroundResource(R.drawable.lm_button_neutral_background);
+        pauseResumeButton.setTextColor(Color.WHITE);
 
         Button deleteButton = new Button(context);
         deleteButton.setAllCaps(false);
         deleteButton.setText("Delete");
+        deleteButton.setTextColor(Color.WHITE);
 
         buttonRow.addView(openButton);
 
         LinearLayout.LayoutParams pauseParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            dp(40)
         );
         pauseParams.leftMargin = dp(8);
         buttonRow.addView(pauseResumeButton, pauseParams);
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            dp(40)
         );
         deleteParams.leftMargin = dp(8);
         buttonRow.addView(deleteButton, deleteParams);
@@ -241,6 +251,7 @@ public class RecordingAdapter extends BaseAdapter {
         root.addView(statsRow);
         root.addView(savedTo);
         root.addView(progressBar);
+        root.addView(progressLabel);
         root.addView(buttonRow);
 
         RecordingViewHolder holder = new RecordingViewHolder();
@@ -254,6 +265,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.qualityStat = qualityStat;
         holder.savedTo = savedTo;
         holder.progressBar = progressBar;
+        holder.progressLabel = progressLabel;
         holder.openButton = openButton;
         holder.pauseResumeButton = pauseResumeButton;
         holder.deleteButton = deleteButton;
@@ -267,7 +279,8 @@ public class RecordingAdapter extends BaseAdapter {
             holder.subtitle.setText("");
             holder.details.setText("");
             holder.statusBadge.setText("Unknown");
-            holder.progressBar.setProgress(0);
+            holder.progressBar.setProgressFraction(0f);
+            holder.progressLabel.setText("");
             holder.savedTo.setVisibility(View.GONE);
             holder.openButton.setVisibility(View.GONE);
             holder.pauseResumeButton.setVisibility(View.GONE);
@@ -289,8 +302,8 @@ public class RecordingAdapter extends BaseAdapter {
         holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);
         holder.savedTo.setVisibility(savedToDisplay.trim().isEmpty() ? View.GONE : View.VISIBLE);
         holder.statusBadge.setText(formatStatus(recording.getStatus()));
-        holder.statusBadge.setBackgroundColor(statusColor(recording.getStatus()));
-        holder.progressBar.setProgress(recording.getProgressPercent());
+        applyStatusBadge(holder.statusBadge, recording.getStatus());
+        bindProgress(holder, recording);
 
         boolean downloadedMode = mode == Mode.DOWNLOADED;
         boolean activeDownload = !downloadedMode && recording.isActive();
@@ -304,8 +317,10 @@ public class RecordingAdapter extends BaseAdapter {
         holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
         if (downloadedMode) {
             holder.deleteButton.setText("Delete");
+            holder.deleteButton.setBackgroundResource(R.drawable.lm_button_delete_background);
         } else {
             holder.deleteButton.setText("Cancel");
+            holder.deleteButton.setBackgroundResource(R.drawable.lm_button_delete_background);
         }
 
         holder.root.setOnClickListener(v -> {
@@ -327,6 +342,12 @@ public class RecordingAdapter extends BaseAdapter {
         });
 
         holder.deleteButton.setOnClickListener(v -> {
+            holder.deleteButton.setEnabled(false);
+            holder.deleteButton.setAlpha(0.65f);
+            holder.deleteButton.postDelayed(() -> {
+                holder.deleteButton.setEnabled(true);
+                holder.deleteButton.setAlpha(1f);
+            }, 800L);
             if (listener != null) {
                 listener.onDeleteClicked(recording);
             }
@@ -427,6 +448,45 @@ public class RecordingAdapter extends BaseAdapter {
         return Color.rgb(100, 100, 100);
     }
 
+    private void applyStatusBadge(TextView badge, String status) {
+        if (RecordingItem.STATUS_RECORDING.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_recording_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+            return;
+        }
+        if (RecordingItem.STATUS_COMPLETED.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_recording_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+            return;
+        }
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(status) || RecordingItem.STATUS_PAUSED_NETWORK.equals(status)) {
+            badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+            badge.setTextColor(context.getResources().getColor(R.color.lm_status_paused_text));
+            return;
+        }
+        badge.setBackgroundResource(R.drawable.lm_status_stopped_background);
+        badge.setTextColor(context.getResources().getColor(R.color.lm_status_stopped_text));
+    }
+
+    private void bindProgress(RecordingViewHolder holder, RecordingItem recording) {
+        long recordedSeconds = Math.max(0L, recording.getDurationSeconds());
+        long startedAt = recording.getStartedAt();
+        long totalSeconds = startedAt > 0L ? Math.max(recordedSeconds, (System.currentTimeMillis() - startedAt) / 1_000L) : 0L;
+        if (RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
+            holder.progressBar.setProgressFraction(1f);
+            holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
+            return;
+        }
+        if (totalSeconds <= 0L) {
+            holder.progressBar.setProgressFraction(recording.getProgressPercent() / 100f);
+            holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
+            return;
+        }
+        long lagSeconds = Math.max(0L, totalSeconds - recordedSeconds);
+        holder.progressBar.setProgressFraction(totalSeconds <= 0L ? 0f : (float) recordedSeconds / (float) totalSeconds);
+        holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded · " + RecordingProgressTracker.formatDuration(lagSeconds) + " behind live");
+    }
+
     private TextView createStatBox() {
         TextView textView = new TextView(context);
         textView.setTextColor(Color.WHITE);
@@ -475,7 +535,8 @@ public class RecordingAdapter extends BaseAdapter {
         TextView sizeStat;
         TextView qualityStat;
         TextView savedTo;
-        ProgressBar progressBar;
+        RecordingLagProgressView progressBar;
+        TextView progressLabel;
         Button openButton;
         Button pauseResumeButton;
         Button deleteButton;
