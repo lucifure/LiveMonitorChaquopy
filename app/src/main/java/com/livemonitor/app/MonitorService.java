@@ -369,6 +369,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
         recording.setTitle("Direct download - " + videoId);
         recording.markRecording();
+        if (liveInfo != null && liveInfo.streamStartedAt > 0L) {
+            recording.setStreamStartedAt(liveInfo.streamStartedAt);
+        }
         recording.setDiagnosticMessage("Direct download journal opened.");
         storage.upsertRecording(recording);
         activeRecordings.put(recording.getId(), recording);
@@ -1049,6 +1052,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         fileManager.cleanupTempFolderBeforeRecording();
         recording.markRecording();
+        if (liveInfo != null && liveInfo.streamStartedAt > 0L) {
+            recording.setStreamStartedAt(liveInfo.streamStartedAt);
+        }
         recording.setDiagnosticMessage("Recording journal opened; waiting for manifest.");
         storage.upsertRecording(recording);
         activeRecordings.put(channel.getId(), recording);
@@ -3730,7 +3736,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 String videoId = item.getJSONObject("id").getString("videoId");
                 String title = item.getJSONObject("snippet").getString("title");
 
-                return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);
+                return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId, fetchLiveStartTimestampMillis(videoId));
             }
         } catch (Exception e) {
             Log.w(TAG, "YouTube Data API live check failed; trying channel /live fallback", e);
@@ -3808,10 +3814,44 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 );
             }
 
-            return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId);
+            return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId, extractLiveStartTimestampMillis(playerResponse));
         } catch (Exception e) {
             Log.w(TAG, "channel /live fallback failed", e);
             return null;
+        }
+    }
+
+    private long fetchLiveStartTimestampMillis(String videoId) {
+        String safeVideoId = normalizeVideoIdForLookup(videoId);
+        if (isBlank(safeVideoId)) {
+            return 0L;
+        }
+        try {
+            String html = httpGet(YouTubeUrlUtils.buildWatchUrl(safeVideoId));
+            return extractLiveStartTimestampMillis(extractInitialPlayerResponse(html));
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private long extractLiveStartTimestampMillis(JSONObject playerResponse) {
+        if (playerResponse == null) {
+            return 0L;
+        }
+        try {
+            JSONObject microformat = playerResponse.optJSONObject("microformat");
+            JSONObject renderer = microformat == null ? null : microformat.optJSONObject("playerMicroformatRenderer");
+            JSONObject liveDetails = renderer == null ? null : renderer.optJSONObject("liveBroadcastDetails");
+            String timestamp = liveDetails == null ? "" : liveDetails.optString("startTimestamp", "");
+            if (isBlank(timestamp)) {
+                return 0L;
+            }
+            java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", java.util.Locale.US);
+            format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            java.util.Date parsed = format.parse(timestamp);
+            return parsed == null ? 0L : parsed.getTime();
+        } catch (Exception ignored) {
+            return 0L;
         }
     }
 
@@ -4985,7 +5025,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         LiveInfo liveInfo = new LiveInfo(
             safeVideoId,
             "",
-            YouTubeUrlUtils.buildWatchUrl(safeVideoId)
+            YouTubeUrlUtils.buildWatchUrl(safeVideoId),
+            0L
         );
 
         try {
@@ -5902,11 +5943,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         final String videoId;
         final String title;
         final String videoUrl;
+        final long streamStartedAt;
 
-        LiveInfo(String videoId, String title, String videoUrl) {
+        LiveInfo(String videoId, String title, String videoUrl, long streamStartedAt) {
             this.videoId = videoId;
             this.title = title == null ? videoId : title;
             this.videoUrl = videoUrl;
+            this.streamStartedAt = Math.max(0L, streamStartedAt);
         }
     }
                                                               }

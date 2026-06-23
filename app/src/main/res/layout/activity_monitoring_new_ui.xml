@@ -293,7 +293,7 @@
                         android:layout_height="wrap_content"
                         android:layout_below="@id/tvChannelUrl"
                         android:layout_marginTop="2dp"
-                        android:text="Monitoring paused"
+                        android:text="Monitoring stopped"
                         android:textColor="@color/lm_text_tertiary"
                         android:textSize="12sp" />
 
@@ -308,10 +308,10 @@
                         <Button
                             android:id="@+id/btnResume"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="40dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="6dp"
-                            android:background="@drawable/lm_button_neutral_background"
+                            android:background="@drawable/lm_action_button_background"
                             android:drawableStart="@android:drawable/ic_media_play"
                             android:drawablePadding="4dp"
                             android:drawableTint="@color/lm_text_primary"
@@ -324,12 +324,12 @@
                         <Button
                             android:id="@+id/btnStop"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="40dp"
                             android:layout_weight="1"
                             android:layout_marginHorizontal="6dp"
-                            android:background="@drawable/lm_button_neutral_background"
+                            android:background="@drawable/lm_action_button_background"
                             android:gravity="center"
-                            android:text="Stop"
+                            android:text="■  Stop"
                             android:textAllCaps="false"
                             android:textColor="@color/lm_text_primary"
                             android:textSize="12sp" />
@@ -337,14 +337,16 @@
                         <Button
                             android:id="@+id/btnDelete"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="40dp"
                             android:layout_weight="1"
                             android:layout_marginStart="6dp"
-                            android:background="@drawable/lm_button_delete_background"
+                            android:background="@drawable/lm_action_button_background"
                             android:gravity="center"
                             android:text="Delete"
+                            android:drawableStart="@drawable/ic_delete_24"
+                            android:drawablePadding="4dp"
                             android:textAllCaps="false"
-                            android:textColor="@color/lm_btn_delete_text"
+                            android:textColor="@color/lm_text_primary"
                             android:textSize="12sp" />
                     </LinearLayout>
                 </RelativeLayout>
