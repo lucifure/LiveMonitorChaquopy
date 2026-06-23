@@ -2,8 +2,8 @@
 <resources>
     <!-- Background -->
     <color name="lm_bg">#03070D</color>
-    <color name="lm_card_bg">#1C2630</color>
-    <color name="lm_card_bg_elevated">#22303A</color>
+    <color name="lm_card_bg">#1A1A1A</color>
+    <color name="lm_card_bg_elevated">#1A1A1A</color>
 
     <!-- Text -->
     <color name="lm_text_primary">#FFFFFF</color>
@@ -16,18 +16,18 @@
     <color name="lm_accent_blue_dark">#1E6FA8</color>
 
     <!-- Status colors -->
-    <color name="lm_status_recording_bg">#3344D77A</color>
-    <color name="lm_status_recording_text">#A8FFD0</color>
-    <color name="lm_status_stopped_bg">#33FF5C5C</color>
-    <color name="lm_status_stopped_text">#FF9B9B</color>
-    <color name="lm_status_paused_bg">#332A3440</color>
-    <color name="lm_status_paused_text">#C9D1DA</color>
+    <color name="lm_status_recording_bg">#4CAF50</color>
+    <color name="lm_status_recording_text">#FFFFFF</color>
+    <color name="lm_status_stopped_bg">#E53935</color>
+    <color name="lm_status_stopped_text">#FFFFFF</color>
+    <color name="lm_status_paused_bg">#00695C</color>
+    <color name="lm_status_paused_text">#FFFFFF</color>
 
     <!-- Buttons -->
-    <color name="lm_btn_neutral_bg">#2A2F36</color>
-    <color name="lm_btn_delete_bg">#3A2222</color>
-    <color name="lm_btn_delete_text">#E57373</color>
+    <color name="lm_btn_neutral_bg">#2A2A2A</color>
+    <color name="lm_btn_delete_bg">#2A2A2A</color>
+    <color name="lm_btn_delete_text">#FFFFFF</color>
 
     <!-- Divider -->
-    <color name="lm_divider">#2A2F36</color>
+    <color name="lm_divider">#2A2A2A</color>
 </resources>

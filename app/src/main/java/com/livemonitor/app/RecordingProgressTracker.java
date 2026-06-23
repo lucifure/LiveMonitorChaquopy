@@ -22,7 +22,7 @@ public class RecordingProgressTracker {
         void onRecordingStalled(RecordingItem recording);
     }
 
-    private static final long DEFAULT_UPDATE_INTERVAL_MS = 2_000L;
+    private static final long DEFAULT_UPDATE_INTERVAL_MS = 15_000L;
     private static final long STALL_WARNING_AFTER_MS = 3L * 60L * 1_000L;
     private static final long STALL_RECOVERY_NOTIFY_INTERVAL_MS = 30L * 1_000L;
 

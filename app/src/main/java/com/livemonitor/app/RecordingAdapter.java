@@ -214,33 +214,35 @@ public class RecordingAdapter extends BaseAdapter {
 
         Button openButton = new Button(context);
         openButton.setAllCaps(false);
-        openButton.setText("▶ Open");
-        openButton.setBackgroundResource(R.drawable.lm_button_primary_background);
-        openButton.setTextColor(Color.WHITE);
+        openButton.setText("▶  Open");
+        styleCardActionButton(openButton);
 
         Button pauseResumeButton = new Button(context);
         pauseResumeButton.setAllCaps(false);
         pauseResumeButton.setText("Pause");
-        pauseResumeButton.setBackgroundResource(R.drawable.lm_button_neutral_background);
-        pauseResumeButton.setTextColor(Color.WHITE);
+        styleCardActionButton(pauseResumeButton);
 
         Button deleteButton = new Button(context);
         deleteButton.setAllCaps(false);
         deleteButton.setText("Delete");
-        deleteButton.setTextColor(Color.WHITE);
+        styleCardActionButton(deleteButton);
+        deleteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_delete_24, 0, 0, 0);
+        deleteButton.setCompoundDrawablePadding(dp(4));
 
-        buttonRow.addView(openButton);
+        buttonRow.addView(openButton, new LinearLayout.LayoutParams(0, dp(40), 1f));
 
         LinearLayout.LayoutParams pauseParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            dp(40)
+            0,
+            dp(40),
+            1f
         );
         pauseParams.leftMargin = dp(8);
         buttonRow.addView(pauseResumeButton, pauseParams);
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            dp(40)
+            0,
+            dp(40),
+            1f
         );
         deleteParams.leftMargin = dp(8);
         buttonRow.addView(deleteButton, deleteParams);
@@ -313,14 +315,17 @@ public class RecordingAdapter extends BaseAdapter {
 
         holder.openButton.setVisibility(hasPlayableFile ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
-        holder.pauseResumeButton.setText(recording.isPausedByUser() ? "Resume" : "Pause");
+        holder.pauseResumeButton.setText(recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause");
         holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
         if (downloadedMode) {
             holder.deleteButton.setText("Delete");
-            holder.deleteButton.setBackgroundResource(R.drawable.lm_button_delete_background);
+            styleCardActionButton(holder.deleteButton);
+            holder.deleteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_delete_24, 0, 0, 0);
+            holder.deleteButton.setCompoundDrawablePadding(dp(4));
         } else {
-            holder.deleteButton.setText("Cancel");
-            holder.deleteButton.setBackgroundResource(R.drawable.lm_button_delete_background);
+            holder.deleteButton.setText("■  Cancel");
+            styleCardActionButton(holder.deleteButton);
+            holder.deleteButton.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0);
         }
 
         holder.root.setOnClickListener(v -> {
@@ -470,21 +475,39 @@ public class RecordingAdapter extends BaseAdapter {
 
     private void bindProgress(RecordingViewHolder holder, RecordingItem recording) {
         long recordedSeconds = Math.max(0L, recording.getDurationSeconds());
-        long startedAt = recording.getStartedAt();
-        long totalSeconds = startedAt > 0L ? Math.max(recordedSeconds, (System.currentTimeMillis() - startedAt) / 1_000L) : 0L;
+        long streamStartedAt = recording.getStreamStartedAt();
+        long streamAgeSeconds = streamStartedAt > 0L
+            ? Math.max(recordedSeconds, (System.currentTimeMillis() - streamStartedAt) / 1_000L)
+            : 0L;
         if (RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
             holder.progressBar.setProgressFraction(1f);
             holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
             return;
         }
-        if (totalSeconds <= 0L) {
+        if (streamAgeSeconds <= 0L) {
             holder.progressBar.setProgressFraction(recording.getProgressPercent() / 100f);
             holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
             return;
         }
-        long lagSeconds = Math.max(0L, totalSeconds - recordedSeconds);
-        holder.progressBar.setProgressFraction(totalSeconds <= 0L ? 0f : (float) recordedSeconds / (float) totalSeconds);
-        holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded · " + RecordingProgressTracker.formatDuration(lagSeconds) + " behind live");
+        long lagSeconds = Math.max(0L, streamAgeSeconds - recordedSeconds);
+        holder.progressBar.setProgressFraction(Math.min(1f, (float) recordedSeconds / (float) streamAgeSeconds));
+        String lagLabel = lagSeconds < 60L
+            ? "~" + lagSeconds + "s behind live (near live)"
+            : RecordingProgressTracker.formatDuration(lagSeconds) + " behind live";
+        holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded · " + lagLabel);
+    }
+
+    private void styleCardActionButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setBackgroundResource(R.drawable.lm_action_button_background);
     }
 
     private TextView createStatBox() {

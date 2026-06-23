@@ -62,6 +62,7 @@ public class RecordingItem {
     private static final String JSON_PROGRESS_PERCENT = "progressPercent";
     private static final String JSON_CREATED_AT = "createdAt";
     private static final String JSON_STARTED_AT = "startedAt";
+    private static final String JSON_STREAM_STARTED_AT = "streamStartedAt";
     private static final String JSON_UPDATED_AT = "updatedAt";
     private static final String JSON_FINISHED_AT = "finishedAt";
     private static final String JSON_CONVERTED_AT = "convertedAt";
@@ -87,6 +88,7 @@ public class RecordingItem {
     private int progressPercent;
     private long createdAt;
     private long startedAt;
+    private long streamStartedAt;
     private long updatedAt;
     private long finishedAt;
     private long convertedAt;
@@ -125,6 +127,7 @@ public class RecordingItem {
         this.progressPercent = 0;
         this.createdAt = now;
         this.startedAt = 0L;
+        this.streamStartedAt = 0L;
         this.updatedAt = now;
         this.finishedAt = 0L;
         this.convertedAt = 0L;
@@ -152,6 +155,7 @@ public class RecordingItem {
         int progressPercent,
         long createdAt,
         long startedAt,
+        long streamStartedAt,
         long updatedAt,
         long finishedAt,
         long convertedAt,
@@ -177,6 +181,7 @@ public class RecordingItem {
         this.progressPercent = clampProgress(progressPercent);
         this.createdAt = createdAt <= 0 ? System.currentTimeMillis() : createdAt;
         this.startedAt = Math.max(0L, startedAt);
+        this.streamStartedAt = Math.max(0L, streamStartedAt);
         this.updatedAt = updatedAt <= 0 ? System.currentTimeMillis() : updatedAt;
         this.finishedAt = Math.max(0L, finishedAt);
         this.convertedAt = Math.max(0L, convertedAt);
@@ -209,6 +214,7 @@ public class RecordingItem {
             json.optInt(JSON_PROGRESS_PERCENT, 0),
             json.optLong(JSON_CREATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_STARTED_AT, 0L),
+            json.optLong(JSON_STREAM_STARTED_AT, 0L),
             json.optLong(JSON_UPDATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_FINISHED_AT, 0L),
             json.optLong(JSON_CONVERTED_AT, 0L),
@@ -243,6 +249,7 @@ public class RecordingItem {
         json.put(JSON_PROGRESS_PERCENT, progressPercent);
         json.put(JSON_CREATED_AT, createdAt);
         json.put(JSON_STARTED_AT, startedAt);
+        json.put(JSON_STREAM_STARTED_AT, streamStartedAt);
         json.put(JSON_UPDATED_AT, updatedAt);
         json.put(JSON_FINISHED_AT, finishedAt);
         json.put(JSON_CONVERTED_AT, convertedAt);
@@ -712,6 +719,10 @@ public class RecordingItem {
         return startedAt;
     }
 
+    public long getStreamStartedAt() {
+        return streamStartedAt;
+    }
+
     public long getUpdatedAt() {
         return updatedAt;
     }
@@ -755,6 +766,11 @@ public class RecordingItem {
 
     public void setVideoUrl(String videoUrl) {
         this.videoUrl = nullToEmpty(videoUrl);
+        touch();
+    }
+
+    public void setStreamStartedAt(long streamStartedAt) {
+        this.streamStartedAt = Math.max(0L, streamStartedAt);
         touch();
     }
 
