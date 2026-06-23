@@ -181,36 +181,32 @@ public class ChannelAdapter extends BaseAdapter {
 
         Button pauseResume = new Button(context);
         pauseResume.setAllCaps(false);
-        pauseResume.setTextColor(Color.rgb(214, 220, 228));
-        pauseResume.setTextSize(14);
-        pauseResume.setBackgroundResource(R.drawable.lm_button_neutral_background);
+        styleCardActionButton(pauseResume);
 
         Button stop = new Button(context);
         stop.setAllCaps(false);
         stop.setText("■  Stop");
-        stop.setTextColor(Color.rgb(214, 220, 228));
-        stop.setTextSize(14);
-        stop.setBackgroundResource(R.drawable.lm_button_delete_background);
+        styleCardActionButton(stop);
 
         Button delete = new Button(context);
         delete.setAllCaps(false);
         delete.setText("Delete");
-        delete.setTextColor(Color.rgb(214, 220, 228));
-        delete.setTextSize(14);
-        delete.setBackgroundResource(R.drawable.lm_button_delete_background);
+        styleCardActionButton(delete);
+        delete.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_delete_24, 0, 0, 0);
+        delete.setCompoundDrawablePadding(dp(4));
 
         buttonRow.addView(
             pauseResume,
             new LinearLayout.LayoutParams(
                 0,
-                dp(36),
+                dp(40),
                 1f
             )
         );
 
         LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
             0,
-            dp(36),
+            dp(40),
             1f
         );
         stopParams.leftMargin = dp(8);
@@ -218,7 +214,7 @@ public class ChannelAdapter extends BaseAdapter {
 
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
             0,
-            dp(36),
+            dp(40),
             1f
         );
         deleteParams.leftMargin = dp(8);
@@ -286,13 +282,7 @@ public class ChannelAdapter extends BaseAdapter {
     private String buildDetails(ChannelItem channel) {
         StringBuilder builder = new StringBuilder();
 
-        if (channel.isRecording()) {
-            builder.append("Recording");
-        } else if (channel.shouldMonitor()) {
-            builder.append("Monitoring enabled");
-        } else {
-            builder.append("Monitoring paused");
-        }
+        builder.append(getSubtitleForState(channel));
 
         if (channel.getRetryCount() > 0) {
             builder.append(" • Retry ");
@@ -312,6 +302,33 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         return builder.toString();
+    }
+
+    private String getSubtitleForState(ChannelItem channel) {
+        if (channel == null) {
+            return "";
+        }
+        String status = channel.getStatus();
+        if (ChannelItem.STATUS_STOPPED.equals(status)) return "Monitoring stopped";
+        if (ChannelItem.STATUS_WAITING_FOR_LIVE.equals(status) || ChannelItem.STATUS_RETRYING.equals(status)) return "Monitoring active · waiting for stream";
+        if (ChannelItem.STATUS_RECORDING.equals(status) || ChannelItem.STATUS_LIVE_DETECTED.equals(status)) return "Recording in progress";
+        if (ChannelItem.STATUS_PAUSED_BY_USER.equals(status) || ChannelItem.STATUS_PAUSED_NETWORK.equals(status)) return "Monitoring paused";
+        if (channel.isRecording()) return "Recording in progress";
+        if (channel.shouldMonitor()) return "Monitoring active · waiting for stream";
+        return "Monitoring paused";
+    }
+
+    private void styleCardActionButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setBackgroundResource(R.drawable.lm_action_button_background);
     }
 
     private String formatStatus(String status) {
