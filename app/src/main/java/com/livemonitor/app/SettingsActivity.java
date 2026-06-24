@@ -3,9 +3,11 @@ package com.livemonitor.app;
 import android.content.Intent;
 import android.net.Uri;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -57,6 +59,7 @@ public class SettingsActivity extends AppCompatActivity {
     private CheckBox batteryOptimizationCheckBox;
     private CheckBox remoteConfigCheckBox;
     private EditText remoteConfigUrlInput;
+    private TextView remoteConfigUrlLabel;
     private CheckBox verboseDebugLoggingCheckBox;
 
     @Override
@@ -86,11 +89,11 @@ public class SettingsActivity extends AppCompatActivity {
     private ViewGroup buildContentView() {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
+        scrollView.setBackgroundResource(R.drawable.lm_screen_background);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
-        root.setBackgroundColor(Color.rgb(15, 15, 15));
         scrollView.addView(root);
 
         TextView title = new TextView(this);
@@ -98,13 +101,10 @@ public class SettingsActivity extends AppCompatActivity {
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(0, 0, 0, dp(10));
+        title.setTextColor(getResources().getColor(R.color.lm_text_primary));
         root.addView(title);
 
-        Button logSettingsButton = new Button(this);
-        logSettingsButton.setAllCaps(false);
-        logSettingsButton.setText("Log Settings");
-        logSettingsButton.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
-        root.addView(logSettingsButton);
+        addSectionHeader(root, "Recording");
 
         pollIntervalInput = addEditText(root, "Poll interval seconds", "60");
 
@@ -128,6 +128,7 @@ public class SettingsActivity extends AppCompatActivity {
         addLabel(root, "Save location");
         saveLocationText = new TextView(this);
         saveLocationText.setTextSize(14);
+        saveLocationText.setTextColor(getResources().getColor(R.color.lm_text_secondary));
         saveLocationText.setPadding(0, dp(4), 0, dp(4));
         root.addView(saveLocationText);
 
@@ -143,15 +144,6 @@ public class SettingsActivity extends AppCompatActivity {
         openSaveLocationButton.setOnClickListener(v -> openSelectedSaveFolder());
         root.addView(openSaveLocationButton);
 
-        scheduledCheckBox = addCheckBox(root, "Enable scheduled monitoring");
-        scheduleStartInput = addEditText(root, "Schedule start HH:mm", "00:00");
-        scheduleEndInput = addEditText(root, "Schedule end HH:mm", "23:59");
-        allowCurrentRecordingCheckBox = addCheckBox(
-            root,
-            "Allow current recording to finish outside schedule"
-        );
-
-        waitForVideoCheckBox = addCheckBox(root, "Wait for scheduled live video to start");
         liveFromStartCheckBox = addCheckBox(
             root,
             "Record from start when YouTube DVR is available"
@@ -160,6 +152,22 @@ public class SettingsActivity extends AppCompatActivity {
             root,
             "Skip unavailable fragments and keep retrying"
         );
+        convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
+
+        addSectionHeader(root, "Schedule");
+
+        scheduledCheckBox = addCheckBox(root, "Enable scheduled monitoring");
+        scheduledCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> updateScheduleFieldsEnabled());
+        scheduleStartInput = addEditText(root, "Schedule start HH:mm", "00:00");
+        scheduleEndInput = addEditText(root, "Schedule end HH:mm", "23:59");
+        allowCurrentRecordingCheckBox = addCheckBox(
+            root,
+            "Allow current recording to finish outside schedule"
+        );
+        waitForVideoCheckBox = addCheckBox(root, "Wait for scheduled live video to start");
+
+        addSectionHeader(root, "Authentication");
+
         ytDlpCookieHeaderInput = addEditText(
             root,
             "YouTube Cookie header for yt-dlp (optional)",
@@ -177,11 +185,6 @@ public class SettingsActivity extends AppCompatActivity {
         youtubeSignInButton.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
         root.addView(youtubeSignInButton);
 
-        ytDlpExtractorArgsInput = addEditText(
-            root,
-            "yt-dlp extractor args (optional)",
-            "youtube:player_client=mweb"
-        );
         ytDlpPoTokenClientInput = addEditText(
             root,
             "YouTube PO token client for GVS formats",
@@ -198,7 +201,14 @@ public class SettingsActivity extends AppCompatActivity {
         applyPoTokenButton.setText("Apply PO token to extractor args");
         applyPoTokenButton.setOnClickListener(v -> applyPoTokenToExtractorArgs());
         root.addView(applyPoTokenButton);
-        convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
+
+        ytDlpExtractorArgsInput = addEditText(
+            root,
+            "yt-dlp extractor args (optional)",
+            "youtube:player_client=mweb"
+        );
+
+        addSectionHeader(root, "App Behaviour");
 
         restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
         batteryOptimizationCheckBox = addCheckBox(
@@ -206,20 +216,29 @@ public class SettingsActivity extends AppCompatActivity {
             "Ask for battery optimization exemption"
         );
 
+        Button batteryButton = new Button(this);
+        batteryButton.setAllCaps(false);
+        batteryButton.setText("Open Battery Optimization Settings");
+        batteryButton.setOnClickListener(v -> openBatteryOptimizationSettings());
+        root.addView(batteryButton);
+
         remoteConfigCheckBox = addCheckBox(root, "Enable remote config");
+        remoteConfigCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> updateRemoteConfigVisibility());
         remoteConfigUrlInput = addEditText(
             root,
             "Remote config URL",
             "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json"
         );
 
+        addSectionHeader(root, "Developer / Debug");
+
         verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
 
-        Button batteryButton = new Button(this);
-        batteryButton.setAllCaps(false);
-        batteryButton.setText("Open Battery Optimization Settings");
-        batteryButton.setOnClickListener(v -> openBatteryOptimizationSettings());
-        root.addView(batteryButton);
+        Button logSettingsButton = new Button(this);
+        logSettingsButton.setAllCaps(false);
+        logSettingsButton.setText("Log Settings");
+        logSettingsButton.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
+        root.addView(logSettingsButton);
 
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
@@ -274,6 +293,9 @@ public class SettingsActivity extends AppCompatActivity {
         );
         remoteConfigCheckBox.setChecked(settings.isRemoteConfigEnabled());
         verboseDebugLoggingCheckBox.setChecked(settings.isLogDebugEnabled());
+        updateScheduleFieldsEnabled();
+
+        updateRemoteConfigVisibility();
 
         if (settings.getRemoteConfigUrl().trim().isEmpty()) {
             remoteConfigUrlInput.setText(
@@ -443,6 +465,59 @@ public class SettingsActivity extends AppCompatActivity {
         label.setTextColor(Color.rgb(190, 190, 190));
         label.setPadding(0, dp(8), 0, 0);
         root.addView(label);
+
+        if ("Remote config URL".equals(text)) {
+            remoteConfigUrlLabel = label;
+        }
+    }
+
+    private void addSectionHeader(LinearLayout root, String text) {
+        TextView header = new TextView(this);
+        header.setText(text.toUpperCase(java.util.Locale.US));
+        header.setTextSize(12);
+        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setTextColor(getResources().getColor(R.color.accent));
+        header.setPadding(0, dp(18), 0, dp(6));
+        root.addView(header);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(getResources().getColor(R.color.lm_divider));
+        root.addView(
+            divider,
+            new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(1)
+            )
+        );
+    }
+
+    private void updateScheduleFieldsEnabled() {
+        boolean enabled = scheduledCheckBox != null && scheduledCheckBox.isChecked();
+        setEnabledWithAlpha(scheduleStartInput, enabled);
+        setEnabledWithAlpha(scheduleEndInput, enabled);
+        setEnabledWithAlpha(allowCurrentRecordingCheckBox, enabled);
+        setEnabledWithAlpha(waitForVideoCheckBox, enabled);
+    }
+
+    private void updateRemoteConfigVisibility() {
+        boolean enabled = remoteConfigCheckBox != null && remoteConfigCheckBox.isChecked();
+        if (remoteConfigUrlInput != null) {
+            remoteConfigUrlInput.setVisibility(enabled ? View.VISIBLE : View.GONE);
+            remoteConfigUrlInput.setEnabled(enabled);
+        }
+
+        if (remoteConfigUrlLabel != null) {
+            remoteConfigUrlLabel.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void setEnabledWithAlpha(android.view.View view, boolean enabled) {
+        if (view == null) {
+            return;
+        }
+
+        view.setEnabled(enabled);
+        view.setAlpha(enabled ? 1f : 0.45f);
     }
 
     private int parseInt(String value, int fallback) {
