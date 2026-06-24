@@ -369,9 +369,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
         recording.setTitle("Direct download - " + videoId);
         recording.markRecording();
-        if (liveInfo != null && liveInfo.streamStartedAt > 0L) {
-            recording.setStreamStartedAt(liveInfo.streamStartedAt);
-        }
         recording.setDiagnosticMessage("Direct download journal opened.");
         storage.upsertRecording(recording);
         activeRecordings.put(recording.getId(), recording);
