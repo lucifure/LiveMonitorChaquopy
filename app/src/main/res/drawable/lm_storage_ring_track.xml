@@ -1,15 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Background "track" ring for the storage gauge.
-  The actual progress arc should be drawn by a custom View (see notes in the
-  task description) since a precise partial-arc with rounded caps and a glow
-  is not reliably achievable with a static XML drawable alone.
-  This ring is the static full-circle background only.
--->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="ring"
     android:innerRadiusRatio="2.6"
     android:thickness="14dp"
     android:useLevel="false">
-    <solid android:color="@color/lm_btn_neutral_bg" />
+    <solid android:color="#55242B36" />
 </shape>
