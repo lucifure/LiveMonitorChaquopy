@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background">#0F0F0F</color>
-    <color name="surface">#1A1A1A</color>
-    <color name="surface_2">#222222</color>
-    <color name="accent">#37B9F5</color>
-    <color name="accent_dim">#1A3DA9FC</color>
-    <color name="danger">#FF6B6B</color>
-    <color name="danger_dim">#1AFF6B6B</color>
-    <color name="warning">#F59E0B</color>
-    <color name="info">#3B82F6</color>
-    <color name="purple">#A855F7</color>
-    <color name="text_primary">#FFFFFF</color>
-    <color name="text_secondary">#AAAAAA</color>
-    <color name="text_muted">#555555</color>
-    <color name="divider">#1E1E1E</color>
-    <color name="nav_active">#37B9F5</color>
-    <color name="nav_inactive">#666666</color>
+    <color name="background">#05080E</color>
+    <color name="surface">#1A212D</color>
+    <color name="surface_2">#242B36</color>
+    <color name="accent">#5DD8E8</color>
+    <color name="accent_dim">#335DD8E8</color>
+    <color name="danger">#D65F5A</color>
+    <color name="danger_dim">#33D65F5A</color>
+    <color name="warning">#DFAE4F</color>
+    <color name="info">#2B78D4</color>
+    <color name="purple">#7C6DFF</color>
+    <color name="text_primary">#F7FAFC</color>
+    <color name="text_secondary">#AEB8C4</color>
+    <color name="text_muted">#718096</color>
+    <color name="divider">#33404A52</color>
+    <color name="nav_active">#66A6FF</color>
+    <color name="nav_inactive">#A4ABB4</color>
     <color name="white">#FFFFFF</color>
 
     <!-- Backwards-compatible aliases used by existing code/styles. -->
     <color name="text">@color/text_primary</color>
     <color name="bg">@color/background</color>
-    <color name="green">@color/accent</color>
+    <color name="green">#79C98A</color>
     <color name="red">@color/danger</color>
     <color name="text_dim">@color/text_secondary</color>
 </resources>

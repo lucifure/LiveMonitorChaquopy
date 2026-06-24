@@ -81,14 +81,14 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
-        root.setBackgroundColor(Color.rgb(15, 15, 15));
+        root.setBackgroundResource(R.drawable.lm_screen_background);
 
         TextView title = new TextView(this);
         title.setText("Past Recordings");
-        title.setTextSize(22);
+        title.setTextSize(30);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(0, 0, 0, dp(8));
-        title.setTextColor(Color.WHITE);
+        title.setTextColor(getResources().getColor(R.color.lm_text_primary));
 
         root.addView(
             title,
@@ -99,26 +99,30 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         );
 
         summaryView = new TextView(this);
-        summaryView.setTextColor(Color.rgb(22, 199, 132));
+        summaryView.setTextColor(getResources().getColor(R.color.green));
         summaryView.setTextSize(14);
         summaryView.setPadding(0, 0, 0, dp(8));
         root.addView(summaryView);
 
         searchInput = new android.widget.EditText(this);
         searchInput.setHint("Search by channel name");
-        searchInput.setTextColor(Color.WHITE);
-        searchInput.setHintTextColor(Color.rgb(102, 102, 102));
+        searchInput.setTextColor(getResources().getColor(R.color.lm_text_primary));
+        searchInput.setHintTextColor(getResources().getColor(R.color.lm_text_tertiary));
+        searchInput.setTextSize(18);
+        searchInput.setSingleLine(true);
+        searchInput.setPadding(dp(18), 0, dp(18), 0);
+        searchInput.setBackgroundResource(R.drawable.lm_input_background);
         searchInput.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { applyFilter(); }
             @Override public void afterTextChanged(Editable s) {}
         });
-        root.addView(searchInput);
+        root.addView(searchInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
 
         TextView filters = new TextView(this);
         filters.setText("All   Completed   Failed   Stopped");
-        filters.setTextColor(Color.rgb(190, 190, 190));
-        filters.setPadding(0, dp(8), 0, dp(8));
+        filters.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+        filters.setPadding(0, dp(12), 0, dp(12));
         root.addView(filters);
 
         LinearLayout actionRow = new LinearLayout(this);
@@ -126,10 +130,12 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         Button refreshButton = new Button(this);
         refreshButton.setAllCaps(false);
         refreshButton.setText("Refresh");
+        styleCyberButton(refreshButton);
         refreshButton.setOnClickListener(v -> refreshFiles());
         Button openFolderButton = new Button(this);
         openFolderButton.setAllCaps(false);
         openFolderButton.setText("Open folder");
+        styleCyberButton(openFolderButton);
         openFolderButton.setOnClickListener(v -> openSelectedFolder());
         actionRow.addView(refreshButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         actionRow.addView(openFolderButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -139,14 +145,15 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         emptyView.setText("No history yet. Completed and stopped recordings will appear here.");
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
-        emptyView.setTextColor(Color.rgb(102, 102, 102));
+        emptyView.setTextColor(getResources().getColor(R.color.lm_text_tertiary));
 
         listView = new ListView(this);
         listView.setAdapter(adapter);
         listView.setEmptyView(emptyView);
         listView.setDividerHeight(dp(12));
         listView.setDivider(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-        listView.setBackgroundColor(Color.rgb(15, 15, 15));
+        listView.setBackgroundColor(Color.TRANSPARENT);
+        listView.setCacheColorHint(Color.TRANSPARENT);
 
         root.addView(
             emptyView,
@@ -167,6 +174,15 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         );
 
         return root;
+    }
+
+    private void styleCyberButton(Button button) {
+        button.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+        button.setTextSize(16);
+        button.setBackgroundResource(R.drawable.lm_glass_button_background);
+        button.setStateListAnimator(null);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
     }
 
     private void refreshFiles() {

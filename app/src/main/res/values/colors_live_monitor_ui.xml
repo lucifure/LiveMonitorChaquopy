@@ -1,33 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Background -->
-    <color name="lm_bg">#03070D</color>
-    <color name="lm_card_bg">#1A1A1A</color>
-    <color name="lm_card_bg_elevated">#1A1A1A</color>
+    <!-- Neo-Noir / Cyber-Glass palette -->
+    <color name="lm_bg">#05080E</color>
+    <color name="lm_bg_deep">#020308</color>
+    <color name="lm_card_bg">#D91A212D</color>
+    <color name="lm_card_bg_elevated">#E6242B36</color>
 
     <!-- Text -->
-    <color name="lm_text_primary">#FFFFFF</color>
-    <color name="lm_text_secondary">#9AA5B1</color>
-    <color name="lm_text_tertiary">#6B7480</color>
+    <color name="lm_text_primary">#F7FAFC</color>
+    <color name="lm_text_secondary">#AEB8C4</color>
+    <color name="lm_text_tertiary">#718096</color>
 
-    <!-- Accent (blue, matching the new sample) -->
-    <color name="lm_accent_blue">#37B9F5</color>
-    <color name="lm_accent_blue_glow">#74E6FF</color>
-    <color name="lm_accent_blue_dark">#1E6FA8</color>
+    <!-- Accent glow and royal-blue action colors -->
+    <color name="lm_accent_blue">#2B78D4</color>
+    <color name="lm_accent_blue_glow">#5DEBFF</color>
+    <color name="lm_accent_blue_dark">#1B4F9C</color>
+    <color name="lm_accent_cyan_soft">#995DD8E8</color>
 
     <!-- Status colors -->
-    <color name="lm_status_recording_bg">#4CAF50</color>
-    <color name="lm_status_recording_text">#FFFFFF</color>
-    <color name="lm_status_stopped_bg">#E53935</color>
-    <color name="lm_status_stopped_text">#FFFFFF</color>
-    <color name="lm_status_paused_bg">#00695C</color>
-    <color name="lm_status_paused_text">#FFFFFF</color>
+    <color name="lm_status_recording_bg">#6637C96D</color>
+    <color name="lm_status_recording_text">#BDF7C8</color>
+    <color name="lm_status_stopped_bg">#66D65F5A</color>
+    <color name="lm_status_stopped_text">#FFB8B4</color>
+    <color name="lm_status_paused_bg">#5546A7A1</color>
+    <color name="lm_status_paused_text">#B9F8EF</color>
 
     <!-- Buttons -->
-    <color name="lm_btn_neutral_bg">#2A2A2A</color>
-    <color name="lm_btn_delete_bg">#2A2A2A</color>
-    <color name="lm_btn_delete_text">#FFFFFF</color>
+    <color name="lm_btn_neutral_bg">#CC242B36</color>
+    <color name="lm_btn_delete_bg">#CC2A2530</color>
+    <color name="lm_btn_delete_text">#E2E8F0</color>
 
     <!-- Divider -->
-    <color name="lm_divider">#2A2A2A</color>
+    <color name="lm_divider">#4D718096</color>
 </resources>
