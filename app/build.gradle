@@ -72,11 +72,17 @@ dependencies {
 }
 
 tasks.register('generateLauncherPngs') {
-    description = 'Generates launcher PNG files from text-based build logic before Android resource processing.'
+    description = 'Generates launcher PNG files by resizing the checked-in Logo.png before Android resource processing.'
+    inputs.file rootProject.file('Logo.png')
     outputs.dir file('src/main/res')
     outputs.upToDateWhen { false }
 
     doLast {
+        def sourceLogo = rootProject.file('Logo.png')
+        if (!sourceLogo.isFile()) {
+            throw new GradleException("Launcher logo source not found: ${sourceLogo}")
+        }
+
         def densities = [
                 'mipmap-mdpi'   : 48,
                 'mipmap-hdpi'   : 72,
@@ -88,96 +94,29 @@ tasks.register('generateLauncherPngs') {
         densities.each { folder, size ->
             def dir = file("src/main/res/${folder}")
             dir.mkdirs()
-            writeLauncherPng(new File(dir, 'ic_launcher.png'), size, false)
-            writeLauncherPng(new File(dir, 'ic_launcher_round.png'), size, true)
+            writeLauncherPng(sourceLogo, new File(dir, 'ic_launcher.png'), size)
+            writeLauncherPng(sourceLogo, new File(dir, 'ic_launcher_round.png'), size)
         }
     }
 }
 
-def writeLauncherPng(File outputFile, int size, boolean roundIcon) {
+def writeLauncherPng(File sourceFile, File outputFile, int size) {
+    def source = javax.imageio.ImageIO.read(sourceFile)
+    if (source == null) {
+        throw new GradleException("Unable to read launcher logo source image: ${sourceFile}")
+    }
+
     def image = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
     def graphics = image.createGraphics()
-    graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+    graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC)
     graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
-    graphics.setRenderingHint(java.awt.RenderingHints.KEY_STROKE_CONTROL, java.awt.RenderingHints.VALUE_STROKE_PURE)
+    graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
 
-    def background = new java.awt.GradientPaint(0, 0, new java.awt.Color(5, 22, 26), size, size, new java.awt.Color(8, 44, 50))
-    graphics.setPaint(background)
-    if (roundIcon) {
-        graphics.fillOval(((int) Math.round(size * 0.03f)), ((int) Math.round(size * 0.03f)), ((int) Math.round(size * 0.94f)), ((int) Math.round(size * 0.94f)))
-    } else {
-        graphics.fillRoundRect(0, 0, size, size, ((int) Math.round(size * 0.20f)), ((int) Math.round(size * 0.20f)))
-    }
-
-    // Subtle brushed-metal texture like the reference, generated at build time so no binary art is committed.
-    graphics.setStroke(new java.awt.BasicStroke(1f))
-    for (int y = 0; y < size; y += Math.max(1, (int) Math.round(size * 0.018f))) {
-        int alpha = (y % 4 == 0) ? 30 : 14
-        graphics.setColor(new java.awt.Color(112, 238, 247, alpha))
-        graphics.drawLine(0, y, size, y)
-    }
-
-    def center = size / 2f
-    def cyan = new java.awt.Color(94, 224, 234)
-    def cyanBright = new java.awt.Color(128, 246, 255)
-    def glow = new java.awt.Color(28, 217, 230, 80)
-
-    def drawIconArc = { float radius, float start, float extent ->
-        def diameter = radius * 2f
-        graphics.draw(new java.awt.geom.Arc2D.Float((float) (center - radius), (float) (center - radius), (float) diameter, (float) diameter, (float) start, (float) extent, java.awt.geom.Arc2D.OPEN))
-    }
-    def drawIconDownloadArrow = { ->
-        def path = new java.awt.geom.Path2D.Float()
-        path.moveTo(size * 0.50f, size * 0.660f)
-        path.lineTo(size * 0.50f, size * 0.835f)
-        path.moveTo(size * 0.390f, size * 0.745f)
-        path.lineTo(size * 0.50f, size * 0.855f)
-        path.lineTo(size * 0.610f, size * 0.745f)
-        path.moveTo(size * 0.375f, size * 0.925f)
-        path.lineTo(size * 0.625f, size * 0.925f)
-        graphics.draw(path)
-    }
-
-    graphics.setColor(glow)
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(5f, size * 0.060f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    drawIconArc((float) (size * 0.37f), 132f, -264f)
-    drawIconArc((float) (size * 0.27f), 132f, -264f)
-
-    graphics.setColor(cyan)
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(3f, size * 0.050f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    drawIconArc((float) (size * 0.37f), 132f, -264f)
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(2f, size * 0.039f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    drawIconArc((float) (size * 0.27f), 132f, -264f)
-
-    int screenX = ((int) Math.round(size * 0.245f))
-    int screenY = ((int) Math.round(size * 0.315f))
-    int screenW = ((int) Math.round(size * 0.510f))
-    int screenH = ((int) Math.round(size * 0.340f))
-    int radius = Math.max(6, ((int) Math.round(size * 0.075f)))
-    graphics.setColor(new java.awt.Color(0, 0, 0, 95))
-    graphics.fillRoundRect(screenX + 1, screenY + Math.max(1, ((int) Math.round(size / 42f))), screenW, screenH, radius, radius)
-    graphics.setPaint(new java.awt.GradientPaint(screenX, screenY, cyanBright, screenX + screenW, screenY + screenH, new java.awt.Color(46, 198, 209)))
-    graphics.fillRoundRect(screenX, screenY, screenW, screenH, radius, radius)
-
-    def play = new java.awt.geom.Path2D.Float()
-    play.moveTo(size * 0.465f, size * 0.405f)
-    play.lineTo(size * 0.465f, size * 0.600f)
-    play.lineTo(size * 0.640f, size * 0.502f)
-    play.closePath()
-    graphics.setColor(new java.awt.Color(12, 55, 62, 175))
-    graphics.fill(play)
-    graphics.setColor(cyanBright)
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(1.2f, size * 0.014f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    graphics.draw(play)
-
-    graphics.setColor(new java.awt.Color(28, 217, 230, 90))
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(7f, size * 0.070f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    drawIconDownloadArrow()
-    graphics.setColor(cyanBright)
-    graphics.setStroke(new java.awt.BasicStroke((float) Math.max(3f, size * 0.050f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
-    drawIconDownloadArrow()
-
+    // Resize Logo.png directly into the launcher canvas. This keeps the PR text-only while
+    // letting CI/build machines generate the binary launcher PNGs locally before packaging.
+    graphics.drawImage(source, 0, 0, size, size, null)
     graphics.dispose()
+
     javax.imageio.ImageIO.write(image, 'png', outputFile)
 }
 
