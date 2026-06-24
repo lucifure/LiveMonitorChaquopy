@@ -560,7 +560,7 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private static class RecordingViewHolder {
-        LinearLayout root;
+        FrameLayout root;
         TextView title;
         TextView statusBadge;
         TextView subtitle;
