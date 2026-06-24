@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -132,11 +133,21 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private RecordingViewHolder createViewHolder() {
+        FrameLayout itemRoot = new FrameLayout(context);
+        itemRoot.setPadding(dp(12), dp(4), dp(12), dp(8));
+
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
         root.setBackgroundResource(R.drawable.lm_card_background);
         root.setElevation(dp(6));
+        itemRoot.addView(
+            root,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        );
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -257,7 +268,7 @@ public class RecordingAdapter extends BaseAdapter {
         root.addView(buttonRow);
 
         RecordingViewHolder holder = new RecordingViewHolder();
-        holder.root = root;
+        holder.root = itemRoot;
         holder.title = title;
         holder.statusBadge = statusBadge;
         holder.subtitle = subtitle;
