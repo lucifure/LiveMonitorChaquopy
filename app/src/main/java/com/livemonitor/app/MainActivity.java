@@ -448,7 +448,6 @@ public class MainActivity extends AppCompatActivity {
         }
 
         sendChannelAction(LiveMonitorActions.ACTION_REMOVE_CHANNEL, channel);
-        storage.removeChannel(channel.getId());
         storage.appendLog(LogItem.channel(
             LogItem.LEVEL_WARNING,
             LogItem.SOURCE_UI,
@@ -675,7 +674,6 @@ public class MainActivity extends AppCompatActivity {
 
 
     private void reconcileStaleRecordingCards() {
-        long now = System.currentTimeMillis();
         boolean changed = false;
         List<RecordingItem> recordings = storage.loadRecordings();
 
@@ -685,37 +683,28 @@ public class MainActivity extends AppCompatActivity {
             }
 
             ChannelItem channel = storage.findChannelById(recording.getChannelId());
-            boolean channelStillRecordingSameVideo = channel != null
-                && channel.isRecording()
-                && (recording.getVideoId().trim().isEmpty() || channel.isSameCurrentVideo(recording.getVideoId()));
-            boolean staleForUi = now - recording.getUpdatedAt() > 3L * 60L * 1_000L;
-
-            if (channelStillRecordingSameVideo && !staleForUi) {
+            if (channel == null) {
                 continue;
             }
 
-            if (recording.hasExistingFinalMp4File()) {
-                recording.markCompleted(recording.getFinalMp4Path());
-                recording.hideFromDownloading();
-            } else if (recording.hasExistingTempTsFile()) {
-                recording.markStoppedBySystem("UI reconciled stale REC state; recorder is no longer active.");
-                recording.hideFromDownloading();
-            } else {
-                recording.markStoppedBySystem("UI reconciled stale REC state; no active recorder exists.");
-                recording.hideFromDownloading();
-            }
-            storage.upsertRecording(recording);
+            boolean channelStillRecordingSameVideo = channel.isRecording()
+                && (recording.getVideoId().trim().isEmpty() || channel.isSameCurrentVideo(recording.getVideoId()));
 
-            if (channel != null && channel.isRecording()) {
-                channel.markRecordingFinished();
-                channel.markWaitingForLive();
+            if (!channelStillRecordingSameVideo) {
+                channel.markRecording(recording.getVideoId(), recording.getVideoUrl());
                 storage.upsertChannel(channel);
+                changed = true;
             }
-            changed = true;
+
+            if (recording.isHiddenFromDownloading()) {
+                recording.showInDownloading();
+                storage.upsertRecording(recording);
+                changed = true;
+            }
         }
 
         if (changed) {
-            storage.appendLog(LogItem.warning(LogItem.SOURCE_UI, "Reconciled stale recording UI state."));
+            storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Reconciled active recording UI state."));
         }
     }
 

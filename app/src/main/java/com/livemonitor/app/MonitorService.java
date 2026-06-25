@@ -336,6 +336,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
+        for (RecordingItem candidate : storage.loadActiveRecordings()) {
+            if (candidate != null && channelId.equals(candidate.getChannelId())) {
+                return candidate;
+            }
+        }
+
         return null;
     }
 
