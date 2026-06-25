@@ -13,6 +13,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -21,515 +22,328 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-/**
- * Settings screen.
- *
- * Includes:
- * - poll interval
- * - download quality
- * - save location
- * - scheduled monitoring
- * - remote config URL
- * - boot restore
- * - battery optimization helper
- */
 public class SettingsActivity extends AppCompatActivity {
+    private static final String SECTION_RECORDING = "Recording";
+    private static final String SECTION_SCHEDULE = "Schedule";
+    private static final String SECTION_AUTH = "Authentication";
+    private static final String SECTION_APP = "App Behaviour";
+    private static final String SECTION_DEBUG = "Developer / Debug";
 
     private AppStorage storage;
     private AppSettings settings;
     private StorageAccessHelper storageAccessHelper;
+    private String currentSection = "";
 
-    private EditText pollIntervalInput;
+    private EditText pollIntervalInput, scheduleStartInput, scheduleEndInput, ytDlpCookieHeaderInput,
+        ytDlpCookiesPathInput, ytDlpExtractorArgsInput, ytDlpPoTokenClientInput, ytDlpPoTokenValueInput,
+        remoteConfigUrlInput;
     private Spinner qualitySpinner;
-    private TextView saveLocationText;
-    private CheckBox scheduledCheckBox;
-    private EditText scheduleStartInput;
-    private EditText scheduleEndInput;
-    private CheckBox allowCurrentRecordingCheckBox;
-    private CheckBox waitForVideoCheckBox;
-    private CheckBox liveFromStartCheckBox;
-    private CheckBox skipUnavailableFragmentsCheckBox;
-    private EditText ytDlpCookieHeaderInput;
-    private EditText ytDlpCookiesPathInput;
-    private EditText ytDlpExtractorArgsInput;
-    private EditText ytDlpPoTokenClientInput;
-    private EditText ytDlpPoTokenValueInput;
-    private CheckBox convertTsToMp4CheckBox;
-    private CheckBox restoreBootCheckBox;
-    private CheckBox batteryOptimizationCheckBox;
-    private CheckBox remoteConfigCheckBox;
-    private EditText remoteConfigUrlInput;
-    private TextView remoteConfigUrlLabel;
-    private CheckBox verboseDebugLoggingCheckBox;
+    private TextView saveLocationText, remoteConfigUrlLabel;
+    private CheckBox scheduledCheckBox, allowCurrentRecordingCheckBox, waitForVideoCheckBox,
+        liveFromStartCheckBox, skipUnavailableFragmentsCheckBox, convertTsToMp4CheckBox,
+        restoreBootCheckBox, batteryOptimizationCheckBox, remoteConfigCheckBox, verboseDebugLoggingCheckBox;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         storageAccessHelper = new StorageAccessHelper(this, this::onSaveLocationSelected);
-
-        setTitle("Settings");
-        setContentView(buildContentView());
-
-        bindSettingsToViews();
+        showMainSettings();
     }
 
-    @Override
-    protected void onResume() {
+    @Override protected void onResume() {
         super.onResume();
-
-        if (storage != null && ytDlpCookieHeaderInput != null) {
+        if (storage != null) {
             settings = storage.loadSettings();
             bindSettingsToViews();
         }
     }
 
-    private ViewGroup buildContentView() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        scrollView.setBackgroundResource(R.drawable.lm_screen_background);
+    @Override public void onBackPressed() {
+        if (!currentSection.isEmpty()) {
+            showMainSettings();
+            return;
+        }
+        super.onBackPressed();
+    }
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(14), dp(14), dp(14));
-        scrollView.addView(root);
+    private void showMainSettings() {
+        currentSection = "";
+        setTitle("Settings");
+        setContentView(buildMainSettingsView());
+    }
 
-        TextView title = new TextView(this);
-        title.setText("Settings");
-        title.setTextSize(22);
-        title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, 0, 0, dp(10));
-        title.setTextColor(getResources().getColor(R.color.lm_text_primary));
-        root.addView(title);
+    private void showSection(String section) {
+        currentSection = section;
+        setTitle(section);
+        setContentView(buildSectionView(section));
+        bindSettingsToViews();
+    }
 
-        addSectionHeader(root, "Recording");
+    private View buildMainSettingsView() {
+        LinearLayout root = baseRoot();
+        root.setPadding(0, dp(12), 0, dp(12));
+        addSectionRow(root, SECTION_RECORDING, "Quality, save location, recording options", R.drawable.ic_videocam_24);
+        addDivider(root);
+        addSectionRow(root, SECTION_SCHEDULE, "Monitoring schedule and timing", R.drawable.ic_schedule_24);
+        addDivider(root);
+        addSectionRow(root, SECTION_AUTH, "Cookies, PO token, extractor args", R.drawable.ic_lock_24);
+        addDivider(root);
+        addSectionRow(root, SECTION_APP, "Reboot, battery, remote config", R.drawable.ic_settings_24);
+        addDivider(root);
+        addSectionRow(root, SECTION_DEBUG, "Logging and diagnostics", R.drawable.ic_code_24);
+        ScrollView scrollView = wrap(root);
+        return scrollView;
+    }
 
-        pollIntervalInput = addEditText(root, "Poll interval seconds", "60");
-
-        qualitySpinner = new Spinner(this);
-        ArrayAdapter<String> qualityAdapter = new ArrayAdapter<>(
-            this,
-            android.R.layout.simple_spinner_item,
-            new String[] {
-                AppSettings.QUALITY_360P,
-                AppSettings.QUALITY_480P,
-                AppSettings.QUALITY_720P,
-                AppSettings.QUALITY_1080P,
-                AppSettings.QUALITY_BEST
-            }
-        );
-        qualityAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        qualitySpinner.setAdapter(qualityAdapter);
-        addLabel(root, "Download quality");
-        root.addView(qualitySpinner);
-
-        addLabel(root, "Save location");
-        saveLocationText = new TextView(this);
-        saveLocationText.setTextSize(14);
-        saveLocationText.setTextColor(getResources().getColor(R.color.lm_text_secondary));
-        saveLocationText.setPadding(0, dp(4), 0, dp(4));
-        root.addView(saveLocationText);
-
-        Button chooseSaveLocationButton = new Button(this);
-        chooseSaveLocationButton.setAllCaps(false);
-        chooseSaveLocationButton.setText("Choose Save Folder");
-        chooseSaveLocationButton.setOnClickListener(v -> storageAccessHelper.openFolderPicker());
-        root.addView(chooseSaveLocationButton);
-
-        Button openSaveLocationButton = new Button(this);
-        openSaveLocationButton.setAllCaps(false);
-        openSaveLocationButton.setText("Open folder");
-        openSaveLocationButton.setOnClickListener(v -> openSelectedSaveFolder());
-        root.addView(openSaveLocationButton);
-
-        liveFromStartCheckBox = addCheckBox(
-            root,
-            "Record from start when YouTube DVR is available"
-        );
-        skipUnavailableFragmentsCheckBox = addCheckBox(
-            root,
-            "Skip unavailable fragments and keep retrying"
-        );
-        convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
-
-        addSectionHeader(root, "Schedule");
-
-        scheduledCheckBox = addCheckBox(root, "Enable scheduled monitoring");
-        scheduledCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> updateScheduleFieldsEnabled());
-        scheduleStartInput = addEditText(root, "Schedule start HH:mm", "00:00");
-        scheduleEndInput = addEditText(root, "Schedule end HH:mm", "23:59");
-        allowCurrentRecordingCheckBox = addCheckBox(
-            root,
-            "Allow current recording to finish outside schedule"
-        );
-        waitForVideoCheckBox = addCheckBox(root, "Wait for scheduled live video to start");
-
-        addSectionHeader(root, "Authentication");
-
-        ytDlpCookieHeaderInput = addEditText(
-            root,
-            "YouTube Cookie header for yt-dlp (optional)",
-            "VISITOR_INFO1_LIVE=...; YSC=...; SID=..."
-        );
-        ytDlpCookiesPathInput = addEditText(
-            root,
-            "yt-dlp cookies.txt path (optional)",
-            "/data/user/0/com.livemonitor.app/files/youtube-cookies.txt"
-        );
-
-        Button youtubeSignInButton = new Button(this);
-        youtubeSignInButton.setAllCaps(false);
-        youtubeSignInButton.setText("Open YouTube session / PO token setup");
-        youtubeSignInButton.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
-        root.addView(youtubeSignInButton);
-
-        ytDlpPoTokenClientInput = addEditText(
-            root,
-            "YouTube PO token client for GVS formats",
-            "mweb"
-        );
-        ytDlpPoTokenValueInput = addEditText(
-            root,
-            "YouTube GVS PO token value",
-            "Paste real token only, or mweb.gvs+TOKEN"
-        );
-
-        Button applyPoTokenButton = new Button(this);
-        applyPoTokenButton.setAllCaps(false);
-        applyPoTokenButton.setText("Apply PO token to extractor args");
-        applyPoTokenButton.setOnClickListener(v -> applyPoTokenToExtractorArgs());
-        root.addView(applyPoTokenButton);
-
-        ytDlpExtractorArgsInput = addEditText(
-            root,
-            "yt-dlp extractor args (optional)",
-            "youtube:player_client=mweb"
-        );
-
-        addSectionHeader(root, "App Behaviour");
-
-        restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
-        batteryOptimizationCheckBox = addCheckBox(
-            root,
-            "Ask for battery optimization exemption"
-        );
-
-        Button batteryButton = new Button(this);
-        batteryButton.setAllCaps(false);
-        batteryButton.setText("Open Battery Optimization Settings");
-        batteryButton.setOnClickListener(v -> openBatteryOptimizationSettings());
-        root.addView(batteryButton);
-
-        remoteConfigCheckBox = addCheckBox(root, "Enable remote config");
-        remoteConfigCheckBox.setOnCheckedChangeListener((buttonView, isChecked) -> updateRemoteConfigVisibility());
-        remoteConfigUrlInput = addEditText(
-            root,
-            "Remote config URL",
-            "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json"
-        );
-
-        addSectionHeader(root, "Developer / Debug");
-
-        verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
-
-        Button logSettingsButton = new Button(this);
-        logSettingsButton.setAllCaps(false);
-        logSettingsButton.setText("Log Settings");
-        logSettingsButton.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
-        root.addView(logSettingsButton);
-
+    private View buildSectionView(String section) {
+        LinearLayout root = baseRoot();
+        root.setPadding(dp(14), dp(10), dp(14), dp(14));
+        addToolbar(root, section);
+        if (SECTION_RECORDING.equals(section)) addRecordingSection(root);
+        else if (SECTION_SCHEDULE.equals(section)) addScheduleSection(root);
+        else if (SECTION_AUTH.equals(section)) addAuthenticationSection(root);
+        else if (SECTION_APP.equals(section)) addAppBehaviourSection(root);
+        else if (SECTION_DEBUG.equals(section)) addDebugSection(root);
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
         saveButton.setText("Save Settings");
         saveButton.setOnClickListener(v -> saveSettings());
-        root.addView(saveButton);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        lp.topMargin = dp(18);
+        root.addView(saveButton, lp);
+        return wrap(root);
+    }
 
+    private LinearLayout baseRoot() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.lm_screen_background);
+        return root;
+    }
+
+    private ScrollView wrap(LinearLayout root) {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundResource(R.drawable.lm_screen_background);
+        scrollView.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return scrollView;
     }
 
+    private void addToolbar(LinearLayout root, String titleText) {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(0, 0, 0, dp(12));
+        TextView back = new TextView(this);
+        back.setText("←");
+        back.setTextSize(28);
+        back.setTextColor(Color.WHITE);
+        back.setGravity(Gravity.CENTER);
+        back.setOnClickListener(v -> showMainSettings());
+        toolbar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView title = new TextView(this);
+        title.setText(titleText);
+        title.setTextSize(20);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(Color.WHITE);
+        toolbar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(toolbar);
+    }
+
+    private void addSectionRow(LinearLayout root, String title, String subtitle, int iconRes) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(18), 0, dp(14), 0);
+        row.setMinimumHeight(dp(64));
+        row.setOnClickListener(v -> showSection(title));
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(iconRes);
+        icon.setColorFilter(getResources().getColor(R.color.accent));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setPadding(dp(18), 0, 0, 0);
+        TextView name = new TextView(this);
+        name.setText(title);
+        name.setTextSize(16);
+        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setTextColor(Color.WHITE);
+        TextView sub = new TextView(this);
+        sub.setText(subtitle);
+        sub.setTextSize(13);
+        sub.setTextColor(Color.rgb(155, 170, 170));
+        texts.addView(name);
+        texts.addView(sub);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView chevron = new TextView(this);
+        chevron.setText("›");
+        chevron.setTextSize(30);
+        chevron.setTextColor(Color.rgb(180, 190, 190));
+        row.addView(chevron);
+        root.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
+    }
+
+    private void addRecordingSection(LinearLayout root) {
+        pollIntervalInput = addEditText(root, "Poll interval seconds", "60");
+        qualitySpinner = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+            new String[]{AppSettings.QUALITY_144P, AppSettings.QUALITY_360P, AppSettings.QUALITY_480P, AppSettings.QUALITY_720P, AppSettings.QUALITY_1080P});
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        qualitySpinner.setAdapter(adapter);
+        addLabel(root, "Download quality"); root.addView(qualitySpinner);
+        addLabel(root, "Save location");
+        saveLocationText = new TextView(this); saveLocationText.setTextColor(getResources().getColor(R.color.lm_text_secondary)); saveLocationText.setTextSize(14); saveLocationText.setPadding(0, dp(4), 0, dp(4)); root.addView(saveLocationText);
+        Button choose = addButton(root, "Choose Save Folder"); choose.setOnClickListener(v -> storageAccessHelper.openFolderPicker());
+        Button open = addButton(root, "Open folder"); open.setOnClickListener(v -> openSelectedSaveFolder());
+        liveFromStartCheckBox = addCheckBox(root, "Record from start when YouTube DVR is available");
+        skipUnavailableFragmentsCheckBox = addCheckBox(root, "Skip unavailable fragments and keep retrying");
+        convertTsToMp4CheckBox = addCheckBox(root, "Convert completed TS recordings to MP4");
+    }
+
+    private void addScheduleSection(LinearLayout root) {
+        scheduledCheckBox = addCheckBox(root, "Enable scheduled monitoring");
+        scheduledCheckBox.setOnCheckedChangeListener((b, checked) -> updateScheduleFieldsEnabled());
+        scheduleStartInput = addEditText(root, "Schedule start HH:mm", "00:00");
+        scheduleEndInput = addEditText(root, "Schedule end HH:mm", "23:59");
+        allowCurrentRecordingCheckBox = addCheckBox(root, "Allow current recording to finish outside schedule");
+        waitForVideoCheckBox = addCheckBox(root, "Wait for scheduled live video to start");
+    }
+
+    private void addAuthenticationSection(LinearLayout root) {
+        ytDlpCookieHeaderInput = addEditText(root, "YouTube Cookie header for yt-dlp (optional)", "VISITOR_INFO1_LIVE=...; YSC=...; SID=...");
+        ytDlpCookiesPathInput = addEditText(root, "yt-dlp cookies.txt path (optional)", "/data/user/0/com.livemonitor.app/files/youtube-cookies.txt");
+        Button signIn = addButton(root, "Open YouTube session / PO token setup"); signIn.setOnClickListener(v -> startActivity(new Intent(this, YouTubeSignInActivity.class)));
+        ytDlpPoTokenClientInput = addEditText(root, "YouTube PO token client for GVS formats", "mweb");
+        ytDlpPoTokenValueInput = addEditText(root, "YouTube GVS PO token value", "Paste real token only, or mweb.gvs+TOKEN");
+        Button apply = addButton(root, "Apply PO token to extractor args"); apply.setOnClickListener(v -> applyPoTokenToExtractorArgs());
+        ytDlpExtractorArgsInput = addEditText(root, "yt-dlp extractor args (optional)", "youtube:player_client=mweb");
+    }
+
+    private void addAppBehaviourSection(LinearLayout root) {
+        restoreBootCheckBox = addCheckBox(root, "Restore monitoring after reboot");
+        batteryOptimizationCheckBox = addCheckBox(root, "Ask for battery optimization exemption");
+        Button battery = addButton(root, "Open Battery Optimization Settings"); battery.setOnClickListener(v -> openBatteryOptimizationSettings());
+        remoteConfigCheckBox = addCheckBox(root, "Enable remote config");
+        remoteConfigCheckBox.setOnCheckedChangeListener((b, checked) -> updateRemoteConfigVisibility());
+        remoteConfigUrlInput = addEditText(root, "Remote config URL", "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json");
+    }
+
+    private void addDebugSection(LinearLayout root) {
+        verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
+        Button logs = addButton(root, "Log Settings"); logs.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
+    }
+
     private void bindSettingsToViews() {
-        pollIntervalInput.setText(String.valueOf(settings.getPollIntervalSeconds()));
-
-        String[] qualities = {
-            AppSettings.QUALITY_360P,
-            AppSettings.QUALITY_480P,
-            AppSettings.QUALITY_720P,
-            AppSettings.QUALITY_1080P,
-            AppSettings.QUALITY_BEST
-        };
-
-        for (int i = 0; i < qualities.length; i++) {
-            if (qualities[i].equals(settings.getDownloadQuality())) {
-                qualitySpinner.setSelection(i);
-                break;
-            }
+        if (settings == null) return;
+        if (pollIntervalInput != null) pollIntervalInput.setText(String.valueOf(settings.getPollIntervalSeconds()));
+        if (qualitySpinner != null) {
+            String[] qualities = {AppSettings.QUALITY_144P, AppSettings.QUALITY_360P, AppSettings.QUALITY_480P, AppSettings.QUALITY_720P, AppSettings.QUALITY_1080P};
+            for (int i = 0; i < qualities.length; i++) if (qualities[i].equals(settings.getDownloadQuality())) qualitySpinner.setSelection(i);
         }
+        if (saveLocationText != null) saveLocationText.setText(settings.getSaveLocationDisplayName());
+        if (scheduledCheckBox != null) scheduledCheckBox.setChecked(settings.isScheduledMonitoringEnabled());
+        if (scheduleStartInput != null) scheduleStartInput.setText(AppSettings.minutesToTimeLabel(settings.getScheduleStartMinutes()));
+        if (scheduleEndInput != null) scheduleEndInput.setText(AppSettings.minutesToTimeLabel(settings.getScheduleEndMinutes()));
+        if (allowCurrentRecordingCheckBox != null) allowCurrentRecordingCheckBox.setChecked(settings.isAllowCurrentRecordingOutsideSchedule());
+        if (waitForVideoCheckBox != null) waitForVideoCheckBox.setChecked(settings.isWaitForVideoEnabled());
+        if (liveFromStartCheckBox != null) liveFromStartCheckBox.setChecked(settings.isLiveFromStartEnabled());
+        if (skipUnavailableFragmentsCheckBox != null) skipUnavailableFragmentsCheckBox.setChecked(settings.isSkipUnavailableFragmentsEnabled());
+        if (ytDlpCookieHeaderInput != null) ytDlpCookieHeaderInput.setText(settings.getYtDlpCookieHeader());
+        if (ytDlpCookiesPathInput != null) ytDlpCookiesPathInput.setText(settings.getYtDlpCookiesPath());
+        if (ytDlpExtractorArgsInput != null) ytDlpExtractorArgsInput.setText(settings.getYtDlpExtractorArgs());
+        if (ytDlpPoTokenClientInput != null) ytDlpPoTokenClientInput.setText(settings.getYtDlpPoTokenClient());
+        if (ytDlpPoTokenValueInput != null) ytDlpPoTokenValueInput.setText(settings.getYtDlpPoTokenValue());
+        if (convertTsToMp4CheckBox != null) convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
+        if (restoreBootCheckBox != null) restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
+        if (batteryOptimizationCheckBox != null) batteryOptimizationCheckBox.setChecked(settings.isRequestBatteryOptimizationExemption());
+        if (remoteConfigCheckBox != null) remoteConfigCheckBox.setChecked(settings.isRemoteConfigEnabled());
+        if (verboseDebugLoggingCheckBox != null) verboseDebugLoggingCheckBox.setChecked(settings.isLogDebugEnabled());
+        if (remoteConfigUrlInput != null) remoteConfigUrlInput.setText(settings.getRemoteConfigUrl().trim().isEmpty() ? "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json" : settings.getRemoteConfigUrl());
+        updateScheduleFieldsEnabled(); updateRemoteConfigVisibility();
+    }
 
-        saveLocationText.setText(settings.getSaveLocationDisplayName());
-        scheduledCheckBox.setChecked(settings.isScheduledMonitoringEnabled());
-        scheduleStartInput.setText(
-            AppSettings.minutesToTimeLabel(settings.getScheduleStartMinutes())
-        );
-        scheduleEndInput.setText(
-            AppSettings.minutesToTimeLabel(settings.getScheduleEndMinutes())
-        );
-        allowCurrentRecordingCheckBox.setChecked(
-            settings.isAllowCurrentRecordingOutsideSchedule()
-        );
-        waitForVideoCheckBox.setChecked(settings.isWaitForVideoEnabled());
-        liveFromStartCheckBox.setChecked(settings.isLiveFromStartEnabled());
-        skipUnavailableFragmentsCheckBox.setChecked(settings.isSkipUnavailableFragmentsEnabled());
-        ytDlpCookieHeaderInput.setText(settings.getYtDlpCookieHeader());
-        ytDlpCookiesPathInput.setText(settings.getYtDlpCookiesPath());
-        ytDlpExtractorArgsInput.setText(settings.getYtDlpExtractorArgs());
-        ytDlpPoTokenClientInput.setText(settings.getYtDlpPoTokenClient());
-        ytDlpPoTokenValueInput.setText(settings.getYtDlpPoTokenValue());
-        convertTsToMp4CheckBox.setChecked(settings.isConvertTsToMp4());
-        restoreBootCheckBox.setChecked(settings.isRestoreMonitoringOnBoot());
-        batteryOptimizationCheckBox.setChecked(
-            settings.isRequestBatteryOptimizationExemption()
-        );
-        remoteConfigCheckBox.setChecked(settings.isRemoteConfigEnabled());
-        verboseDebugLoggingCheckBox.setChecked(settings.isLogDebugEnabled());
-        updateScheduleFieldsEnabled();
-
-        updateRemoteConfigVisibility();
-
-        if (settings.getRemoteConfigUrl().trim().isEmpty()) {
-            remoteConfigUrlInput.setText(
-                "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json"
-            );
-        } else {
-            remoteConfigUrlInput.setText(settings.getRemoteConfigUrl());
+    private void saveSettings() {
+        if (SECTION_RECORDING.equals(currentSection)) {
+            settings.setPollIntervalSeconds(parseInt(pollIntervalInput.getText().toString(), 60));
+            settings.setDownloadQuality(String.valueOf(qualitySpinner.getSelectedItem()));
+            settings.setLiveFromStartEnabled(liveFromStartCheckBox.isChecked());
+            settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
+            settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
+        } else if (SECTION_SCHEDULE.equals(currentSection)) {
+            settings.setScheduledMonitoringEnabled(scheduledCheckBox.isChecked());
+            settings.setScheduleWindow(AppSettings.timeToMinutes(scheduleStartInput.getText().toString()), AppSettings.timeToMinutes(scheduleEndInput.getText().toString()));
+            settings.setAllowCurrentRecordingOutsideSchedule(allowCurrentRecordingCheckBox.isChecked());
+            settings.setWaitForVideoEnabled(waitForVideoCheckBox.isChecked());
+        } else if (SECTION_AUTH.equals(currentSection)) {
+            settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
+            settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
+            settings.setYtDlpExtractorArgs(ytDlpExtractorArgsInput.getText().toString());
+            String previous = settings.getYtDlpPoTokenValue();
+            String token = ytDlpPoTokenValueInput.getText().toString();
+            settings.setYtDlpPoTokenClient(inferPoTokenClient(ytDlpPoTokenClientInput.getText().toString(), token));
+            settings.setYtDlpPoTokenValue(token);
+            if (settings.getYtDlpPoTokenValue().isEmpty()) settings.clearYtDlpPoToken();
+            else if (!settings.getYtDlpPoTokenValue().equals(previous)) settings.setYtDlpPoTokenMetadata("gvs", System.currentTimeMillis(), "manual-settings", "manual-session", "", "");
+        } else if (SECTION_APP.equals(currentSection)) {
+            settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
+            settings.setRequestBatteryOptimizationExemption(batteryOptimizationCheckBox.isChecked());
+            settings.setRemoteConfigEnabled(remoteConfigCheckBox.isChecked());
+            settings.setRemoteConfigUrl(remoteConfigUrlInput.getText().toString().trim());
+        } else if (SECTION_DEBUG.equals(currentSection)) {
+            settings.setLogDebugEnabled(verboseDebugLoggingCheckBox.isChecked());
         }
+        storage.saveSettings(settings);
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Settings saved."));
+        Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
     }
 
     private void applyPoTokenToExtractorArgs() {
         AppSettings preview = new AppSettings();
-        String poTokenInput = ytDlpPoTokenValueInput.getText().toString();
-        preview.setYtDlpPoTokenClient(inferPoTokenClient(
-            ytDlpPoTokenClientInput.getText().toString(),
-            poTokenInput
-        ));
-        preview.setYtDlpPoTokenValue(poTokenInput);
-
-        String extractorArgs = preview.buildYtDlpPoTokenExtractorArgs();
-
-        if (extractorArgs.isEmpty()) {
-            Toast.makeText(this, "Enter a real GVS PO token first.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        ytDlpExtractorArgsInput.setText(extractorArgs);
+        String token = ytDlpPoTokenValueInput.getText().toString();
+        preview.setYtDlpPoTokenClient(inferPoTokenClient(ytDlpPoTokenClientInput.getText().toString(), token));
+        preview.setYtDlpPoTokenValue(token);
+        String args = preview.buildYtDlpPoTokenExtractorArgs();
+        if (args.isEmpty()) { Toast.makeText(this, "Enter a real GVS PO token first.", Toast.LENGTH_SHORT).show(); return; }
+        ytDlpExtractorArgsInput.setText(args);
         Toast.makeText(this, "PO token extractor args applied.", Toast.LENGTH_SHORT).show();
     }
 
     private String inferPoTokenClient(String selectedClient, String tokenInput) {
-        String normalizedToken = tokenInput == null ? "" : tokenInput.trim().toLowerCase(java.util.Locale.US);
-        int markerIndex = normalizedToken.indexOf(".gvs+");
-
-        if (markerIndex > 0) {
-            return normalizedToken.substring(0, markerIndex);
-        }
-
-        return selectedClient;
-    }
-
-    private void saveSettings() {
-        settings.setPollIntervalSeconds(parseInt(pollIntervalInput.getText().toString(), 60));
-        settings.setDownloadQuality(String.valueOf(qualitySpinner.getSelectedItem()));
-        settings.setScheduledMonitoringEnabled(scheduledCheckBox.isChecked());
-        settings.setScheduleWindow(
-            AppSettings.timeToMinutes(scheduleStartInput.getText().toString()),
-            AppSettings.timeToMinutes(scheduleEndInput.getText().toString())
-        );
-        settings.setAllowCurrentRecordingOutsideSchedule(
-            allowCurrentRecordingCheckBox.isChecked()
-        );
-        settings.setWaitForVideoEnabled(waitForVideoCheckBox.isChecked());
-        settings.setLiveFromStartEnabled(liveFromStartCheckBox.isChecked());
-        settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
-        settings.setYtDlpCookieHeader(ytDlpCookieHeaderInput.getText().toString());
-        settings.setYtDlpCookiesPath(ytDlpCookiesPathInput.getText().toString());
-        settings.setYtDlpExtractorArgs(ytDlpExtractorArgsInput.getText().toString());
-        String previousPoTokenValue = settings.getYtDlpPoTokenValue();
-        String poTokenInput = ytDlpPoTokenValueInput.getText().toString();
-        String poTokenClient = inferPoTokenClient(
-            ytDlpPoTokenClientInput.getText().toString(),
-            poTokenInput
-        );
-        settings.setYtDlpPoTokenClient(poTokenClient);
-        settings.setYtDlpPoTokenValue(poTokenInput);
-
-        if (settings.getYtDlpPoTokenValue().isEmpty()) {
-            settings.clearYtDlpPoToken();
-        } else if (!settings.getYtDlpPoTokenValue().equals(previousPoTokenValue)) {
-            settings.setYtDlpPoTokenMetadata(
-                "gvs",
-                System.currentTimeMillis(),
-                "manual-settings",
-                "manual-session",
-                "",
-                ""
-            );
-        }
-        settings.setConvertTsToMp4(convertTsToMp4CheckBox.isChecked());
-        settings.setRestoreMonitoringOnBoot(restoreBootCheckBox.isChecked());
-        settings.setRequestBatteryOptimizationExemption(
-            batteryOptimizationCheckBox.isChecked()
-        );
-        settings.setRemoteConfigEnabled(remoteConfigCheckBox.isChecked());
-        settings.setRemoteConfigUrl(remoteConfigUrlInput.getText().toString().trim());
-        settings.setLogDebugEnabled(verboseDebugLoggingCheckBox.isChecked());
-
-        storage.saveSettings(settings);
-        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Settings saved."));
-
-        Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
+        String normalized = tokenInput == null ? "" : tokenInput.trim().toLowerCase(java.util.Locale.US);
+        int marker = normalized.indexOf(".gvs+");
+        return marker > 0 ? normalized.substring(0, marker) : selectedClient;
     }
 
     private void onSaveLocationSelected(Uri uri, String displayName) {
-        if (uri == null) {
-            return;
-        }
-
+        if (uri == null) return;
         settings.setSaveLocation(uri.toString(), displayName);
         storage.saveSettings(settings);
-        saveLocationText.setText(settings.getSaveLocationDisplayName());
-
+        if (saveLocationText != null) saveLocationText.setText(settings.getSaveLocationDisplayName());
         Toast.makeText(this, "Save location updated.", Toast.LENGTH_SHORT).show();
     }
 
     private void openBatteryOptimizationSettings() {
-        try {
-            Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
-            startActivity(intent);
-        } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "Unable to open battery settings: " + e.getMessage(),
-                Toast.LENGTH_LONG
-            ).show();
-        }
+        try { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
+        catch (Exception e) { Toast.makeText(this, "Unable to open battery settings: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
 
     private void openSelectedSaveFolder() {
         String uriString = settings == null ? "" : settings.getSaveLocationUri();
-
-        if (uriString == null || uriString.trim().isEmpty()) {
-            Toast.makeText(this, "No custom save folder selected yet.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setData(Uri.parse(uriString));
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(intent);
-        } catch (Exception e) {
-            Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
+        if (uriString == null || uriString.trim().isEmpty()) { Toast.makeText(this, "No custom save folder selected yet.", Toast.LENGTH_SHORT).show(); return; }
+        try { Intent intent = new Intent(Intent.ACTION_VIEW); intent.setData(Uri.parse(uriString)); intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(intent); }
+        catch (Exception e) { Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
 
-    private EditText addEditText(LinearLayout root, String label, String hint) {
-        addLabel(root, label);
-
-        EditText editText = new EditText(this);
-        editText.setSingleLine(true);
-        editText.setHint(hint);
-
-        root.addView(
-            editText,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        );
-
-        return editText;
-    }
-
-    private CheckBox addCheckBox(LinearLayout root, String text) {
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(text);
-        root.addView(checkBox);
-        return checkBox;
-    }
-
-    private void addLabel(LinearLayout root, String text) {
-        TextView label = new TextView(this);
-        label.setText(text);
-        label.setTextSize(13);
-        label.setTextColor(Color.rgb(190, 190, 190));
-        label.setPadding(0, dp(8), 0, 0);
-        root.addView(label);
-
-        if ("Remote config URL".equals(text)) {
-            remoteConfigUrlLabel = label;
-        }
-    }
-
-    private void addSectionHeader(LinearLayout root, String text) {
-        TextView header = new TextView(this);
-        header.setText(text.toUpperCase(java.util.Locale.US));
-        header.setTextSize(12);
-        header.setTypeface(Typeface.DEFAULT_BOLD);
-        header.setTextColor(getResources().getColor(R.color.accent));
-        header.setPadding(0, dp(18), 0, dp(6));
-        root.addView(header);
-
-        View divider = new View(this);
-        divider.setBackgroundColor(getResources().getColor(R.color.lm_divider));
-        root.addView(
-            divider,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(1)
-            )
-        );
-    }
-
-    private void updateScheduleFieldsEnabled() {
-        boolean enabled = scheduledCheckBox != null && scheduledCheckBox.isChecked();
-        setEnabledWithAlpha(scheduleStartInput, enabled);
-        setEnabledWithAlpha(scheduleEndInput, enabled);
-        setEnabledWithAlpha(allowCurrentRecordingCheckBox, enabled);
-        setEnabledWithAlpha(waitForVideoCheckBox, enabled);
-    }
-
-    private void updateRemoteConfigVisibility() {
-        boolean enabled = remoteConfigCheckBox != null && remoteConfigCheckBox.isChecked();
-        if (remoteConfigUrlInput != null) {
-            remoteConfigUrlInput.setVisibility(enabled ? View.VISIBLE : View.GONE);
-            remoteConfigUrlInput.setEnabled(enabled);
-        }
-
-        if (remoteConfigUrlLabel != null) {
-            remoteConfigUrlLabel.setVisibility(enabled ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private void setEnabledWithAlpha(android.view.View view, boolean enabled) {
-        if (view == null) {
-            return;
-        }
-
-        view.setEnabled(enabled);
-        view.setAlpha(enabled ? 1f : 0.45f);
-    }
-
-    private int parseInt(String value, int fallback) {
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private int dp(int value) {
-        float density = getResources().getDisplayMetrics().density;
-        return Math.round(value * density);
-    }
+    private EditText addEditText(LinearLayout root, String label, String hint) { addLabel(root, label); EditText e = new EditText(this); e.setSingleLine(true); e.setHint(hint); root.addView(e, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)); return e; }
+    private CheckBox addCheckBox(LinearLayout root, String text) { CheckBox c = new CheckBox(this); c.setText(text); c.setTextColor(Color.WHITE); root.addView(c); return c; }
+    private Button addButton(LinearLayout root, String text) { Button b = new Button(this); b.setAllCaps(false); b.setText(text); root.addView(b, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)); return b; }
+    private void addLabel(LinearLayout root, String text) { TextView l = new TextView(this); l.setText(text); l.setTextSize(13); l.setTextColor(Color.rgb(190,190,190)); l.setPadding(0, dp(8), 0, 0); root.addView(l); if ("Remote config URL".equals(text)) remoteConfigUrlLabel = l; }
+    private void addDivider(LinearLayout root) { View d = new View(this); d.setBackgroundColor(getResources().getColor(R.color.lm_divider)); root.addView(d, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))); }
+    private void updateScheduleFieldsEnabled() { boolean enabled = scheduledCheckBox != null && scheduledCheckBox.isChecked(); setEnabledWithAlpha(scheduleStartInput, enabled); setEnabledWithAlpha(scheduleEndInput, enabled); setEnabledWithAlpha(allowCurrentRecordingCheckBox, enabled); setEnabledWithAlpha(waitForVideoCheckBox, enabled); }
+    private void updateRemoteConfigVisibility() { boolean enabled = remoteConfigCheckBox != null && remoteConfigCheckBox.isChecked(); if (remoteConfigUrlInput != null) { remoteConfigUrlInput.setVisibility(enabled ? View.VISIBLE : View.GONE); remoteConfigUrlInput.setEnabled(enabled); } if (remoteConfigUrlLabel != null) remoteConfigUrlLabel.setVisibility(enabled ? View.VISIBLE : View.GONE); }
+    private void setEnabledWithAlpha(View view, boolean enabled) { if (view != null) { view.setEnabled(enabled); view.setAlpha(enabled ? 1f : 0.45f); } }
+    private int parseInt(String value, int fallback) { try { return Integer.parseInt(value.trim()); } catch (Exception ignored) { return fallback; } }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }
