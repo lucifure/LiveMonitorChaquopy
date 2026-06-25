@@ -307,23 +307,17 @@ public class RecordingFileManager {
     }
 
     public static String buildBaseFileName(ChannelItem channel, String videoId) {
-        String timestamp = new SimpleDateFormat(
-            "yyyyMMdd_HHmmss",
-            Locale.US
-        ).format(new Date());
+        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(new Date());
+        String time = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
 
-        String channelLabel = channel == null
-            ? "channel"
-            : channel.getDisplayTitle();
+        String title = channel == null ? "Live Stream" : channel.getDisplayTitle();
+        String safeTitle = sanitizeFileName(title, 60);
 
-        String safeChannel = sanitizeFileName(channelLabel);
-        String safeVideoId = sanitizeFileName(videoId);
-
-        if (isBlank(safeVideoId)) {
-            safeVideoId = "live";
+        if (isBlank(safeTitle)) {
+            safeTitle = isBlank(videoId) ? "Live_Stream" : sanitizeFileName(videoId, 60);
         }
 
-        return timestamp + "_" + safeChannel + "_" + safeVideoId;
+        return safeTitle + "_" + date + "_" + time;
     }
 
     public static String buildHumanTitle(ChannelItem channel, String videoId) {
@@ -339,6 +333,10 @@ public class RecordingFileManager {
     }
 
     public static String sanitizeFileName(String value) {
+        return sanitizeFileName(value, 80);
+    }
+
+    public static String sanitizeFileName(String value, int maxLength) {
         if (value == null) {
             return "";
         }
@@ -357,8 +355,9 @@ public class RecordingFileManager {
             sanitized = sanitized.substring(0, sanitized.length() - 1);
         }
 
-        if (sanitized.length() > 80) {
-            sanitized = sanitized.substring(0, 80);
+        int safeMaxLength = Math.max(1, maxLength);
+        if (sanitized.length() > safeMaxLength) {
+            sanitized = sanitized.substring(0, safeMaxLength).trim();
         }
 
         return sanitized;

@@ -41,11 +41,13 @@ public class ChannelAdapter extends BaseAdapter {
 
     private final Context context;
     private final List<ChannelItem> channels;
+    private final AppStorage storage;
     private Listener listener;
 
     public ChannelAdapter(Context context) {
         this.context = context;
         this.channels = new ArrayList<>();
+        this.storage = new AppStorage(context);
     }
 
     public void setListener(Listener listener) {
@@ -294,6 +296,13 @@ public class ChannelAdapter extends BaseAdapter {
         if (channel.hasCurrentVideoId()) {
             builder.append(" • videoId=");
             builder.append(channel.getCurrentVideoId());
+        }
+
+        int missedCount = storage.countMissedStreamRecords(channel.getId());
+        if (missedCount > 0) {
+            builder.append("\n⚠ ");
+            builder.append(missedCount);
+            builder.append(missedCount == 1 ? " missed stream during outage" : " missed streams during outage");
         }
 
         if (channel.getLastError() != null && !channel.getLastError().trim().isEmpty()) {

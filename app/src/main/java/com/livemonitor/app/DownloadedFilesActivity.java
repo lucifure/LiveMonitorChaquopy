@@ -139,7 +139,12 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         openFolderButton.setOnClickListener(v -> openSelectedFolder());
         actionRow.addView(refreshButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         actionRow.addView(openFolderButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(actionRow);
+        LinearLayout.LayoutParams actionRowParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        actionRowParams.setMargins(0, 0, 0, dp(12));
+        root.addView(actionRow, actionRowParams);
 
         emptyView = new TextView(this);
         emptyView.setText("No history yet. Completed and stopped recordings will appear here.");
@@ -150,7 +155,9 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         listView = new ListView(this);
         listView.setAdapter(adapter);
         listView.setEmptyView(emptyView);
-        listView.setDividerHeight(dp(12));
+        listView.setDividerHeight(0);
+        listView.setPadding(0, dp(8), 0, dp(16));
+        listView.setClipToPadding(false);
         listView.setDivider(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
         listView.setBackgroundColor(Color.TRANSPARENT);
         listView.setCacheColorHint(Color.TRANSPARENT);

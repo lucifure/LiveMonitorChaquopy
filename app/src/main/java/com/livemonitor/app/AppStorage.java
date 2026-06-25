@@ -36,7 +36,9 @@ public class AppStorage {
     private static final String KEY_LOGS = "logs_json";
     private static final String KEY_LAST_WORKING_PLAYER_CLIENT = "last_working_player_client";
     private static final String KEY_LAST_NETWORK_LOST_AT = "last_network_lost_at";
+    private static final String KEY_LAST_NETWORK_RESTORED_AT = "last_network_restored_at";
     private static final String KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE = "last_missed_stream_checked_outage";
+    private static final String KEY_MISSED_STREAM_RECORDS = "missed_stream_records_json";
 
     private static final int DEFAULT_MAX_LOGS = 2_000;
     private static final int DEFAULT_MAX_RECORDINGS = 500;
@@ -61,6 +63,14 @@ public class AppStorage {
         return preferences.getLong(KEY_LAST_NETWORK_LOST_AT, 0L);
     }
 
+    public synchronized void saveNetworkRestoredAt(long restoredAtMillis) {
+        preferences.edit().putLong(KEY_LAST_NETWORK_RESTORED_AT, Math.max(0L, restoredAtMillis)).apply();
+    }
+
+    public synchronized long loadNetworkRestoredAt() {
+        return preferences.getLong(KEY_LAST_NETWORK_RESTORED_AT, 0L);
+    }
+
     public synchronized void clearNetworkLostAt() {
         preferences.edit().remove(KEY_LAST_NETWORK_LOST_AT).apply();
     }
@@ -73,6 +83,61 @@ public class AppStorage {
         }
         preferences.edit().putString(KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE, outageKey).apply();
         return true;
+    }
+
+    public synchronized void addMissedStreamRecord(String channelId, String title, String details) {
+        if (isBlank(channelId)) {
+            return;
+        }
+        try {
+            JSONObject root = new JSONObject(preferences.getString(KEY_MISSED_STREAM_RECORDS, "{}"));
+            JSONArray records = root.optJSONArray(channelId);
+            if (records == null) {
+                records = new JSONArray();
+            }
+            JSONObject record = new JSONObject();
+            record.put("createdAt", System.currentTimeMillis());
+            record.put("title", isBlank(title) ? "Possible missed stream" : title.trim());
+            record.put("details", details == null ? "" : details);
+            JSONArray updated = new JSONArray();
+            updated.put(record);
+            for (int i = 0; i < records.length() && updated.length() < 10; i++) {
+                JSONObject existing = records.optJSONObject(i);
+                if (existing != null) {
+                    updated.put(existing);
+                }
+            }
+            root.put(channelId, updated);
+            preferences.edit().putString(KEY_MISSED_STREAM_RECORDS, root.toString()).apply();
+        } catch (JSONException ignored) {
+            // Keep monitoring even if the warning badge cannot be persisted.
+        }
+    }
+
+    public synchronized int countMissedStreamRecords(String channelId) {
+        if (isBlank(channelId)) {
+            return 0;
+        }
+        try {
+            JSONObject root = new JSONObject(preferences.getString(KEY_MISSED_STREAM_RECORDS, "{}"));
+            JSONArray records = root.optJSONArray(channelId);
+            return records == null ? 0 : records.length();
+        } catch (JSONException ignored) {
+            return 0;
+        }
+    }
+
+    public synchronized void clearMissedStreamRecords(String channelId) {
+        if (isBlank(channelId)) {
+            return;
+        }
+        try {
+            JSONObject root = new JSONObject(preferences.getString(KEY_MISSED_STREAM_RECORDS, "{}"));
+            root.remove(channelId);
+            preferences.edit().putString(KEY_MISSED_STREAM_RECORDS, root.toString()).apply();
+        } catch (JSONException ignored) {
+            preferences.edit().putString(KEY_MISSED_STREAM_RECORDS, "{}").apply();
+        }
     }
 
     public synchronized List<ChannelItem> loadChannels() {

@@ -134,7 +134,7 @@ public class RecordingAdapter extends BaseAdapter {
 
     private RecordingViewHolder createViewHolder() {
         FrameLayout itemRoot = new FrameLayout(context);
-        itemRoot.setPadding(dp(12), dp(4), dp(12), dp(8));
+        itemRoot.setPadding(dp(12), dp(8), dp(12), dp(8));
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -306,8 +306,9 @@ public class RecordingAdapter extends BaseAdapter {
         holder.details.setText(buildDetails(recording));
         long durSec = recording.getDurationSeconds();
         long bytesRec = recording.getBytesRecorded();
+        long totalMs = recording.getCombinedTotalRecordedDurationMs();
         holder.durationStat.setText(bytesRec > 0
-            ? "⏱ " + RecordingProgressTracker.formatDuration(durSec)
+            ? "⏱ " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
             : "⏱ Waiting...");
         holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
@@ -492,12 +493,13 @@ public class RecordingAdapter extends BaseAdapter {
             : 0L;
         if (RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
             holder.progressBar.setProgressFraction(1f);
-            holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
+            holder.progressLabel.setText("🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getTotalRecordedDurationMs() / 1_000L));
             return;
         }
         if (streamAgeSeconds <= 0L) {
             holder.progressBar.setProgressFraction(recording.getProgressPercent() / 100f);
-            holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded");
+            holder.progressLabel.setText("⏱ Session: " + RecordingProgressTracker.formatDuration(recordedSeconds)
+                + " · 🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getCombinedTotalRecordedDurationMs() / 1_000L));
             return;
         }
         long lagSeconds = Math.max(0L, streamAgeSeconds - recordedSeconds);
@@ -505,7 +507,9 @@ public class RecordingAdapter extends BaseAdapter {
         String lagLabel = lagSeconds < 60L
             ? "~" + lagSeconds + "s behind live (near live)"
             : RecordingProgressTracker.formatDuration(lagSeconds) + " behind live";
-        holder.progressLabel.setText("⏱ " + RecordingProgressTracker.formatDuration(recordedSeconds) + " recorded · " + lagLabel);
+        holder.progressLabel.setText("⏱ Session: " + RecordingProgressTracker.formatDuration(recordedSeconds)
+            + " · 🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getCombinedTotalRecordedDurationMs() / 1_000L)
+            + " · " + lagLabel);
     }
 
     private void styleCardActionButton(Button button) {
@@ -560,7 +564,7 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private static class RecordingViewHolder {
-        LinearLayout root;
+        FrameLayout root;
         TextView title;
         TextView statusBadge;
         TextView subtitle;
