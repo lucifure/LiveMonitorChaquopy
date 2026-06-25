@@ -11,7 +11,10 @@ import android.os.Bundle;
 import android.net.Uri;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
@@ -163,6 +166,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupClickListeners() {
         binding.btnAddChannel.setOnClickListener(v -> addChannelFromInput());
+        binding.btnManualDownload.setOnClickListener(v -> showManualDownloadDialog());
 
         binding.bottomNavigation.setOnItemSelectedListener(item -> {
             int itemId = item.getItemId();
@@ -304,6 +308,57 @@ public class MainActivity extends AppCompatActivity {
         binding.urlInput.setText("");
         refreshAll();
         Toast.makeText(this, "Video download started.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showManualDownloadDialog() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int padding = dp(18);
+        content.setPadding(padding, padding, padding, 0);
+
+        EditText urlInput = new EditText(this);
+        urlInput.setHint("Paste YouTube video URL");
+        urlInput.setSingleLine(true);
+        content.addView(urlInput);
+
+        Spinner qualitySpinner = new Spinner(this);
+        String[] qualities = {
+            AppSettings.QUALITY_360P,
+            AppSettings.QUALITY_480P,
+            AppSettings.QUALITY_720P,
+            AppSettings.QUALITY_1080P
+        };
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, qualities);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        qualitySpinner.setAdapter(adapter);
+        String currentQuality = storage.loadSettings().getDownloadQuality();
+        for (int i = 0; i < qualities.length; i++) {
+            if (qualities[i].equals(currentQuality)) {
+                qualitySpinner.setSelection(i);
+                break;
+            }
+        }
+        content.addView(qualitySpinner);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Download Video")
+            .setView(content)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Download", (dialog, which) -> {
+                String url = cleanUrl(urlInput.getText().toString());
+                if (!url.contains("youtube.com") && !url.contains("youtu.be")) {
+                    Toast.makeText(this, "Paste a valid YouTube URL.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String videoId = YouTubeUrlUtils.extractVideoId(url);
+                if (videoId.isEmpty()) {
+                    Toast.makeText(this, "Could not detect video ID.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "ManualDownload: video download requested."));
+                startDirectVideoDownload(url, videoId);
+            })
+            .show();
     }
 
     private void toggleChannelPaused(ChannelItem channel) {
@@ -799,5 +854,9 @@ public class MainActivity extends AppCompatActivity {
 
     private int getColorCompat(String color) {
         return android.graphics.Color.parseColor(color);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

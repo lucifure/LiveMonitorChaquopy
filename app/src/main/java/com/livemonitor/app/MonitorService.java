@@ -5616,6 +5616,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public void onNetworkAvailable() {
         networkAvailable = true;
         long restoredAtMillis = System.currentTimeMillis();
+        storage.saveNetworkRestoredAt(restoredAtMillis);
         long lostAtMillis = storage.loadNetworkLostAt();
         if (lostAtMillis > 0L) {
             storage.clearNetworkLostAt();
@@ -5686,15 +5687,21 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     continue;
                 }
 
+                String outageDetails = "outageStart=" + lostAtMillis
+                    + ", outageEnd=" + restoredAtMillis
+                    + ", outageMillis=" + outageMillis
+                    + ", action=review recent channel streams for was_live entries in this window";
+                storage.addMissedStreamRecord(
+                    channel.getId(),
+                    "Possible missed live stream during network outage",
+                    outageDetails
+                );
                 log(
-                    LogItem.LEVEL_WARNING,
+                    LogItem.LEVEL_ERROR,
                     LogItem.SOURCE_SERVICE,
                     channel,
-                    "Network outage ended; checking for possible missed live stream.",
-                    "outageStart=" + lostAtMillis
-                        + ", outageEnd=" + restoredAtMillis
-                        + ", outageMillis=" + outageMillis
-                        + ", action=review recent channel streams for was_live entries in this window"
+                    "MISSED STREAM DETECTED during network outage.",
+                    outageDetails
                 );
                 notificationHelper.showChannelMonitoringNotification(channel);
             }

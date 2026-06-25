@@ -59,6 +59,8 @@ public class RecordingItem {
     private static final String JSON_QUALITY = "quality";
     private static final String JSON_BYTES_RECORDED = "bytesRecorded";
     private static final String JSON_DURATION_SECONDS = "durationSeconds";
+    private static final String JSON_TOTAL_RECORDED_DURATION_MS = "totalRecordedDurationMs";
+    private static final String JSON_LAST_ACCUMULATED_DURATION_SECONDS = "lastAccumulatedDurationSeconds";
     private static final String JSON_PROGRESS_PERCENT = "progressPercent";
     private static final String JSON_CREATED_AT = "createdAt";
     private static final String JSON_STARTED_AT = "startedAt";
@@ -85,6 +87,8 @@ public class RecordingItem {
     private String quality;
     private long bytesRecorded;
     private long durationSeconds;
+    private long totalRecordedDurationMs;
+    private long lastAccumulatedDurationSeconds;
     private int progressPercent;
     private long createdAt;
     private long startedAt;
@@ -124,6 +128,8 @@ public class RecordingItem {
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         this.bytesRecorded = 0L;
         this.durationSeconds = 0L;
+        this.totalRecordedDurationMs = 0L;
+        this.lastAccumulatedDurationSeconds = 0L;
         this.progressPercent = 0;
         this.createdAt = now;
         this.startedAt = 0L;
@@ -152,6 +158,8 @@ public class RecordingItem {
         String quality,
         long bytesRecorded,
         long durationSeconds,
+        long totalRecordedDurationMs,
+        long lastAccumulatedDurationSeconds,
         int progressPercent,
         long createdAt,
         long startedAt,
@@ -178,6 +186,8 @@ public class RecordingItem {
         this.quality = isBlank(quality) ? "480p" : quality.trim();
         this.bytesRecorded = Math.max(0L, bytesRecorded);
         this.durationSeconds = Math.max(0L, durationSeconds);
+        this.totalRecordedDurationMs = Math.max(0L, totalRecordedDurationMs);
+        this.lastAccumulatedDurationSeconds = Math.max(0L, lastAccumulatedDurationSeconds);
         this.progressPercent = clampProgress(progressPercent);
         this.createdAt = createdAt <= 0 ? System.currentTimeMillis() : createdAt;
         this.startedAt = Math.max(0L, startedAt);
@@ -211,6 +221,8 @@ public class RecordingItem {
             json.optString(JSON_QUALITY, "480p"),
             json.optLong(JSON_BYTES_RECORDED, 0L),
             json.optLong(JSON_DURATION_SECONDS, 0L),
+            json.optLong(JSON_TOTAL_RECORDED_DURATION_MS, 0L),
+            json.optLong(JSON_LAST_ACCUMULATED_DURATION_SECONDS, 0L),
             json.optInt(JSON_PROGRESS_PERCENT, 0),
             json.optLong(JSON_CREATED_AT, System.currentTimeMillis()),
             json.optLong(JSON_STARTED_AT, 0L),
@@ -246,6 +258,8 @@ public class RecordingItem {
         json.put(JSON_QUALITY, quality);
         json.put(JSON_BYTES_RECORDED, bytesRecorded);
         json.put(JSON_DURATION_SECONDS, durationSeconds);
+        json.put(JSON_TOTAL_RECORDED_DURATION_MS, totalRecordedDurationMs);
+        json.put(JSON_LAST_ACCUMULATED_DURATION_SECONDS, lastAccumulatedDurationSeconds);
         json.put(JSON_PROGRESS_PERCENT, progressPercent);
         json.put(JSON_CREATED_AT, createdAt);
         json.put(JSON_STARTED_AT, startedAt);
@@ -279,18 +293,21 @@ public class RecordingItem {
     }
 
     public void markPausedNetwork(String message) {
+        accumulateCurrentSessionDuration();
         status = STATUS_PAUSED_NETWORK;
         errorMessage = nullToEmpty(message);
         touch();
     }
 
     public void markPausedByUser() {
+        accumulateCurrentSessionDuration();
         status = STATUS_PAUSED_BY_USER;
         errorMessage = "Paused by user.";
         touch();
     }
 
     public void markConverting() {
+        accumulateCurrentSessionDuration();
         status = STATUS_CONVERTING;
         progressPercent = 95;
         errorMessage = "";
@@ -309,6 +326,7 @@ public class RecordingItem {
     }
 
     public void markCompleted(String finalMp4Path) {
+        accumulateCurrentSessionDuration();
         status = STATUS_COMPLETED;
         this.finalMp4Path = nullToEmpty(finalMp4Path);
         progressPercent = 100;
@@ -321,6 +339,7 @@ public class RecordingItem {
     }
 
     public void markFailed(String message) {
+        accumulateCurrentSessionDuration();
         status = STATUS_FAILED;
         errorMessage = nullToEmpty(message);
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
@@ -328,6 +347,7 @@ public class RecordingItem {
     }
 
     public void markStoppedByUser() {
+        accumulateCurrentSessionDuration();
         status = STATUS_STOPPED_BY_USER;
         errorMessage = "Stopped by user request.";
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
@@ -335,6 +355,7 @@ public class RecordingItem {
     }
 
     public void markStoppedBySystem(String reason) {
+        accumulateCurrentSessionDuration();
         status = STATUS_STOPPED_BY_SYSTEM;
         errorMessage = nullToEmpty(reason);
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
@@ -342,6 +363,7 @@ public class RecordingItem {
     }
 
     public void markRecoverable(String message) {
+        accumulateCurrentSessionDuration();
         status = STATUS_RECOVERABLE;
         errorMessage = nullToEmpty(message);
         finishedAt = finishedAt <= 0L ? System.currentTimeMillis() : finishedAt;
@@ -364,6 +386,24 @@ public class RecordingItem {
         }
 
         touch();
+    }
+
+    public void accumulateCurrentSessionDuration() {
+        long currentDurationSeconds = Math.max(0L, durationSeconds);
+        long deltaSeconds = Math.max(0L, currentDurationSeconds - lastAccumulatedDurationSeconds);
+        if (deltaSeconds > 0L) {
+            totalRecordedDurationMs += deltaSeconds * 1_000L;
+            lastAccumulatedDurationSeconds = currentDurationSeconds;
+        }
+    }
+
+    public long getTotalRecordedDurationMs() {
+        return Math.max(totalRecordedDurationMs, Math.max(0L, durationSeconds) * 1_000L);
+    }
+
+    public long getCombinedTotalRecordedDurationMs() {
+        long currentMs = Math.max(0L, durationSeconds - lastAccumulatedDurationSeconds) * 1_000L;
+        return Math.max(0L, totalRecordedDurationMs) + currentMs;
     }
 
     public boolean isActive() {
