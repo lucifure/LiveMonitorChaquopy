@@ -2,6 +2,12 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseKeystoreFile = System.getenv('RELEASE_KEYSTORE_FILE') ?: findProperty('RELEASE_KEYSTORE_FILE')
+def releaseKeystorePassword = System.getenv('KEYSTORE_PASSWORD') ?: findProperty('KEYSTORE_PASSWORD')
+def releaseKeyAlias = System.getenv('KEY_ALIAS') ?: findProperty('KEY_ALIAS')
+def releaseKeyPassword = System.getenv('KEY_PASSWORD') ?: findProperty('KEY_PASSWORD')
+def hasReleaseSigningConfig = releaseKeystoreFile && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     compileSdk 34
     namespace 'com.livemonitor.app'
@@ -18,8 +24,24 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (hasReleaseSigningConfig) {
+                storeFile file(releaseKeystoreFile)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigningConfig) {
+                signingConfig signingConfigs.release
+            }
+        }
         debug   { minifyEnabled false; debuggable true }
     }
 
