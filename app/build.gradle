@@ -6,7 +6,26 @@ def releaseKeystoreFile = System.getenv('RELEASE_KEYSTORE_FILE') ?: findProperty
 def releaseKeystorePassword = System.getenv('KEYSTORE_PASSWORD') ?: findProperty('KEYSTORE_PASSWORD')
 def releaseKeyAlias = System.getenv('KEY_ALIAS') ?: findProperty('KEY_ALIAS')
 def releaseKeyPassword = System.getenv('KEY_PASSWORD') ?: findProperty('KEY_PASSWORD')
-def hasReleaseSigningConfig = releaseKeystoreFile && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword
+def releaseSigningValues = [
+        RELEASE_KEYSTORE_FILE: releaseKeystoreFile,
+        KEYSTORE_PASSWORD    : releaseKeystorePassword,
+        KEY_ALIAS            : releaseKeyAlias,
+        KEY_PASSWORD         : releaseKeyPassword,
+]
+def missingReleaseSigningValues = releaseSigningValues.findAll { !it.value }.keySet()
+def hasReleaseSigningConfig = missingReleaseSigningValues.isEmpty()
+def releaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName == 'assembleRelease' || taskName == ':app:assembleRelease' || taskName.endsWith(':assembleRelease')
+}
+
+if (releaseBuildRequested) {
+    if (!hasReleaseSigningConfig) {
+        throw new GradleException("Release signing is required for assembleRelease. Missing: ${missingReleaseSigningValues.join(', ')}")
+    }
+    if (!rootProject.file(releaseKeystoreFile).isFile()) {
+        throw new GradleException("Release keystore file not found: ${rootProject.file(releaseKeystoreFile)}")
+    }
+}
 
 android {
     compileSdk 34
@@ -27,7 +46,7 @@ android {
     signingConfigs {
         release {
             if (hasReleaseSigningConfig) {
-                storeFile file(releaseKeystoreFile)
+                storeFile rootProject.file(releaseKeystoreFile)
                 storePassword releaseKeystorePassword
                 keyAlias releaseKeyAlias
                 keyPassword releaseKeyPassword
@@ -38,9 +57,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            if (hasReleaseSigningConfig) {
-                signingConfig signingConfigs.release
-            }
+            signingConfig signingConfigs.release
         }
         debug   { minifyEnabled false; debuggable true }
     }
