@@ -82,12 +82,32 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
+      - name: Locate Release APK
+        run: |
+          set -euo pipefail
+          signed_apk=app/build/outputs/apk/release/app-release.apk
+          unsigned_apk=app/build/outputs/apk/release/app-release-unsigned.apk
+
+          if [[ -f "$signed_apk" ]]; then
+            echo "APK_PATH=$signed_apk" >> "$GITHUB_ENV"
+            echo "APK_IS_SIGNED=true" >> "$GITHUB_ENV"
+          elif [[ -f "$unsigned_apk" ]]; then
+            echo "APK_PATH=$unsigned_apk" >> "$GITHUB_ENV"
+            echo "APK_IS_SIGNED=false" >> "$GITHUB_ENV"
+            echo "::warning::Release signing secrets were not available, so Gradle produced an unsigned APK."
+          else
+            echo "Expected release APK was not produced. Files in release output directory:"
+            find app/build/outputs/apk/release -maxdepth 1 -type f -print || true
+            exit 1
+          fi
+
       - name: Verify APK signature
-        run: $ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+        if: env.APK_IS_SIGNED == 'true'
+        run: $ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose "$APK_PATH"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LiveMonitor-APK
-          path: app/build/outputs/apk/release/app-release.apk
+          path: ${{ env.APK_PATH }}
           retention-days: 30
