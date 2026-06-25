@@ -304,12 +304,11 @@ public class RecordingAdapter extends BaseAdapter {
         holder.title.setText(recording.getDisplayTitle());
         holder.subtitle.setText(recording.getDisplaySubtitle());
         holder.details.setText(buildDetails(recording));
-        long durSec = recording.getDurationSeconds();
         long bytesRec = recording.getBytesRecorded();
         long totalMs = recording.getCombinedTotalRecordedDurationMs();
-        holder.durationStat.setText(bytesRec > 0
-            ? "⏱ " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
-            : "⏱ Waiting...");
+        holder.durationStat.setText(totalMs > 0L
+            ? "🎬 " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
+            : "🎬 Waiting...");
         holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
         String savedToDisplay = recording.getSavedToDisplay();
@@ -486,30 +485,32 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private void bindProgress(RecordingViewHolder holder, RecordingItem recording) {
-        long recordedSeconds = Math.max(0L, recording.getDurationSeconds());
-        long streamStartedAt = recording.getStreamStartedAt();
-        long streamAgeSeconds = streamStartedAt > 0L
-            ? Math.max(recordedSeconds, (System.currentTimeMillis() - streamStartedAt) / 1_000L)
-            : 0L;
-        if (RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
+        long now = System.currentTimeMillis();
+        long totalRecordedMs = recording.getCombinedTotalRecordedDurationMs();
+        long totalRecordedSeconds = totalRecordedMs / 1_000L;
+
+        if (!recording.isActive() || RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
             holder.progressBar.setProgressFraction(1f);
-            holder.progressLabel.setText("🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getTotalRecordedDurationMs() / 1_000L));
+            holder.progressLabel.setText("🎬 Recorded: " + RecordingProgressTracker.formatDuration(totalRecordedSeconds));
             return;
         }
-        if (streamAgeSeconds <= 0L) {
+
+        long streamStartedAt = recording.getStreamStartedAt();
+        long streamAgeMs = streamStartedAt > 0L ? Math.max(0L, now - streamStartedAt) : 0L;
+        if (streamAgeMs > 0L) {
+            holder.progressBar.setProgressFraction(Math.min(1f, (float) totalRecordedMs / (float) streamAgeMs));
+        } else {
             holder.progressBar.setProgressFraction(recording.getProgressPercent() / 100f);
-            holder.progressLabel.setText("⏱ Session: " + RecordingProgressTracker.formatDuration(recordedSeconds)
-                + " · 🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getCombinedTotalRecordedDurationMs() / 1_000L));
-            return;
         }
-        long lagSeconds = Math.max(0L, streamAgeSeconds - recordedSeconds);
-        holder.progressBar.setProgressFraction(Math.min(1f, (float) recordedSeconds / (float) streamAgeSeconds));
-        String lagLabel = lagSeconds < 60L
-            ? "~" + lagSeconds + "s behind live (near live)"
-            : RecordingProgressTracker.formatDuration(lagSeconds) + " behind live";
-        holder.progressLabel.setText("⏱ Session: " + RecordingProgressTracker.formatDuration(recordedSeconds)
-            + " · 🎬 Total: " + RecordingProgressTracker.formatDuration(recording.getCombinedTotalRecordedDurationMs() / 1_000L)
-            + " · " + lagLabel);
+
+        long sessionSeconds = recording.getStartedAt() > 0L ? Math.max(0L, (now - recording.getStartedAt()) / 1_000L) : 0L;
+        long behindMs = streamAgeMs > 0L ? Math.max(0L, streamAgeMs - totalRecordedMs) : 0L;
+        String behindLabel = behindMs < 60_000L
+            ? "📡 ~" + Math.max(0L, behindMs / 1_000L) + "s behind (near live)"
+            : "📡 Behind: " + RecordingProgressTracker.formatDuration(behindMs / 1_000L);
+        holder.progressLabel.setText(behindLabel
+            + " · 🎬 Recorded: " + RecordingProgressTracker.formatDuration(totalRecordedSeconds)
+            + " · ⏱ Session: " + RecordingProgressTracker.formatDuration(sessionSeconds));
     }
 
     private void styleCardActionButton(Button button) {

@@ -299,26 +299,6 @@
                 android:textStyle="bold"
                 android:paddingBottom="10dp" />
 
-            <LinearLayout
-                android:id="@+id/downloadSummaryCard"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:background="@drawable/lm_glass_card_background"
-                android:elevation="10dp"
-                android:padding="22dp"
-                android:layout_marginBottom="12dp">
-
-                <TextView
-                    android:id="@+id/downloadSummaryText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="0 active downloads · 0 B/s · storage OK"
-                    android:textColor="@color/text"
-                    android:textSize="14sp" />
-            </LinearLayout>
-
-
             <Button
                 android:id="@+id/btnManualDownload"
                 android:layout_width="match_parent"

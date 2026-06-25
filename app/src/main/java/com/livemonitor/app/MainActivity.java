@@ -8,6 +8,8 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.net.Uri;
 import android.view.View;
 import android.view.ViewGroup;
@@ -45,6 +47,16 @@ public class MainActivity extends AppCompatActivity {
     private ChannelAdapter channelAdapter;
     private RecordingAdapter recordingAdapter;
     private BroadcastReceiver updateReceiver;
+    private final Handler timerHandler = new Handler(Looper.getMainLooper());
+    private final Runnable downloadTimerRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (!showingMonitoring && recordingAdapter != null) {
+                refreshAll();
+            }
+            timerHandler.postDelayed(this, 15_000L);
+        }
+    };
 
     private boolean showingMonitoring = true;
 
@@ -65,6 +77,7 @@ public class MainActivity extends AppCompatActivity {
         fetchRemoteConfigOnStart();
         refreshAll();
         showMonitoringTab();
+        timerHandler.postDelayed(downloadTimerRefresh, 15_000L);
 
         storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Live Monitor opened."));
     }
@@ -78,6 +91,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        timerHandler.removeCallbacks(downloadTimerRefresh);
 
         if (updateReceiver != null) {
             LocalBroadcastManager.getInstance(this).unregisterReceiver(updateReceiver);
@@ -632,7 +647,6 @@ public class MainActivity extends AppCompatActivity {
         List<RecordingItem> recordings = loadVisibleDownloadingItems();
         recordingAdapter.setRecordings(recordings);
         updateStorageHealthCard();
-        updateDownloadSummary(recordings);
 
         int monitoringCount = 0;
 
@@ -756,14 +770,6 @@ public class MainActivity extends AppCompatActivity {
         binding.storageFreeValueText.setText(freeValue);
         binding.storageFreeLabelText.setText(freeUnit + " (" + freePercent + "%)");
         binding.storageHealthText.setText(optimizedLabel);
-    }
-
-    private void updateDownloadSummary(List<RecordingItem> recordings) {
-        int active = recordings == null ? 0 : recordings.size();
-        java.io.File externalDir = getExternalFilesDir(null);
-        java.io.File baseDir = externalDir == null ? getFilesDir() : externalDir;
-        String freeSpace = RecordingProgressTracker.formatBytes(baseDir.getUsableSpace());
-        binding.downloadSummaryText.setText(active + " active downloads · live speed unavailable · " + freeSpace + " free");
     }
 
     private boolean hasPersistedWritePermission(String uriString) {

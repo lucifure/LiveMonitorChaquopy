@@ -9,6 +9,7 @@ import org.json.JSONObject;
  */
 public class AppSettings {
 
+    public static final String QUALITY_144P = "144p";
     public static final String QUALITY_360P = "360p";
     public static final String QUALITY_480P = "480p";
     public static final String QUALITY_720P = "720p";
@@ -454,6 +455,10 @@ public class AppSettings {
     }
 
     public String getQualityHeightOnly() {
+        if (QUALITY_144P.equals(downloadQuality)) {
+            return "144";
+        }
+
         if (QUALITY_360P.equals(downloadQuality)) {
             return "360";
         }
@@ -614,6 +619,10 @@ public class AppSettings {
         }
 
         String quality = value.trim().toLowerCase();
+
+        if (QUALITY_144P.equals(quality)) {
+            return QUALITY_144P;
+        }
 
         if (QUALITY_360P.equals(quality)) {
             return QUALITY_360P;
