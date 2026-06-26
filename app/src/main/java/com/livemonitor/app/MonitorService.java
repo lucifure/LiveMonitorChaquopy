@@ -3247,23 +3247,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             storage.upsertRecording(recording);
             broadcastRecordingUpdated("Starting direct video download.");
 
-            List<String> args = new ArrayList<>();
-            args.add(watchUrl);
-            args.add("--no-playlist");
-            args.add("--no-warnings");
-            args.add("--force-ipv4");
-            args.add("--no-check-certificates");
-            args.add("--no-update");
-            args.add("--socket-timeout");
-            args.add("10");
-            args.add("--no-live-from-start");
-            args.add("-f");
-            args.add("bv*[height<=480]+ba/b");
-            args.add("--merge-output-format");
-            args.add("mp4");
-            args.add("-o");
-            args.add(tempOutputPath);
-
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
@@ -3272,28 +3255,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "videoId=" + videoId + ", input=" + watchUrl + ", output=" + outputPath
             );
 
-            YoutubeDLRequest request = buildYoutubedlAndroidRequest(watchUrl, args);
-            String processId = recording.getId();
-            Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
-                @Override
-                public Unit invoke(Float progress, Long etaSeconds, String line) {
-                    if (!isBlank(line)) {
-                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_RECORDER, null, "yt-dlp direct download output.", shortenForLog(line, 500));
-                    }
+            updateYoutubedlAndroidRuntimeIfNeeded(
+                "before completed-video direct download",
+                "Updating bundled yt-dlp before direct download starts.",
+                null
+            );
 
-                    long bytes = calculateDirectDownloadTempBytes(tempOutputPath);
-                    recording.updateProgress(bytes, recording.getDurationSeconds());
-                    storage.upsertRecording(recording);
-                    return Unit.INSTANCE;
-                }
-            };
-
-            activeYoutubedlAndroidRecordings.add(processId);
-            try {
-                executeYoutubedlAndroidRequest(request, processId, callback);
-            } finally {
-                activeYoutubedlAndroidRecordings.remove(processId);
-            }
+            executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath, true);
 
             File outputFile = finalizeDirectDownloadTempFile(tempOutputPath, outputPath);
             if (!outputFile.exists() || outputFile.length() <= 0L) {
@@ -3319,6 +3287,77 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             discardDirectDownloadPartialIds.remove(recording.getId());
             broadcastRecordingUpdated("Direct download updated.");
         }
+    }
+
+    private void executeDirectVideoDownloadAttempt(
+        RecordingItem recording,
+        String watchUrl,
+        String tempOutputPath,
+        boolean useTvEmbeddedClient
+    ) throws Exception {
+        List<String> args = buildDirectVideoDownloadArgs(watchUrl, tempOutputPath, useTvEmbeddedClient);
+        YoutubeDLRequest request = buildYoutubedlAndroidRequest(watchUrl, args);
+        String processId = recording.getId() + (useTvEmbeddedClient ? "-direct-tv" : "-direct-default");
+        Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
+            @Override
+            public Unit invoke(Float progress, Long etaSeconds, String line) {
+                if (!isBlank(line)) {
+                    log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_RECORDER, null, "yt-dlp direct download output.", shortenForLog(line, 500));
+                }
+
+                long bytes = calculateDirectDownloadTempBytes(tempOutputPath);
+                recording.updateProgress(bytes, recording.getDurationSeconds());
+                storage.upsertRecording(recording);
+                return Unit.INSTANCE;
+            }
+        };
+
+        activeYoutubedlAndroidRecordings.add(processId);
+        try {
+            executeYoutubedlAndroidRequest(request, processId, callback);
+        } catch (Exception e) {
+            if (!useTvEmbeddedClient) {
+                throw e;
+            }
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "yt-dlp direct download retrying with default YouTube client.",
+                normalizeErrorMessage(e)
+            );
+            executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath, false);
+        } finally {
+            activeYoutubedlAndroidRecordings.remove(processId);
+        }
+    }
+
+    private List<String> buildDirectVideoDownloadArgs(String watchUrl, String outputPath, boolean useTvEmbeddedClient) {
+        List<String> args = new ArrayList<>();
+        args.add(watchUrl);
+        args.add("--js-runtime");
+        args.add("quickjs");
+        args.add("--no-part");
+        args.add("--retries");
+        args.add("10");
+        args.add("--fragment-retries");
+        args.add("10");
+        args.add("--socket-timeout");
+        args.add("10");
+        args.add("--force-ipv4");
+        args.add("--no-check-certificates");
+        args.add("--no-update");
+        args.add("-f");
+        args.add("best[height<=480][protocol^=m3u8]/best[protocol^=m3u8]/best[height<=480]/best");
+        if (useTvEmbeddedClient) {
+            args.add("--extractor-args");
+            args.add("youtube:player_client=tv_embedded;skip=dash");
+        }
+        args.add("--merge-output-format");
+        args.add("mp4");
+        args.add("-o");
+        args.add(outputPath);
+        return args;
     }
 
     private long calculateDirectDownloadTempBytes(String tempOutputPath) {
