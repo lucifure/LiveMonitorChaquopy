@@ -147,8 +147,7 @@ public class ChannelLogActivity extends AppCompatActivity {
             emptyView,
             new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
         );
 

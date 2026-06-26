@@ -154,13 +154,7 @@ public class SettingsActivity extends AppCompatActivity {
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setBackgroundColor(Color.rgb(5, 36, 40));
         toolbar.setNavigationIcon(R.drawable.ic_arrow_back_24);
-        toolbar.setNavigationOnClickListener(v -> {
-            if (currentSection == null || currentSection.isEmpty()) {
-                finish();
-            } else {
-                showMainSettings();
-            }
-        });
+        toolbar.setNavigationOnClickListener(v -> onBackPressed());
         root.addView(toolbar, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(64)

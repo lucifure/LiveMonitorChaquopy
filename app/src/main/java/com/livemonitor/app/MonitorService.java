@@ -56,6 +56,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
     private static final long MISSED_STREAM_OUTAGE_MIN_MILLIS = 2L * 60L * 1_000L;
+    private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
     private AppStorage storage;
     private AppSettings settings;
@@ -77,6 +78,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
     private final Set<String> stoppingRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> directDownloadVideoIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> discardDirectDownloadPartialIds = ConcurrentHashMap.newKeySet();
     private final Set<String> finalizedRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> selectedFolderCopyIds = ConcurrentHashMap.newKeySet();
 
@@ -100,6 +102,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         fileManager = new RecordingFileManager(this);
         networkMonitor = new NetworkMonitor(this);
         progressTracker = new RecordingProgressTracker(storage);
+        progressTracker.setUpdateIntervalMs(DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS);
         executor = Executors.newCachedThreadPool();
         progressTracker.setListener(new RecordingProgressTracker.Listener() {
             @Override
@@ -553,6 +556,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             RecordingItem recording = storage.findRecordingById(recordingId);
+            boolean savePartial = intent.getBooleanExtra(LiveMonitorActions.EXTRA_SAVE_PARTIAL, true);
+            if (recording != null && !savePartial) {
+                discardDirectDownloadPartialIds.add(recording.getId());
+            }
 
             if (recording != null) {
                 activeRecordings.remove(recording.getId());
@@ -588,8 +595,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (recording != null) {
                 waitForRecordingFileAfterCancellation(recording);
                 RecordingItem latest = storage.findRecordingById(recording.getId());
-                ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
-                savedPlayableFile = saveStoppedRecordingForDownloads(latest == null ? recording : latest, channel);
+                RecordingItem toFinalize = latest == null ? recording : latest;
+                if (!savePartial && isBlank(toFinalize.getChannelId())) {
+                    deleteDirectDownloadTempFiles(toFinalize.getTempTsPath());
+                    toFinalize.markStoppedByUser();
+                    toFinalize.hideFromDownloading();
+                    storage.upsertRecording(toFinalize);
+                } else {
+                    ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+                    savedPlayableFile = saveStoppedRecordingForDownloads(toFinalize, channel);
+                }
             }
 
             if (!savedPlayableFile) {
@@ -3225,6 +3240,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             String videoId = recording.getVideoId();
             String watchUrl = YouTubeUrlUtils.buildWatchUrl(videoId);
             String outputPath = recording.getFinalMp4Path();
+            String tempOutputPath = outputPath + ".download";
+            recording.setTempTsPath(tempOutputPath);
 
             recording.setDiagnosticMessage("Starting yt-dlp completed-video download.");
             storage.upsertRecording(recording);
@@ -3245,7 +3262,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             args.add("--merge-output-format");
             args.add("mp4");
             args.add("-o");
-            args.add(outputPath);
+            args.add(tempOutputPath);
 
             log(
                 LogItem.LEVEL_INFO,
@@ -3264,8 +3281,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_RECORDER, null, "yt-dlp direct download output.", shortenForLog(line, 500));
                     }
 
-                    File outputFile = new File(outputPath);
-                    long bytes = outputFile.exists() ? Math.max(0L, outputFile.length()) : 0L;
+                    long bytes = calculateDirectDownloadTempBytes(tempOutputPath);
                     recording.updateProgress(bytes, recording.getDurationSeconds());
                     storage.upsertRecording(recording);
                     return Unit.INSTANCE;
@@ -3279,7 +3295,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 activeYoutubedlAndroidRecordings.remove(processId);
             }
 
-            File outputFile = new File(outputPath);
+            File outputFile = finalizeDirectDownloadTempFile(tempOutputPath, outputPath);
             if (!outputFile.exists() || outputFile.length() <= 0L) {
                 throw new IllegalStateException("yt-dlp finished without creating an output file.");
             }
@@ -3290,6 +3306,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             copyCompletedRecordingToSelectedFolder(recording, null);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
         } catch (Exception e) {
+            if (isCancellationException(e) && savePartialDirectDownload(recording)) {
+                return;
+            }
             recording.markFailed(normalizeErrorMessage(e));
             storage.upsertRecording(recording);
             log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, null, "Direct download failed.", normalizeErrorMessage(e));
@@ -3297,8 +3316,94 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             activeRecordings.remove(recording.getId());
             progressTracker.untrack(recording);
             directDownloadVideoIds.remove(recording.getVideoId());
+            discardDirectDownloadPartialIds.remove(recording.getId());
             broadcastRecordingUpdated("Direct download updated.");
         }
+    }
+
+    private long calculateDirectDownloadTempBytes(String tempOutputPath) {
+        if (isBlank(tempOutputPath)) {
+            return 0L;
+        }
+        long total = 0L;
+        for (File file : findDirectDownloadTempFiles(tempOutputPath)) {
+            total += file.exists() ? Math.max(0L, file.length()) : 0L;
+        }
+        return Math.max(0L, total);
+    }
+
+    private File finalizeDirectDownloadTempFile(String tempOutputPath, String outputPath) {
+        File outputFile = new File(outputPath);
+        File source = null;
+        for (File candidate : findDirectDownloadTempFiles(tempOutputPath)) {
+            if (candidate.exists() && candidate.length() > 0L && (source == null || candidate.length() > source.length())) {
+                source = candidate;
+            }
+        }
+        if (source == null) {
+            return outputFile;
+        }
+        if (!source.equals(outputFile) && source.exists() && source.length() > 0L) {
+            File parent = outputFile.getParentFile();
+            if (parent != null) parent.mkdirs();
+            if (!source.renameTo(outputFile)) {
+                copyFile(source, outputFile);
+                source.delete();
+            }
+        }
+        return outputFile;
+    }
+
+    private List<File> findDirectDownloadTempFiles(String tempOutputPath) {
+        List<File> files = new ArrayList<>();
+        if (isBlank(tempOutputPath)) {
+            return files;
+        }
+        File tempFile = new File(tempOutputPath);
+        files.add(tempFile);
+        files.add(new File(tempOutputPath + ".part"));
+        File parent = tempFile.getParentFile();
+        String prefix = tempFile.getName();
+        File[] siblings = parent == null ? null : parent.listFiles();
+        if (siblings != null) {
+            for (File sibling : siblings) {
+                if (sibling != null && sibling.isFile() && sibling.getName().startsWith(prefix) && !files.contains(sibling)) {
+                    files.add(sibling);
+                }
+            }
+        }
+        return files;
+    }
+
+    private void deleteDirectDownloadTempFiles(String tempOutputPath) {
+        for (File file : findDirectDownloadTempFiles(tempOutputPath)) {
+            safeDelete(file.getAbsolutePath());
+        }
+    }
+
+    private boolean isCancellationException(Exception e) {
+        String message = normalizeErrorMessage(e);
+        return message != null && message.toLowerCase(java.util.Locale.US).contains("canceled");
+    }
+
+    private boolean savePartialDirectDownload(RecordingItem recording) {
+        if (recording == null || discardDirectDownloadPartialIds.contains(recording.getId())) return false;
+        String tempPath = recording.getTempTsPath();
+        String finalPath = recording.getFinalMp4Path();
+        if (isBlank(tempPath) || isBlank(finalPath)) return false;
+        long bytes = calculateDirectDownloadTempBytes(tempPath);
+        if (bytes <= 0L) return false;
+        int dot = finalPath.lastIndexOf('.');
+        String partialPath = dot > 0 ? finalPath.substring(0, dot) + "_partial" + finalPath.substring(dot) : finalPath + "_partial";
+        File partialFile = finalizeDirectDownloadTempFile(tempPath, partialPath);
+        if (!partialFile.exists() || partialFile.length() <= 0L) return false;
+        recording.updateProgress(partialFile.length(), recording.getDurationSeconds());
+        recording.markCompleted(partialPath);
+        recording.setErrorMessage("Saved partial download.");
+        storage.upsertRecording(recording);
+        copyCompletedRecordingToSelectedFolder(recording, null);
+        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Partial direct download saved.", "videoId=" + recording.getVideoId() + ", bytes=" + partialFile.length());
+        return true;
     }
 
     private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
@@ -5860,6 +5965,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             Thread.sleep(Math.max(500L, millis));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void copyFile(File source, File destination) {
+        try (InputStream in = new FileInputStream(source); OutputStream out = new java.io.FileOutputStream(destination)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

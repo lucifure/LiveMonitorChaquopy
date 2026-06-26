@@ -500,11 +500,23 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        boolean directDownload = recording.getChannelId().trim().isEmpty();
+        if (directDownload) {
+            String downloaded = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
+            new AlertDialog.Builder(this)
+                .setTitle("Save partial download?")
+                .setMessage("You have downloaded " + downloaded + " so far.")
+                .setNegativeButton("Discard", (dialog, which) -> stopDownload(recording, false))
+                .setPositiveButton("Save Partial", (dialog, which) -> stopDownload(recording, true))
+                .show();
+            return;
+        }
+
         new AlertDialog.Builder(this)
             .setTitle("Stop and save recording?")
             .setMessage("Stop and save this recording? Monitoring for this channel will also be paused.")
             .setNegativeButton("Keep Recording", null)
-            .setPositiveButton("Stop & Save", (dialog, which) -> stopDownload(recording))
+            .setPositiveButton("Stop & Save", (dialog, which) -> stopDownload(recording, true))
             .show();
     }
 
@@ -536,6 +548,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopDownload(RecordingItem recording) {
+        stopDownload(recording, true);
+    }
+
+    private void stopDownload(RecordingItem recording, boolean savePartial) {
         if (recording == null) {
             return;
         }
@@ -554,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
         intent.setAction(LiveMonitorActions.ACTION_STOP_RECORDING);
         intent.putExtra(LiveMonitorActions.EXTRA_RECORDING_ID, recording.getId());
         intent.putExtra(LiveMonitorActions.EXTRA_CHANNEL_ID, recording.getChannelId());
+        intent.putExtra(LiveMonitorActions.EXTRA_SAVE_PARTIAL, savePartial);
         startServiceCompat(intent);
 
         refreshAll();
