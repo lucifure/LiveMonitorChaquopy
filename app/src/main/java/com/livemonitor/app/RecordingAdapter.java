@@ -309,7 +309,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.durationStat.setText(totalMs > 0L
             ? "🎬 " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
             : "🎬 Waiting...");
-        holder.sizeStat.setText("💾 " + RecordingProgressTracker.formatBytes(bytesRec));
+        holder.sizeStat.setText(bytesRec <= 0L && recording.isActive() ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
         String savedToDisplay = recording.getSavedToDisplay();
         holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);

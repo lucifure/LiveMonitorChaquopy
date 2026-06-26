@@ -133,11 +133,10 @@
                 android:id="@+id/monitoringHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="ACTIVE RECORDINGS  ─────────────────"
-                android:textColor="#B9C2CA"
-                android:textSize="14sp"
+                android:text="Monitoring"
+                android:textColor="@android:color/white"
+                android:textSize="28sp"
                 android:textStyle="bold"
-                android:letterSpacing="0.08"
                 android:paddingBottom="8dp" />
 
             <LinearLayout

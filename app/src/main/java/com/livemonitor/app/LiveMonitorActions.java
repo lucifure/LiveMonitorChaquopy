@@ -78,6 +78,7 @@ public final class LiveMonitorActions {
     public static final String EXTRA_FROM_BOOT = "fromBoot";
     public static final String EXTRA_LOG_LEVEL = "logLevel";
     public static final String EXTRA_LOG_DETAILS = "logDetails";
+    public static final String EXTRA_SAVE_PARTIAL = "savePartial";
 
     /*
      * Legacy actions used by the current simple MonitorService.
