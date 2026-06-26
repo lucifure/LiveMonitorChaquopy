@@ -8,6 +8,7 @@ import android.graphics.Color;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
@@ -140,22 +141,30 @@ public class LogActivity extends AppCompatActivity {
         listView.setEmptyView(emptyView);
         listView.setBackgroundColor(Color.rgb(15, 15, 15));
 
-        root.addView(
-            emptyView,
-            new LinearLayout.LayoutParams(
+        FrameLayout logContainer = new FrameLayout(this);
+        logContainer.setBackgroundColor(Color.rgb(15, 15, 15));
+        logContainer.addView(
+            listView,
+            new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
+        logContainer.addView(
+            emptyView,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
             )
         );
 
-        root.addView(
-            listView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+        LinearLayout.LayoutParams logContainerParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
         );
+        logContainerParams.topMargin = dp(8);
+        root.addView(logContainer, logContainerParams);
 
         return root;
     }
