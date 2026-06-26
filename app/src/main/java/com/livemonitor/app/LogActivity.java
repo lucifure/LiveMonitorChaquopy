@@ -6,6 +6,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -55,6 +56,7 @@ public class LogActivity extends AppCompatActivity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(12), dp(12), dp(12));
         root.setBackgroundColor(Color.rgb(15, 15, 15));
+        root.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(this);
         title.setText("Global Log");
@@ -129,39 +131,41 @@ public class LogActivity extends AppCompatActivity {
             )
         );
 
+        listView = new ListView(this);
+        listView.setAdapter(adapter);
+        listView.setBackgroundColor(Color.rgb(15, 15, 15));
+
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
+
         emptyView = new TextView(this);
         emptyView.setText("No log entries yet.");
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
         emptyView.setTextColor(Color.rgb(102, 102, 102));
+        emptyView.setVisibility(View.GONE);
 
-        listView = new ListView(this);
-        listView.setAdapter(adapter);
-        listView.setEmptyView(emptyView);
-        listView.setBackgroundColor(Color.rgb(15, 15, 15));
-
-        root.addView(
-            emptyView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+        LinearLayout.LayoutParams emptyParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
         );
-
-        root.addView(
-            listView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        );
+        emptyParams.topMargin = dp(8);
+        root.addView(emptyView, emptyParams);
 
         return root;
     }
 
     private void refreshLogs() {
-        adapter.setLogs(storage.loadLogs());
+        List<LogItem> logs = storage.loadLogs();
+        adapter.setLogs(logs);
+        boolean isEmpty = logs == null || logs.isEmpty();
+        emptyView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
+        listView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
     }
 
     private void copyLog() {
