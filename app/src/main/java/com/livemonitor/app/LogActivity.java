@@ -131,43 +131,31 @@ public class LogActivity extends AppCompatActivity {
             )
         );
 
+        listView = new ListView(this);
+        listView.setAdapter(adapter);
+        listView.setBackgroundColor(Color.rgb(15, 15, 15));
+
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
+
         emptyView = new TextView(this);
         emptyView.setText("No log entries yet.");
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
         emptyView.setTextColor(Color.rgb(102, 102, 102));
+        emptyView.setVisibility(View.GONE);
 
-        listView = new ListView(this);
-        listView.setAdapter(adapter);
-        listView.setEmptyView(emptyView);
-        listView.setBackgroundColor(Color.rgb(15, 15, 15));
-
-        FrameLayout logContainer = new FrameLayout(this);
-        logContainer.setBackgroundColor(Color.rgb(15, 15, 15));
-        logContainer.addView(
-            listView,
-            new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        );
-        logContainer.addView(
-            emptyView,
-            new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        );
-        listParams.topMargin = dp(8);
-        root.addView(listView, listParams);
-
-        LinearLayout.LayoutParams logContainerParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams emptyParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            0,
-            1f
+            ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        logContainerParams.topMargin = dp(8);
-        root.addView(logContainer, logContainerParams);
+        emptyParams.topMargin = dp(8);
+        root.addView(emptyView, emptyParams);
 
         return root;
     }
