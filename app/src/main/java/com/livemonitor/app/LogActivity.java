@@ -133,6 +133,8 @@ public class LogActivity extends AppCompatActivity {
         );
 
         listView = new ListView(this);
+        listView.setTranscriptMode(ListView.TRANSCRIPT_MODE_NORMAL);
+        listView.setStackFromBottom(false);
         listView.setAdapter(adapter);
         listView.setBackgroundColor(Color.rgb(15, 15, 15));
 

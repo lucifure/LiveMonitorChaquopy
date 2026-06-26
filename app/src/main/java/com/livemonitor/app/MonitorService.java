@@ -77,6 +77,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
     private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
     private final Set<String> stoppingRecordingIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> finalizingRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> directDownloadVideoIds = ConcurrentHashMap.newKeySet();
     private final Set<String> discardDirectDownloadPartialIds = ConcurrentHashMap.newKeySet();
     private final Set<String> finalizedRecordingIds = ConcurrentHashMap.newKeySet();
@@ -399,11 +400,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         broadcastRecordingUpdated("Direct download started.");
     }
 
+    private boolean skipDuplicateFinalizationRequest(String recordingId, ChannelItem channel) {
+        if (isBlank(recordingId)) {
+            return false;
+        }
+        if (finalizingRecordingIds.add(recordingId)) {
+            return false;
+        }
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Skipping duplicate finalization",
+            "recordingId=" + recordingId
+        );
+        return true;
+    }
+
     private void handlePauseRecording(Intent intent) {
         if (intent == null) return;
 
         String recordingId = intent.getStringExtra(LiveMonitorActions.EXTRA_RECORDING_ID);
         String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
+        if (skipDuplicateFinalizationRequest(recordingId, null)) {
+            return;
+        }
         RecordingItem recording = storage.findRecordingById(recordingId);
 
         if (recording == null) {
@@ -548,6 +569,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         String recordingId = intent.getStringExtra(LiveMonitorActions.EXTRA_RECORDING_ID);
         String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
+
+        if (skipDuplicateFinalizationRequest(recordingId, null)) {
+            broadcastRecordingUpdated("Recording finalization is already in progress.");
+            return;
+        }
 
         if (!isBlank(recordingId) && !stoppingRecordingIds.add(recordingId)) {
             broadcastRecordingUpdated("Recording stop is already in progress.");
@@ -3164,9 +3190,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return false;
         }
 
+        boolean cancelled = destroyYoutubedlAndroidProcess(recordingId);
+        for (String activeProcessId : new ArrayList<>(activeYoutubedlAndroidRecordings)) {
+            if (!isBlank(activeProcessId)
+                && (activeProcessId.equals(recordingId) || activeProcessId.startsWith(recordingId + "-"))) {
+                cancelled = destroyYoutubedlAndroidProcess(activeProcessId) || cancelled;
+            }
+        }
+        return cancelled;
+    }
+
+    private boolean destroyYoutubedlAndroidProcess(String processId) {
         try {
-            YoutubeDL.getInstance().destroyProcessById(recordingId);
-            activeYoutubedlAndroidRecordings.remove(recordingId);
+            YoutubeDL.getInstance().destroyProcessById(processId);
+            activeYoutubedlAndroidRecordings.remove(processId);
             return true;
         } catch (RuntimeException ignored) {
             return false;
@@ -3270,8 +3307,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             recording.updateProgress(outputFile.length(), recording.getDurationSeconds());
             recording.markCompleted(outputPath);
+            recording.hideFromDownloading();
             storage.upsertRecording(recording);
             copyCompletedRecordingToSelectedFolder(recording, null);
+            storage.upsertRecording(recording);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
         } catch (Exception e) {
             if (isCancellationException(e) && savePartialDirectDownload(recording)) {
