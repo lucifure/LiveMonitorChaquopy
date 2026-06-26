@@ -82,7 +82,8 @@ public class SettingsActivity extends AppCompatActivity {
 
     private View buildMainSettingsView() {
         LinearLayout root = baseRoot();
-        root.setPadding(0, dp(12), 0, dp(12));
+        root.setPadding(dp(14), dp(10), dp(14), dp(12));
+        addToolbar(root, "Settings");
         addSectionRow(root, SECTION_RECORDING, "Quality, save location, recording options", R.drawable.ic_videocam_24);
         addDivider(root);
         addSectionRow(root, SECTION_SCHEDULE, "Monitoring schedule and timing", R.drawable.ic_schedule_24);
@@ -140,7 +141,13 @@ public class SettingsActivity extends AppCompatActivity {
         back.setTextSize(28);
         back.setTextColor(Color.WHITE);
         back.setGravity(Gravity.CENTER);
-        back.setOnClickListener(v -> showMainSettings());
+        back.setOnClickListener(v -> {
+            if (currentSection == null || currentSection.isEmpty()) {
+                finish();
+            } else {
+                showMainSettings();
+            }
+        });
         toolbar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
         TextView title = new TextView(this);
         title.setText(titleText);

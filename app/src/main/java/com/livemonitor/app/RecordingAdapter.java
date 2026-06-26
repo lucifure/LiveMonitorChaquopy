@@ -305,7 +305,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.subtitle.setText(recording.getDisplaySubtitle());
         holder.details.setText(buildDetails(recording));
         long bytesRec = recording.getBytesRecorded();
-        long totalMs = recording.getCombinedTotalRecordedDurationMs();
+        long totalMs = estimateDisplayedRecordedMs(recording, System.currentTimeMillis());
         holder.durationStat.setText(totalMs > 0L
             ? "🎬 " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
             : "🎬 Waiting...");
@@ -360,10 +360,9 @@ public class RecordingAdapter extends BaseAdapter {
         holder.deleteButton.setOnClickListener(v -> {
             holder.deleteButton.setEnabled(false);
             holder.deleteButton.setAlpha(0.65f);
-            holder.deleteButton.postDelayed(() -> {
-                holder.deleteButton.setEnabled(true);
-                holder.deleteButton.setAlpha(1f);
-            }, 800L);
+            if (activeDownload) {
+                holder.deleteButton.setText("Stopping…");
+            }
             if (listener != null) {
                 listener.onDeleteClicked(recording);
             }
@@ -486,7 +485,7 @@ public class RecordingAdapter extends BaseAdapter {
 
     private void bindProgress(RecordingViewHolder holder, RecordingItem recording) {
         long now = System.currentTimeMillis();
-        long totalRecordedMs = recording.getCombinedTotalRecordedDurationMs();
+        long totalRecordedMs = estimateDisplayedRecordedMs(recording, now);
         long totalRecordedSeconds = totalRecordedMs / 1_000L;
 
         if (!recording.isActive() || RecordingItem.STATUS_COMPLETED.equals(recording.getStatus()) || recording.isFinished()) {
@@ -511,6 +510,21 @@ public class RecordingAdapter extends BaseAdapter {
         holder.progressLabel.setText(behindLabel
             + " · 🎬 Recorded: " + RecordingProgressTracker.formatDuration(totalRecordedSeconds)
             + " · ⏱ Session: " + RecordingProgressTracker.formatDuration(sessionSeconds));
+    }
+
+
+    private long estimateDisplayedRecordedMs(RecordingItem recording, long now) {
+        if (recording == null) {
+            return 0L;
+        }
+
+        long recordedMs = recording.getCombinedTotalRecordedDurationMs();
+        long streamStartedAt = recording.getStreamStartedAt();
+        if (recording.isActive() && streamStartedAt > 0L) {
+            recordedMs = Math.max(recordedMs, Math.max(0L, now - streamStartedAt));
+        }
+
+        return Math.max(0L, recordedMs);
     }
 
     private void styleCardActionButton(Button button) {

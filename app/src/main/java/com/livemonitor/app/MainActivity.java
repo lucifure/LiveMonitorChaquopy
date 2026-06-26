@@ -180,8 +180,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupClickListeners() {
-        binding.btnAddChannel.setOnClickListener(v -> addChannelFromInput());
-        binding.btnManualDownload.setOnClickListener(v -> showManualDownloadDialog());
+        binding.btnAddChannel.setOnClickListener(v -> handleUrlSubmit());
 
         binding.bottomNavigation.setOnItemSelectedListener(item -> {
             int itemId = item.getItemId();
@@ -247,6 +246,14 @@ public class MainActivity extends AppCompatActivity {
         LocalBroadcastManager.getInstance(this).registerReceiver(updateReceiver, filter);
     }
 
+    private void handleUrlSubmit() {
+        if (showingMonitoring) {
+            addChannelFromInput();
+        } else {
+            downloadVideoFromInput();
+        }
+    }
+
     private void addChannelFromInput() {
         String url = cleanUrl(binding.urlInput.getText().toString());
 
@@ -256,7 +263,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (YouTubeUrlUtils.isDirectVideoUrl(url)) {
-            confirmDownloadVideoUrl(url);
+            Toast.makeText(this, "To download a completed livestream, go to the Downloads tab.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -296,6 +303,35 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show();
     }
 
+
+
+    private void downloadVideoFromInput() {
+        String url = cleanUrl(binding.urlInput.getText().toString());
+
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Please paste a YouTube video URL.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (!url.contains("youtube.com") && !url.contains("youtu.be")) {
+            Toast.makeText(this, "Paste a valid YouTube URL.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (!YouTubeUrlUtils.isDirectVideoUrl(url)) {
+            Toast.makeText(this, "To monitor a channel, go to the Home tab.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String videoId = YouTubeUrlUtils.extractVideoId(url);
+        if (videoId.isEmpty()) {
+            Toast.makeText(this, "Could not detect video ID.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "ManualDownload: video download requested."));
+        startDirectVideoDownload(url, videoId);
+    }
 
     private void confirmDownloadVideoUrl(String url) {
         String videoId = YouTubeUrlUtils.extractVideoId(url);
@@ -623,7 +659,8 @@ public class MainActivity extends AppCompatActivity {
 
         binding.monitoringPanel.setVisibility(View.VISIBLE);
         binding.downloadsPanel.setVisibility(View.GONE);
-
+        binding.urlInput.setHint("Paste YouTube channel URL...");
+        binding.btnAddChannel.setText("＋  ADD");
 
         refreshAll();
     }
@@ -633,7 +670,8 @@ public class MainActivity extends AppCompatActivity {
 
         binding.monitoringPanel.setVisibility(View.GONE);
         binding.downloadsPanel.setVisibility(View.VISIBLE);
-
+        binding.urlInput.setHint("Paste completed livestream video URL...");
+        binding.btnAddChannel.setText("⇩  GET");
 
         refreshAll();
     }

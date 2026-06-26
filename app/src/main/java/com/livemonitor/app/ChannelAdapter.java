@@ -8,6 +8,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -134,11 +135,15 @@ public class ChannelAdapter extends BaseAdapter {
     }
 
     private ChannelViewHolder createViewHolder() {
+        FrameLayout itemRoot = new FrameLayout(context);
+        itemRoot.setPadding(0, dp(4), 0, dp(4));
+
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(12), dp(16), dp(12));
         root.setBackgroundResource(R.drawable.lm_card_background);
         root.setElevation(dp(8));
+        itemRoot.addView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout topRow = new LinearLayout(context);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -228,7 +233,7 @@ public class ChannelAdapter extends BaseAdapter {
         root.addView(buttonRow);
 
         ChannelViewHolder holder = new ChannelViewHolder();
-        holder.root = root;
+        holder.root = itemRoot;
         holder.title = title;
         holder.url = url;
         holder.statusBadge = statusBadge;
@@ -255,6 +260,9 @@ public class ChannelAdapter extends BaseAdapter {
         applyStatusBadge(holder.statusBadge, channel.getStatus());
         holder.details.setText(buildDetails(channel));
         holder.pauseResume.setText(channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume");
+        holder.stop.setText("■  Stop");
+        holder.stop.setEnabled(true);
+        holder.stop.setAlpha(1f);
 
         holder.root.setOnClickListener(v -> {
             if (listener != null) {
@@ -269,6 +277,9 @@ public class ChannelAdapter extends BaseAdapter {
         });
 
         holder.stop.setOnClickListener(v -> {
+            holder.stop.setEnabled(false);
+            holder.stop.setAlpha(0.65f);
+            holder.stop.setText("Stopping…");
             if (listener != null) {
                 listener.onStopClicked(channel);
             }
@@ -342,7 +353,7 @@ public class ChannelAdapter extends BaseAdapter {
 
     private String formatStatus(String status) {
         if (ChannelItem.STATUS_WAITING_FOR_LIVE.equals(status)) {
-            return "Waiting";
+            return "Monitoring";
         }
 
         if (ChannelItem.STATUS_LIVE_DETECTED.equals(status)) {
@@ -408,7 +419,7 @@ public class ChannelAdapter extends BaseAdapter {
     }
 
     private static class ChannelViewHolder {
-        LinearLayout root;
+        FrameLayout root;
         TextView title;
         TextView url;
         TextView statusBadge;
