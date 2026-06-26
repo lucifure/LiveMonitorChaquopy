@@ -28,6 +28,8 @@ import androidx.appcompat.app.AppCompatActivity;
  */
 public class LogActivity extends AppCompatActivity {
 
+    public static final String EXTRA_VIEW_SELECT_ON_OPEN = "com.livemonitor.app.extra.VIEW_SELECT_ON_OPEN";
+
     private AppStorage storage;
     private LogAdapter adapter;
     private ListView listView;
@@ -44,6 +46,9 @@ public class LogActivity extends AppCompatActivity {
         setContentView(buildContentView());
 
         refreshLogs();
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_VIEW_SELECT_ON_OPEN, false)) {
+            listView.post(this::viewSelectFullLog);
+        }
     }
 
     @Override
@@ -95,6 +100,13 @@ public class LogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        clearParams.leftMargin = dp(8);
+        buttonRow.addView(clearButton, clearParams);
+
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
         saveButton.setText("Save Log");
@@ -105,24 +117,6 @@ public class LogActivity extends AppCompatActivity {
         );
         saveParams.leftMargin = dp(8);
         buttonRow.addView(saveButton, saveParams);
-
-        Button viewSelectButton = new Button(this);
-        viewSelectButton.setAllCaps(false);
-        viewSelectButton.setText("View/Select & Copy");
-        viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
-        LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        viewSelectParams.leftMargin = dp(8);
-        buttonRow.addView(viewSelectButton, viewSelectParams);
-
-        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        clearParams.leftMargin = dp(8);
-        buttonRow.addView(clearButton, clearParams);
 
         root.addView(
             buttonRow,

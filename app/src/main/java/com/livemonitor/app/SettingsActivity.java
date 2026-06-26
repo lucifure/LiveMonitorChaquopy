@@ -259,6 +259,12 @@ public class SettingsActivity extends AppCompatActivity {
     private void addDebugSection(LinearLayout root) {
         verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
         Button logs = addButton(root, "Log Settings"); logs.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
+        Button viewSelectLog = addButton(root, "View/Select & Copy Log");
+        viewSelectLog.setOnClickListener(v -> {
+            Intent intent = new Intent(this, LogActivity.class);
+            intent.putExtra(LogActivity.EXTRA_VIEW_SELECT_ON_OPEN, true);
+            startActivity(intent);
+        });
     }
 
     private void bindSettingsToViews() {
