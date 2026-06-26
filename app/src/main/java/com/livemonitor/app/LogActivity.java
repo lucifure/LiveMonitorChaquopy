@@ -6,6 +6,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -157,6 +158,8 @@ public class LogActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
 
         LinearLayout.LayoutParams logContainerParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -170,7 +173,11 @@ public class LogActivity extends AppCompatActivity {
     }
 
     private void refreshLogs() {
-        adapter.setLogs(storage.loadLogs());
+        List<LogItem> logs = storage.loadLogs();
+        adapter.setLogs(logs);
+        boolean isEmpty = logs == null || logs.isEmpty();
+        emptyView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
+        listView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
     }
 
     private void copyLog() {
