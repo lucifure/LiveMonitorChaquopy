@@ -377,7 +377,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         videoId = videoId.trim();
-        if (!directDownloadVideoIds.add(videoId)) {
+        if (directDownloadVideoIds.contains(videoId)) {
             log(LogItem.LEVEL_INFO, LogItem.SOURCE_RECORDER, null, "Direct download already running.", "videoId=" + videoId);
             broadcastRecordingUpdated("Direct download is already running.");
             return;
@@ -391,6 +391,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertRecording(recording);
         activeRecordings.put(recording.getId(), recording);
         progressTracker.track(recording);
+        directDownloadVideoIds.add(videoId);
         executor.execute(() -> runDirectVideoDownload(recording));
         broadcastRecordingUpdated("Direct download started.");
     }
@@ -3217,89 +3218,87 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return;
             }
 
+            if (!youtubedlAndroidReady) {
+                throw new IllegalStateException("youtubedl-android downloader is not ready.");
+            }
+
             String videoId = recording.getVideoId();
-            Exception lastError = null;
-            ReturnCode lastCode = null;
+            String watchUrl = YouTubeUrlUtils.buildWatchUrl(videoId);
+            String outputPath = recording.getFinalMp4Path();
 
-            for (int attempt = 1; attempt <= DIRECT_DOWNLOAD_MAX_ATTEMPTS; attempt++) {
-                recording.setDiagnosticMessage("Direct download attempt " + attempt + " of " + DIRECT_DOWNLOAD_MAX_ATTEMPTS + ".");
-                storage.upsertRecording(recording);
-                broadcastRecordingUpdated("Direct download attempt " + attempt + ".");
+            recording.setDiagnosticMessage("Starting yt-dlp completed-video download.");
+            storage.upsertRecording(recording);
+            broadcastRecordingUpdated("Starting direct video download.");
 
-                try {
-                    String inputUrl = getDirectDownloadInputUrl(videoId, null);
+            List<String> args = new ArrayList<>();
+            args.add(watchUrl);
+            args.add("--no-playlist");
+            args.add("--no-warnings");
+            args.add("--force-ipv4");
+            args.add("--no-check-certificates");
+            args.add("--no-update");
+            args.add("--socket-timeout");
+            args.add("10");
+            args.add("--no-live-from-start");
+            args.add("-f");
+            args.add("bv*[height<=480]+ba/b");
+            args.add("--merge-output-format");
+            args.add("mp4");
+            args.add("-o");
+            args.add(outputPath);
 
-                    if (inputUrl == null || inputUrl.trim().isEmpty()) {
-                        throw new IllegalStateException("Could not get playable URL for ended live/video.");
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Starting yt-dlp completed-video download.",
+                "videoId=" + videoId + ", input=" + watchUrl + ", output=" + outputPath
+            );
+
+            YoutubeDLRequest request = buildYoutubedlAndroidRequest(watchUrl, args);
+            String processId = recording.getId();
+            Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
+                @Override
+                public Unit invoke(Float progress, Long etaSeconds, String line) {
+                    if (!isBlank(line)) {
+                        log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_RECORDER, null, "yt-dlp direct download output.", shortenForLog(line, 500));
                     }
 
-                    log(
-                        LogItem.LEVEL_SUCCESS,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Direct video URL found.",
-                        "attempt=" + attempt + ", input=" + describeUrlForLog(inputUrl)
-                    );
-
-                    String command = "-y -hide_banner -loglevel info"
-                        + " -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1"
-                        + " -reconnect_delay_max 5 -rw_timeout 90000000"
-                        + " -i " + quote(inputUrl)
-                        + " -c copy -f mpegts "
-                        + quote(recording.getTempTsPath());
-
-                    lastCode = FFmpegKit.execute(command).getReturnCode();
-
-                    if (ReturnCode.isSuccess(lastCode) || ReturnCode.isCancel(lastCode)) {
-                        break;
-                    }
-
-                    if (attempt < DIRECT_DOWNLOAD_MAX_ATTEMPTS) {
-                        sleep(getAttemptBackoffMillis(attempt));
-                    }
-                } catch (Exception e) {
-                    lastError = e;
-                    log(
-                        LogItem.LEVEL_WARNING,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Direct download attempt failed.",
-                        "attempt=" + attempt + ", error=" + normalizeErrorMessage(e)
-                    );
-                    if (attempt < DIRECT_DOWNLOAD_MAX_ATTEMPTS) {
-                        sleep(getAttemptBackoffMillis(attempt));
-                    }
+                    File outputFile = new File(outputPath);
+                    long bytes = outputFile.exists() ? Math.max(0L, outputFile.length()) : 0L;
+                    recording.updateProgress(bytes, recording.getDurationSeconds());
+                    storage.upsertRecording(recording);
+                    return Unit.INSTANCE;
                 }
+            };
+
+            activeYoutubedlAndroidRecordings.add(processId);
+            try {
+                executeYoutubedlAndroidRequest(request, processId, callback);
+            } finally {
+                activeYoutubedlAndroidRecordings.remove(processId);
             }
 
-            activeRecordings.remove(recording.getId());
-            progressTracker.untrack(recording);
-
-            if (ReturnCode.isSuccess(lastCode)) {
-                convertRecording(recording, null);
-            } else if (ReturnCode.isCancel(lastCode)) {
-                saveStoppedRecordingForDownloads(recording);
-            } else if (recording.hasExistingTempTsFile()) {
-                recording.markRecoverable("Direct download stopped after retries. " + describeReturnCode(lastCode));
-                storage.upsertRecording(recording);
-            } else if (lastError != null) {
-                recording.markFailed(normalizeErrorMessage(lastError));
-                storage.upsertRecording(recording);
-            } else {
-                recording.markFailed("Direct download failed. " + describeReturnCode(lastCode));
-                storage.upsertRecording(recording);
+            File outputFile = new File(outputPath);
+            if (!outputFile.exists() || outputFile.length() <= 0L) {
+                throw new IllegalStateException("yt-dlp finished without creating an output file.");
             }
+
+            recording.updateProgress(outputFile.length(), recording.getDurationSeconds());
+            recording.markCompleted(outputPath);
+            storage.upsertRecording(recording);
+            copyCompletedRecordingToSelectedFolder(recording, null);
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
         } catch (Exception e) {
-            activeRecordings.remove(recording.getId());
-            progressTracker.untrack(recording);
             recording.markFailed(normalizeErrorMessage(e));
             storage.upsertRecording(recording);
             log(LogItem.LEVEL_ERROR, LogItem.SOURCE_RECORDER, null, "Direct download failed.", normalizeErrorMessage(e));
         } finally {
+            activeRecordings.remove(recording.getId());
+            progressTracker.untrack(recording);
             directDownloadVideoIds.remove(recording.getVideoId());
+            broadcastRecordingUpdated("Direct download updated.");
         }
-
-        broadcastRecordingUpdated("Direct download updated.");
     }
 
     private void onRecordingFinished(String channelId, String recordingId, int returnCode) {

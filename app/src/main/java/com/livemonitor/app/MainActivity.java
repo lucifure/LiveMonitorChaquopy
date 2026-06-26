@@ -670,7 +670,7 @@ public class MainActivity extends AppCompatActivity {
 
         binding.monitoringPanel.setVisibility(View.GONE);
         binding.downloadsPanel.setVisibility(View.VISIBLE);
-        binding.urlInput.setHint("Paste completed livestream video URL...");
+        binding.urlInput.setHint("Paste YouTube video URL");
         binding.btnAddChannel.setText("⇩  GET");
 
         refreshAll();
