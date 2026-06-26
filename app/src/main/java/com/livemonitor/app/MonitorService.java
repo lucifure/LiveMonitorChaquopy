@@ -3255,6 +3255,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "videoId=" + videoId + ", input=" + watchUrl + ", output=" + outputPath
             );
 
+            updateYoutubedlAndroidRuntimeIfNeeded(
+                "before completed-video direct download",
+                "Updating bundled yt-dlp before direct download starts.",
+                null
+            );
+
             executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath, true);
 
             File outputFile = finalizeDirectDownloadTempFile(tempOutputPath, outputPath);
@@ -3340,6 +3346,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         args.add("10");
         args.add("--force-ipv4");
         args.add("--no-check-certificates");
+        args.add("--no-update");
         args.add("-f");
         args.add("best[height<=480][protocol^=m3u8]/best[protocol^=m3u8]/best[height<=480]/best");
         if (useTvEmbeddedClient) {
