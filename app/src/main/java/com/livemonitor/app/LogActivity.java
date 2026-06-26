@@ -92,6 +92,17 @@ public class LogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        Button saveButton = new Button(this);
+        saveButton.setAllCaps(false);
+        saveButton.setText("Save Log");
+        saveButton.setOnClickListener(v -> saveLog());
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        saveParams.leftMargin = dp(8);
+        buttonRow.addView(saveButton, saveParams);
+
         Button viewSelectButton = new Button(this);
         viewSelectButton.setAllCaps(false);
         viewSelectButton.setText("View/Select & Copy");
@@ -169,6 +180,22 @@ public class LogActivity extends AppCompatActivity {
         }
 
         showChunkedCopyDialog(ClipboardLogSplitter.split(text));
+    }
+
+    private void saveLog() {
+        String text = storage.buildCopyTextForAllLogs();
+
+        if (text.trim().isEmpty()) {
+            Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            String fileName = LogFileSaver.save(this, storage, text);
+            Toast.makeText(this, "Log saved: " + fileName, Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to save log: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void viewSelectFullLog() {

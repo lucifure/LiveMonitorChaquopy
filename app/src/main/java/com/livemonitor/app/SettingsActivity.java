@@ -21,6 +21,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.Toolbar;
 
 public class SettingsActivity extends AppCompatActivity {
     private static final String SECTION_RECORDING = "Recording";
@@ -82,8 +84,8 @@ public class SettingsActivity extends AppCompatActivity {
 
     private View buildMainSettingsView() {
         LinearLayout root = baseRoot();
-        root.setPadding(dp(14), dp(10), dp(14), dp(12));
         addToolbar(root, "Settings");
+        root.setPadding(dp(14), 0, dp(14), dp(12));
         addSectionRow(root, SECTION_RECORDING, "Quality, save location, recording options", R.drawable.ic_videocam_24);
         addDivider(root);
         addSectionRow(root, SECTION_SCHEDULE, "Monitoring schedule and timing", R.drawable.ic_schedule_24);
@@ -93,14 +95,13 @@ public class SettingsActivity extends AppCompatActivity {
         addSectionRow(root, SECTION_APP, "Reboot, battery, remote config", R.drawable.ic_settings_24);
         addDivider(root);
         addSectionRow(root, SECTION_DEBUG, "Logging and diagnostics", R.drawable.ic_code_24);
-        ScrollView scrollView = wrap(root);
-        return scrollView;
+        return wrap(root);
     }
 
     private View buildSectionView(String section) {
         LinearLayout root = baseRoot();
-        root.setPadding(dp(14), dp(10), dp(14), dp(14));
         addToolbar(root, section);
+        root.setPadding(dp(14), 0, dp(14), dp(14));
         if (SECTION_RECORDING.equals(section)) addRecordingSection(root);
         else if (SECTION_SCHEDULE.equals(section)) addScheduleSection(root);
         else if (SECTION_AUTH.equals(section)) addAuthenticationSection(root);
@@ -123,39 +124,54 @@ public class SettingsActivity extends AppCompatActivity {
         return root;
     }
 
-    private ScrollView wrap(LinearLayout root) {
+    private View wrap(LinearLayout root) {
+        View toolbar = null;
+        if (root.getChildCount() > 0 && root.getChildAt(0) instanceof Toolbar) {
+            toolbar = root.getChildAt(0);
+            root.removeViewAt(0);
+        }
+
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setBackgroundResource(R.drawable.lm_screen_background);
         scrollView.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        return scrollView;
+
+        if (toolbar == null) {
+            return scrollView;
+        }
+
+        LinearLayout screen = new LinearLayout(this);
+        screen.setOrientation(LinearLayout.VERTICAL);
+        screen.setBackgroundResource(R.drawable.lm_screen_background);
+        screen.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
+        screen.addView(scrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return screen;
     }
 
     private void addToolbar(LinearLayout root, String titleText) {
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(0, 0, 0, dp(12));
-        TextView back = new TextView(this);
-        back.setText("←");
-        back.setTextSize(28);
-        back.setTextColor(Color.WHITE);
-        back.setGravity(Gravity.CENTER);
-        back.setOnClickListener(v -> {
+        Toolbar toolbar = new Toolbar(this);
+        toolbar.setTitle(titleText);
+        toolbar.setTitleTextColor(Color.WHITE);
+        toolbar.setBackgroundColor(Color.rgb(5, 36, 40));
+        toolbar.setNavigationIcon(R.drawable.ic_arrow_back_24);
+        toolbar.setNavigationOnClickListener(v -> {
             if (currentSection == null || currentSection.isEmpty()) {
                 finish();
             } else {
                 showMainSettings();
             }
         });
-        toolbar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        TextView title = new TextView(this);
-        title.setText(titleText);
-        title.setTextSize(20);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.WHITE);
-        toolbar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(toolbar);
+        root.addView(toolbar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(64)
+        ));
+        setSupportActionBar(toolbar);
+        ActionBar actionBar = getSupportActionBar();
+        if (actionBar != null) {
+            actionBar.setDisplayHomeAsUpEnabled(true);
+            actionBar.setHomeButtonEnabled(true);
+            actionBar.setTitle(titleText);
+        }
     }
 
     private void addSectionRow(LinearLayout root, String title, String subtitle, int iconRes) {
