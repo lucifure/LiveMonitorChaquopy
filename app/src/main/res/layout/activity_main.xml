@@ -299,17 +299,6 @@
                 android:textStyle="bold"
                 android:paddingBottom="10dp" />
 
-            <Button
-                android:id="@+id/btnManualDownload"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginBottom="12dp"
-                android:background="@drawable/lm_button_primary_background"
-                android:text="＋ Download Video"
-                android:textAllCaps="false"
-                android:textColor="@color/text"
-                android:textStyle="bold" />
-
             <TextView
                 android:id="@+id/emptyDownloadsText"
                 android:layout_width="match_parent"
