@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -97,6 +98,13 @@ public class ChannelLogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        clearParams.leftMargin = dp(8);
+        buttonRow.addView(clearButton, clearParams);
+
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
         saveButton.setText("Save Log");
@@ -107,24 +115,6 @@ public class ChannelLogActivity extends AppCompatActivity {
         );
         saveParams.leftMargin = dp(8);
         buttonRow.addView(saveButton, saveParams);
-
-        Button viewSelectButton = new Button(this);
-        viewSelectButton.setAllCaps(false);
-        viewSelectButton.setText("View/Select & Copy");
-        viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
-        LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        viewSelectParams.leftMargin = dp(8);
-        buttonRow.addView(viewSelectButton, viewSelectParams);
-
-        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        clearParams.leftMargin = dp(8);
-        buttonRow.addView(clearButton, clearParams);
 
         root.addView(
             buttonRow,
@@ -139,10 +129,7 @@ public class ChannelLogActivity extends AppCompatActivity {
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
 
-        listView = new ListView(this);
-        listView.setAdapter(adapter);
-        listView.setEmptyView(emptyView);
-
+        emptyView.setVisibility(View.GONE);
         root.addView(
             emptyView,
             new LinearLayout.LayoutParams(
@@ -151,20 +138,26 @@ public class ChannelLogActivity extends AppCompatActivity {
             )
         );
 
-        root.addView(
-            listView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+        listView = new ListView(this);
+        listView.setAdapter(adapter);
+
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
         );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
 
         return root;
     }
 
     private void refreshLogs() {
-        adapter.setLogs(storage.loadLogsForChannel(channelId));
+        List<LogItem> logs = storage.loadLogsForChannel(channelId);
+        adapter.setLogs(logs);
+        boolean isEmpty = logs == null || logs.isEmpty();
+        emptyView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
+        listView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
     }
 
     private void copyLog() {

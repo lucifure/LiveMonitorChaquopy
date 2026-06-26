@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
@@ -67,6 +68,14 @@ public class SettingsActivity extends AppCompatActivity {
             return;
         }
         super.onBackPressed();
+    }
+
+    @Override public boolean onOptionsItemSelected(MenuItem item) {
+        if (item != null && item.getItemId() == android.R.id.home) {
+            onBackPressed();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
     private void showMainSettings() {
@@ -250,6 +259,12 @@ public class SettingsActivity extends AppCompatActivity {
     private void addDebugSection(LinearLayout root) {
         verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
         Button logs = addButton(root, "Log Settings"); logs.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
+        Button viewSelectLog = addButton(root, "View/Select & Copy Log");
+        viewSelectLog.setOnClickListener(v -> {
+            Intent intent = new Intent(this, LogActivity.class);
+            intent.putExtra(LogActivity.EXTRA_VIEW_SELECT_ON_OPEN, true);
+            startActivity(intent);
+        });
     }
 
     private void bindSettingsToViews() {

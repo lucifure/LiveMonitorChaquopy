@@ -6,6 +6,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -26,6 +27,8 @@ import androidx.appcompat.app.AppCompatActivity;
  */
 public class LogActivity extends AppCompatActivity {
 
+    public static final String EXTRA_VIEW_SELECT_ON_OPEN = "com.livemonitor.app.extra.VIEW_SELECT_ON_OPEN";
+
     private AppStorage storage;
     private LogAdapter adapter;
     private ListView listView;
@@ -42,6 +45,9 @@ public class LogActivity extends AppCompatActivity {
         setContentView(buildContentView());
 
         refreshLogs();
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_VIEW_SELECT_ON_OPEN, false)) {
+            listView.post(this::viewSelectFullLog);
+        }
     }
 
     @Override
@@ -55,6 +61,7 @@ public class LogActivity extends AppCompatActivity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(12), dp(12), dp(12));
         root.setBackgroundColor(Color.rgb(15, 15, 15));
+        root.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(this);
         title.setText("Global Log");
@@ -92,6 +99,13 @@ public class LogActivity extends AppCompatActivity {
 
         buttonRow.addView(copyButton);
 
+        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        clearParams.leftMargin = dp(8);
+        buttonRow.addView(clearButton, clearParams);
+
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
         saveButton.setText("Save Log");
@@ -103,24 +117,6 @@ public class LogActivity extends AppCompatActivity {
         saveParams.leftMargin = dp(8);
         buttonRow.addView(saveButton, saveParams);
 
-        Button viewSelectButton = new Button(this);
-        viewSelectButton.setAllCaps(false);
-        viewSelectButton.setText("View/Select & Copy");
-        viewSelectButton.setOnClickListener(v -> viewSelectFullLog());
-        LinearLayout.LayoutParams viewSelectParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        viewSelectParams.leftMargin = dp(8);
-        buttonRow.addView(viewSelectButton, viewSelectParams);
-
-        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        clearParams.leftMargin = dp(8);
-        buttonRow.addView(clearButton, clearParams);
-
         root.addView(
             buttonRow,
             new LinearLayout.LayoutParams(
@@ -129,39 +125,43 @@ public class LogActivity extends AppCompatActivity {
             )
         );
 
+        listView = new ListView(this);
+        listView.setTranscriptMode(ListView.TRANSCRIPT_MODE_NORMAL);
+        listView.setStackFromBottom(false);
+        listView.setAdapter(adapter);
+        listView.setBackgroundColor(Color.rgb(15, 15, 15));
+
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
+
         emptyView = new TextView(this);
         emptyView.setText("No log entries yet.");
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setTextSize(15);
         emptyView.setTextColor(Color.rgb(102, 102, 102));
+        emptyView.setVisibility(View.GONE);
 
-        listView = new ListView(this);
-        listView.setAdapter(adapter);
-        listView.setEmptyView(emptyView);
-        listView.setBackgroundColor(Color.rgb(15, 15, 15));
-
-        root.addView(
-            emptyView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+        LinearLayout.LayoutParams emptyParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
         );
-
-        root.addView(
-            listView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        );
+        emptyParams.topMargin = dp(8);
+        root.addView(emptyView, emptyParams);
 
         return root;
     }
 
     private void refreshLogs() {
-        adapter.setLogs(storage.loadLogs());
+        List<LogItem> logs = storage.loadLogs();
+        adapter.setLogs(logs);
+        boolean isEmpty = logs == null || logs.isEmpty();
+        emptyView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
+        listView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
     }
 
     private void copyLog() {
