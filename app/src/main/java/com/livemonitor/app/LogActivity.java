@@ -9,6 +9,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
@@ -136,26 +137,37 @@ public class LogActivity extends AppCompatActivity {
         emptyView.setTextSize(15);
         emptyView.setTextColor(Color.rgb(102, 102, 102));
 
-        emptyView.setVisibility(View.GONE);
-        root.addView(
-            emptyView,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        );
-
         listView = new ListView(this);
         listView.setAdapter(adapter);
+        listView.setEmptyView(emptyView);
         listView.setBackgroundColor(Color.rgb(15, 15, 15));
 
-        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+        FrameLayout logContainer = new FrameLayout(this);
+        logContainer.setBackgroundColor(Color.rgb(15, 15, 15));
+        logContainer.addView(
+            listView,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
+        logContainer.addView(
+            emptyView,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
+        listParams.topMargin = dp(8);
+        root.addView(listView, listParams);
+
+        LinearLayout.LayoutParams logContainerParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             0,
             1f
         );
-        listParams.topMargin = dp(8);
-        root.addView(listView, listParams);
+        logContainerParams.topMargin = dp(8);
+        root.addView(logContainer, logContainerParams);
 
         return root;
     }
