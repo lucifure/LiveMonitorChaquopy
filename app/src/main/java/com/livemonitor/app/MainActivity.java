@@ -29,7 +29,9 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.livemonitor.app.databinding.ActivityMainBinding;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Main home screen.
@@ -47,6 +49,7 @@ public class MainActivity extends AppCompatActivity {
     private ChannelAdapter channelAdapter;
     private RecordingAdapter recordingAdapter;
     private BroadcastReceiver updateReceiver;
+    private final Set<String> pendingActionRecordingIds = new HashSet<>();
     private final Handler timerHandler = new Handler(Looper.getMainLooper());
     private final Runnable downloadTimerRefresh = new Runnable() {
         @Override
@@ -501,29 +504,67 @@ public class MainActivity extends AppCompatActivity {
         }
 
         boolean directDownload = recording.getChannelId().trim().isEmpty();
+        AlertDialog dialog;
         if (directDownload) {
             String downloaded = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
-            new AlertDialog.Builder(this)
+            dialog = new AlertDialog.Builder(this)
                 .setTitle("Save partial download?")
                 .setMessage("You have downloaded " + downloaded + " so far.")
-                .setNegativeButton("Discard", (dialog, which) -> stopDownload(recording, false))
-                .setPositiveButton("Save Partial", (dialog, which) -> stopDownload(recording, true))
-                .show();
+                .setNegativeButton("Discard", null)
+                .setPositiveButton("Save Partial", null)
+                .create();
+            dialog.setOnShowListener(d -> {
+                dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+                    disableDialogButtons(dialog);
+                    stopDownload(recording, false);
+                    dialog.dismiss();
+                });
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    disableDialogButtons(dialog);
+                    stopDownload(recording, true);
+                    dialog.dismiss();
+                });
+            });
+            dialog.show();
             return;
         }
 
-        new AlertDialog.Builder(this)
+        dialog = new AlertDialog.Builder(this)
             .setTitle("Stop and save recording?")
             .setMessage("Stop and save this recording? Monitoring for this channel will also be paused.")
             .setNegativeButton("Keep Recording", null)
-            .setPositiveButton("Stop & Save", (dialog, which) -> stopDownload(recording, true))
-            .show();
+            .setPositiveButton("Stop & Save", null)
+            .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            disableDialogButtons(dialog);
+            stopDownload(recording, true);
+            dialog.dismiss();
+        }));
+        dialog.show();
+    }
+
+    private void disableDialogButtons(AlertDialog dialog) {
+        if (dialog == null) {
+            return;
+        }
+        if (dialog.getButton(AlertDialog.BUTTON_POSITIVE) != null) {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+        }
+        if (dialog.getButton(AlertDialog.BUTTON_NEGATIVE) != null) {
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
+        }
     }
 
     private void toggleRecordingPaused(RecordingItem recording) {
-        if (recording == null) {
+        if (recording == null || recording.getId() == null) {
             return;
         }
+
+        String recordingId = recording.getId();
+        if (pendingActionRecordingIds.contains(recordingId)) {
+            return;
+        }
+        pendingActionRecordingIds.add(recordingId);
 
         Intent intent = new Intent(this, MonitorService.class);
         intent.setAction(
@@ -545,6 +586,7 @@ public class MainActivity extends AppCompatActivity {
 
         storage.upsertRecording(recording);
         refreshAll();
+        pendingActionRecordingIds.remove(recordingId);
     }
 
     private void stopDownload(RecordingItem recording) {
@@ -552,9 +594,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopDownload(RecordingItem recording, boolean savePartial) {
-        if (recording == null) {
+        if (recording == null || recording.getId() == null) {
             return;
         }
+
+        String recordingId = recording.getId();
+        if (pendingActionRecordingIds.contains(recordingId)) {
+            return;
+        }
+        pendingActionRecordingIds.add(recordingId);
 
         ChannelItem channel = storage.findChannelById(recording.getChannelId());
         if (channel != null) {
@@ -575,6 +623,7 @@ public class MainActivity extends AppCompatActivity {
 
         refreshAll();
         Toast.makeText(this, "Stopping, saving, and pausing monitoring…", Toast.LENGTH_SHORT).show();
+        pendingActionRecordingIds.remove(recordingId);
     }
 
     private void startMonitoringService(ChannelItem channel) {
