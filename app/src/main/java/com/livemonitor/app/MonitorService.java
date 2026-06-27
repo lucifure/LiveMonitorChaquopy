@@ -1297,6 +1297,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             }
 
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return;
+            }
+
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
@@ -1372,6 +1376,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
+
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return;
+            }
 
             restartingRecordings.remove(recording.getId());
             activeRecordings.remove(channelId);
@@ -1998,9 +2006,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         String status = recording.getStatus();
-        boolean stoppedByUser = RecordingItem.STATUS_PAUSED_BY_USER.equals(status)
+        boolean stoppedByUser = userHaltedRecordingIds.contains(recording.getId())
+            || RecordingItem.STATUS_PAUSED_BY_USER.equals(status)
             || RecordingItem.STATUS_STOPPED_BY_USER.equals(status)
-            || RecordingItem.STATUS_COMPLETED.equals(status);
+            || RecordingItem.STATUS_COMPLETED.equals(status)
+            || isChannelMonitoringHalted(channelId, channel, recording);
 
         if (!stoppedByUser) {
             return false;
@@ -2030,6 +2040,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
         broadcastRecordingUpdated(message);
         return true;
+    }
+
+    private boolean isChannelMonitoringHalted(String channelId, ChannelItem channel, RecordingItem recording) {
+        String resolvedChannelId = channelId;
+        if (isBlank(resolvedChannelId) && recording != null) {
+            resolvedChannelId = recording.getChannelId();
+        }
+        ChannelItem latestChannel = !isBlank(resolvedChannelId) ? storage.findChannelById(resolvedChannelId) : channel;
+        if (latestChannel == null) {
+            latestChannel = channel;
+        }
+        return latestChannel != null && !latestChannel.shouldMonitor();
+    }
+
+    private void throwIfChannelMonitoringHalted(ChannelItem channel, String videoId) throws Exception {
+        if (channel == null || isBlank(channel.getId())) {
+            return;
+        }
+        ChannelItem latestChannel = storage.findChannelById(channel.getId());
+        if (latestChannel != null && !latestChannel.shouldMonitor()) {
+            throw new IllegalStateException(
+                "Recording resolver stopped because channel monitoring is paused. videoId=" + nullToEmpty(videoId)
+            );
+        }
     }
 
     private String buildPrimaryRecorderInputUrl(ChannelItem channel, String resolvedVideoUrl) {
@@ -2841,6 +2875,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             String activeChannelId = isBlank(channelId) ? recording.getChannelId() : channelId;
 
+            if (shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
+                return true;
+            }
+
             recording.markRecording();
             recording.showInDownloading();
             recording.setDiagnosticMessage("yt-dlp live-from-start failed; falling back to FFmpeg live-edge recording.");
@@ -2889,6 +2927,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             return true;
         } catch (Exception fallbackError) {
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return true;
+            }
+
             String combinedError = "yt-dlp recorder failed ("
                 + failureReason
                 + ") and FFmpeg fallback failed ("
@@ -4471,6 +4513,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         Exception lastError = null;
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
+            throwIfChannelMonitoringHalted(channel, videoId);
             YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
             log(
@@ -4509,6 +4552,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         )
                     );
 
+                throwIfChannelMonitoringHalted(channel, videoId);
+
                 if (isBlank(url)) {
                     throw new IllegalStateException("yt-dlp returned an empty stream URL.");
                 }
@@ -4524,6 +4569,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return new ResolvedInput(url, videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
             } catch (Exception e) {
                 lastError = e;
+
+                throwIfChannelMonitoringHalted(channel, videoId);
 
                 if (isHttp429Error(normalizeErrorMessage(e))) {
                     startHttp429Cooldown(channel, normalizeErrorMessage(e));
