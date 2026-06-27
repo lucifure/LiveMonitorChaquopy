@@ -28,6 +28,10 @@
     <!-- Lets app open battery optimization exemption screen. Ask user only when needed. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Allows exact keep-alive alarms while monitoring. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -105,6 +109,16 @@
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Keep-alive alarm receiver:
+             - Wakes the foreground service to reschedule lightweight network pings. -->
+        <receiver
+            android:name=".KeepAliveReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.livemonitor.app.ACTION_KEEP_ALIVE_PING" />
+            </intent-filter>
+        </receiver>
 
         <!-- Boot receiver:
              - Restores persisted monitoring after phone reboot
