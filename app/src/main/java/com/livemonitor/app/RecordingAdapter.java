@@ -306,10 +306,14 @@ public class RecordingAdapter extends BaseAdapter {
         holder.details.setText(buildDetails(recording));
         long bytesRec = recording.getBytesRecorded();
         long totalMs = estimateDisplayedRecordedMs(recording, System.currentTimeMillis());
+        long sessionDurationSeconds = recording.getStartedAt() > 0L
+            ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1_000L)
+            : 0L;
         holder.durationStat.setText(totalMs > 0L
             ? "🎬 " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
             : "🎬 Waiting...");
-        holder.sizeStat.setText(bytesRec <= 0L && recording.isActive() ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
+        boolean showStartingSize = bytesRec <= 0L && recording.isActive() && sessionDurationSeconds < 10L;
+        holder.sizeStat.setText(showStartingSize ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
         String savedToDisplay = recording.getSavedToDisplay();
         holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);
@@ -326,8 +330,12 @@ public class RecordingAdapter extends BaseAdapter {
 
         holder.openButton.setVisibility(hasPlayableFile ? View.VISIBLE : View.GONE);
         holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
+        holder.pauseResumeButton.setEnabled(true);
+        holder.pauseResumeButton.setAlpha(1f);
         holder.pauseResumeButton.setText(recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause");
         holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
+        holder.deleteButton.setEnabled(true);
+        holder.deleteButton.setAlpha(1f);
         if (downloadedMode) {
             holder.deleteButton.setText("Delete");
             styleCardActionButton(holder.deleteButton);
@@ -352,14 +360,17 @@ public class RecordingAdapter extends BaseAdapter {
         });
 
         holder.pauseResumeButton.setOnClickListener(v -> {
+            boolean wasPaused = recording.isPausedByUser();
+            holder.pauseResumeButton.setText(wasPaused ? "Ⅱ  Pause" : "▶  Resume");
+            setActionButtonsEnabled(holder, false);
+            holder.pauseResumeButton.postDelayed(() -> setActionButtonsEnabled(holder, true), 2_000L);
             if (listener != null) {
                 listener.onPauseResumeClicked(recording);
             }
         });
 
         holder.deleteButton.setOnClickListener(v -> {
-            holder.deleteButton.setEnabled(false);
-            holder.deleteButton.setAlpha(0.65f);
+            setActionButtonsEnabled(holder, false);
             if (activeDownload) {
                 holder.deleteButton.setText("Stopping…");
             }
@@ -367,6 +378,13 @@ public class RecordingAdapter extends BaseAdapter {
                 listener.onDeleteClicked(recording);
             }
         });
+    }
+
+    private void setActionButtonsEnabled(RecordingViewHolder holder, boolean enabled) {
+        holder.pauseResumeButton.setEnabled(enabled);
+        holder.pauseResumeButton.setAlpha(enabled ? 1f : 0.65f);
+        holder.deleteButton.setEnabled(enabled);
+        holder.deleteButton.setAlpha(enabled ? 1f : 0.65f);
     }
 
     private String buildDetails(RecordingItem recording) {
