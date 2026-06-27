@@ -192,18 +192,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         settings = storage.loadSettings();
-        remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
-        prepareYoutubedlAndroid();
-        prepareYtDlpExecutable();
         ensureForeground();
         acquireWakeLock();
 
         if (intent == null || intent.getAction() == null) {
+            refreshRecorderEnvironment();
             restoreSavedChannels();
             return START_STICKY;
         }
 
         String action = intent.getAction();
+
+        if (isImmediateRecordingControlAction(action)) {
+            dispatchImmediateRecordingControl(intent, action);
+            return START_STICKY;
+        }
+
+        refreshRecorderEnvironment();
 
         if (LiveMonitorActions.isStartAction(action)) {
             handleStart(intent);
@@ -233,6 +238,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return START_STICKY;
+    }
+
+    private boolean isImmediateRecordingControlAction(String action) {
+        return LiveMonitorActions.ACTION_STOP_RECORDING.equals(action)
+            || LiveMonitorActions.ACTION_PAUSE_RECORDING.equals(action)
+            || LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action);
+    }
+
+    private void dispatchImmediateRecordingControl(Intent intent, String action) {
+        Intent actionIntent = new Intent(intent);
+        if (LiveMonitorActions.ACTION_STOP_RECORDING.equals(action)) {
+            executor.execute(() -> handleStopRecording(actionIntent));
+        } else if (LiveMonitorActions.ACTION_PAUSE_RECORDING.equals(action)) {
+            executor.execute(() -> handlePauseRecording(actionIntent));
+        } else if (LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action)) {
+            executor.execute(() -> handleResumeRecording(actionIntent));
+        }
+    }
+
+    private void refreshRecorderEnvironment() {
+        remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYoutubedlAndroid();
+        prepareYtDlpExecutable();
     }
 
     private void handleStart(Intent intent) {
@@ -419,6 +447,40 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return true;
     }
 
+    private ChannelItem pauseMonitoringForUserStoppedRecording(String channelId, RecordingItem recording, String logMessage) {
+        String resolvedChannelId = channelId;
+        if (isBlank(resolvedChannelId) && recording != null && !isBlank(recording.getChannelId())) {
+            resolvedChannelId = recording.getChannelId();
+        }
+
+        if (isBlank(resolvedChannelId)) {
+            return null;
+        }
+
+        activeLoops.remove(resolvedChannelId);
+        activeRecordings.remove(resolvedChannelId);
+
+        ChannelItem channel = storage.findChannelById(resolvedChannelId);
+        if (channel == null) {
+            return null;
+        }
+
+        activeLoops.remove(channel.getId());
+        activeRecordings.remove(channel.getId());
+        channel.markPausedByUser();
+        storage.upsertChannel(channel);
+        notificationHelper.showChannelMonitoringNotification(channel);
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_SERVICE,
+            channel,
+            logMessage,
+            recording == null ? "" : "recordingId=" + recording.getId()
+        );
+        broadcastChannelUpdated(logMessage);
+        return channel;
+    }
+
     private void handlePauseRecording(Intent intent) {
         if (intent == null) return;
 
@@ -446,34 +508,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             activeRecordings.remove(recording.getChannelId());
             progressTracker.untrack(recording);
 
-            if ((channelId == null || channelId.trim().isEmpty())
-                && recording.getChannelId() != null
-                && !recording.getChannelId().trim().isEmpty()) {
-                channelId = recording.getChannelId();
-            }
-
-            if (channelId != null && !channelId.trim().isEmpty()) {
-                ChannelItem channel = storage.findChannelById(channelId);
-
-                if (channel != null) {
-                    activeLoops.remove(channel.getId());
-                    channel.markPausedByUser();
-                    storage.upsertChannel(channel);
-                    notificationHelper.showChannelMonitoringNotification(channel);
-                    log(
-                        LogItem.LEVEL_INFO,
-                        LogItem.SOURCE_SERVICE,
-                        channel,
-                        "Recording paused by user; channel monitoring paused until manually resumed.",
-                        "recordingId=" + recording.getId()
-                    );
-                    broadcastChannelUpdated("Recording paused by user; channel monitoring paused until manually resumed.");
-                }
-            }
+            pauseMonitoringForUserStoppedRecording(
+                channelId,
+                recording,
+                "Recording paused by user; channel monitoring paused until manually resumed."
+            );
 
             cancelActiveRecording(recording, "handlePauseRecording user action");
             broadcastRecordingUpdated("Recording paused.");
         } finally {
+            if (!isBlank(recordingId)) {
+                finalizingRecordingIds.remove(recordingId);
+            }
             finishProcessingRecordingAction(recordingId);
         }
     }
@@ -603,60 +649,47 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         try {
             String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
+            RecordingItem recording = storage.findRecordingById(recordingId);
+            boolean savePartial = intent.getBooleanExtra(LiveMonitorActions.EXTRA_SAVE_PARTIAL, true);
 
-            if (skipDuplicateFinalizationRequest(recordingId, null)) {
-                broadcastRecordingUpdated("Recording finalization is already in progress.");
+            if (recording != null) {
+                if (!savePartial) {
+                    discardDirectDownloadPartialIds.add(recording.getId());
+                }
+
+                activeRecordings.remove(recording.getId());
+                activeRecordings.remove(recording.getChannelId());
+                progressTracker.untrack(recording);
+
+                if (isBlank(channelId) && !isBlank(recording.getChannelId())) {
+                    channelId = recording.getChannelId();
+                }
+
+                userHaltedRecordingIds.add(recording.getId());
+                recording.markStoppedByUser();
+                recording.showInDownloading();
+                storage.upsertRecording(recording);
+            }
+
+            ChannelItem stoppedChannel = pauseMonitoringForUserStoppedRecording(
+                channelId,
+                recording,
+                "Recording stopped by user; channel monitoring paused until manually resumed."
+            );
+
+            if (skipDuplicateFinalizationRequest(recordingId, stoppedChannel)) {
+                cancelActiveRecording(recording, "handleStopRecording duplicate user action");
+                broadcastRecordingUpdated("Recording stop is already in progress; monitoring is paused.");
                 return;
             }
 
             if (!isBlank(recordingId) && !stoppingRecordingIds.add(recordingId)) {
-                broadcastRecordingUpdated("Recording stop is already in progress.");
+                cancelActiveRecording(recording, "handleStopRecording duplicate stop action");
+                broadcastRecordingUpdated("Recording stop is already in progress; monitoring is paused.");
                 return;
             }
 
             try {
-                RecordingItem recording = storage.findRecordingById(recordingId);
-                boolean savePartial = intent.getBooleanExtra(LiveMonitorActions.EXTRA_SAVE_PARTIAL, true);
-                if (recording != null && !savePartial) {
-                    discardDirectDownloadPartialIds.add(recording.getId());
-                }
-
-                if (recording != null) {
-                    activeRecordings.remove(recording.getId());
-                    activeRecordings.remove(recording.getChannelId());
-                    progressTracker.untrack(recording);
-
-                    if ((channelId == null || channelId.trim().isEmpty())
-                        && recording.getChannelId() != null
-                        && !recording.getChannelId().trim().isEmpty()) {
-                        channelId = recording.getChannelId();
-                    }
-
-                    userHaltedRecordingIds.add(recording.getId());
-                    recording.markStoppedByUser();
-                    recording.showInDownloading();
-                    storage.upsertRecording(recording);
-                }
-
-                if (channelId != null && !channelId.trim().isEmpty()) {
-                    ChannelItem channel = storage.findChannelById(channelId);
-
-                    if (channel != null) {
-                        activeLoops.remove(channel.getId());
-                        channel.markPausedByUser();
-                        storage.upsertChannel(channel);
-                        notificationHelper.showChannelMonitoringNotification(channel);
-                        log(
-                            LogItem.LEVEL_INFO,
-                            LogItem.SOURCE_SERVICE,
-                            channel,
-                            "Recording stopped by user; channel monitoring paused until manually resumed.",
-                            ""
-                        );
-                        broadcastChannelUpdated("Recording stopped by user; channel monitoring paused until manually resumed.");
-                    }
-                }
-
                 cancelActiveRecording(recording, "handleStopRecording user action");
 
                 boolean savedPlayableFile = false;
@@ -670,7 +703,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         toFinalize.hideFromDownloading();
                         storage.upsertRecording(toFinalize);
                     } else {
-                        ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+                        ChannelItem channel = stoppedChannel != null
+                            ? stoppedChannel
+                            : (isBlank(channelId) ? null : storage.findChannelById(channelId));
                         savedPlayableFile = saveStoppedRecordingForDownloads(toFinalize, channel);
                     }
                 }
@@ -686,6 +721,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             }
         } finally {
+            if (!isBlank(recordingId)) {
+                finalizingRecordingIds.remove(recordingId);
+            }
             finishProcessingRecordingAction(recordingId);
         }
     }
@@ -1043,7 +1081,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        long deadline = System.currentTimeMillis() + 3_000L;
+        long deadline = System.currentTimeMillis() + 12_000L;
 
         while (System.currentTimeMillis() < deadline) {
             RecordingItem latest = storage.findRecordingById(recording.getId());
