@@ -1210,7 +1210,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
         recording.setDiagnosticMessage("Recording journal opened; waiting for manifest.");
         storage.upsertRecording(recording);
-        activeRecordings.put(channel.getId(), recording);
+        final String recordingChannelId = channel.getId();
+        activeRecordings.put(recordingChannelId, recording);
         progressTracker.track(recording);
 
         channel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
@@ -1219,7 +1220,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         broadcastChannelUpdated("Recording moved to Downloading.");
         broadcastRecordingUpdated("Recording added to Downloading.");
 
-        executor.execute(() -> runRecording(channel.getId(), recording, liveInfo));
+        executor.execute(() -> runRecording(recordingChannelId, recording, liveInfo));
     }
 
     private void runRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
