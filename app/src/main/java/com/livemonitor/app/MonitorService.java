@@ -71,6 +71,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Boolean> activeLoops = new ConcurrentHashMap<>();
     private final Map<String, RecordingItem> activeRecordings = new ConcurrentHashMap<>();
     private final Set<String> processingRecordingIds = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Set<String> userHaltedRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> activeYoutubedlAndroidRecordings = ConcurrentHashMap.newKeySet();
     private final Set<String> ytDlpFragmentEndSignals = ConcurrentHashMap.newKeySet();
     private final Map<String, Integer> ytDlpFragmentErrorCounts = new ConcurrentHashMap<>();
@@ -437,6 +438,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return;
             }
 
+            userHaltedRecordingIds.add(recording.getId());
             recording.markPausedByUser();
             recording.showInDownloading();
             storage.upsertRecording(recording);
@@ -454,9 +456,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 ChannelItem channel = storage.findChannelById(channelId);
 
                 if (channel != null) {
-                    channel.markRecording(recording.getVideoId(), recording.getVideoUrl());
+                    activeLoops.remove(channel.getId());
+                    channel.markPausedByUser();
                     storage.upsertChannel(channel);
                     notificationHelper.showChannelMonitoringNotification(channel);
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_SERVICE,
+                        channel,
+                        "Recording paused by user; channel monitoring paused until manually resumed.",
+                        "recordingId=" + recording.getId()
+                    );
+                    broadcastChannelUpdated("Recording paused by user; channel monitoring paused until manually resumed.");
                 }
             }
 
@@ -476,6 +487,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         try {
+            userHaltedRecordingIds.remove(recordingId);
             String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
             RecordingItem recording = storage.findRecordingById(recordingId);
 
@@ -620,6 +632,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         channelId = recording.getChannelId();
                     }
 
+                    userHaltedRecordingIds.add(recording.getId());
                     recording.markStoppedByUser();
                     recording.showInDownloading();
                     storage.upsertRecording(recording);
@@ -3569,6 +3582,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel = storage.findChannelById(channelId);
 
         if (recording == null) return;
+
+        boolean userHaltedRecording = userHaltedRecordingIds.contains(recordingId)
+            || recording.isPausedByUser()
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus());
+        if (userHaltedRecording) {
+            restartingRecordings.remove(recordingId);
+            activeRecordings.remove(channelId);
+            activeRecordings.remove(recordingId);
+            progressTracker.untrack(recording);
+            storage.upsertRecording(recording);
+
+            if (channel != null) {
+                activeLoops.remove(channel.getId());
+                channel.markPausedByUser();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            broadcastRecordingUpdated("Recording paused or stopped by user.");
+            return;
+        }
 
         boolean restartingAfterStall = restartingRecordings.contains(recordingId);
 
