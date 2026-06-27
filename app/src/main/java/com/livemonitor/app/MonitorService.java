@@ -192,18 +192,23 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         settings = storage.loadSettings();
-        remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
-        prepareYoutubedlAndroid();
-        prepareYtDlpExecutable();
         ensureForeground();
         acquireWakeLock();
 
         if (intent == null || intent.getAction() == null) {
+            refreshRecorderEnvironment();
             restoreSavedChannels();
             return START_STICKY;
         }
 
         String action = intent.getAction();
+
+        if (isImmediateRecordingControlAction(action)) {
+            dispatchImmediateRecordingControl(intent, action);
+            return START_STICKY;
+        }
+
+        refreshRecorderEnvironment();
 
         if (LiveMonitorActions.isStartAction(action)) {
             handleStart(intent);
@@ -233,6 +238,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return START_STICKY;
+    }
+
+    private boolean isImmediateRecordingControlAction(String action) {
+        return LiveMonitorActions.ACTION_STOP_RECORDING.equals(action)
+            || LiveMonitorActions.ACTION_PAUSE_RECORDING.equals(action)
+            || LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action);
+    }
+
+    private void dispatchImmediateRecordingControl(Intent intent, String action) {
+        Intent actionIntent = new Intent(intent);
+        if (LiveMonitorActions.ACTION_STOP_RECORDING.equals(action)) {
+            executor.execute(() -> handleStopRecording(actionIntent));
+        } else if (LiveMonitorActions.ACTION_PAUSE_RECORDING.equals(action)) {
+            executor.execute(() -> handlePauseRecording(actionIntent));
+        } else if (LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action)) {
+            executor.execute(() -> handleResumeRecording(actionIntent));
+        }
+    }
+
+    private void refreshRecorderEnvironment() {
+        remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        prepareYoutubedlAndroid();
+        prepareYtDlpExecutable();
     }
 
     private void handleStart(Intent intent) {
@@ -1043,7 +1071,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        long deadline = System.currentTimeMillis() + 3_000L;
+        long deadline = System.currentTimeMillis() + 12_000L;
 
         while (System.currentTimeMillis() < deadline) {
             RecordingItem latest = storage.findRecordingById(recording.getId());

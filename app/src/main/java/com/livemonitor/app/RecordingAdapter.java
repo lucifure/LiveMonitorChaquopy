@@ -309,9 +309,7 @@ public class RecordingAdapter extends BaseAdapter {
         long sessionDurationSeconds = recording.getStartedAt() > 0L
             ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1_000L)
             : 0L;
-        holder.durationStat.setText(totalMs > 0L
-            ? "🎬 " + RecordingProgressTracker.formatDuration(totalMs / 1_000L)
-            : "🎬 Waiting...");
+        holder.durationStat.setText("⏱ " + RecordingProgressTracker.formatDuration(sessionDurationSeconds));
         boolean showStartingSize = bytesRec <= 0L && recording.isActive() && sessionDurationSeconds < 10L;
         holder.sizeStat.setText(showStartingSize ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
@@ -520,16 +518,26 @@ public class RecordingAdapter extends BaseAdapter {
             holder.progressBar.setProgressFraction(recording.getProgressPercent() / 100f);
         }
 
-        long sessionSeconds = recording.getStartedAt() > 0L ? Math.max(0L, (now - recording.getStartedAt()) / 1_000L) : 0L;
-        long behindMs = streamAgeMs > 0L ? Math.max(0L, streamAgeMs - totalRecordedMs) : 0L;
+        long behindMs = estimateBehindLiveMs(recording, now, streamAgeMs);
         String behindLabel = behindMs < 60_000L
             ? "📡 ~" + Math.max(0L, behindMs / 1_000L) + "s behind (near live)"
             : "📡 Behind: " + RecordingProgressTracker.formatDuration(behindMs / 1_000L);
-        holder.progressLabel.setText(behindLabel
-            + " · 🎬 Recorded: " + RecordingProgressTracker.formatDuration(totalRecordedSeconds)
-            + " · ⏱ Session: " + RecordingProgressTracker.formatDuration(sessionSeconds));
+        holder.progressLabel.setText(behindLabel);
     }
 
+
+    private long estimateBehindLiveMs(RecordingItem recording, long now, long streamAgeMs) {
+        if (recording == null || streamAgeMs <= 0L) {
+            return 0L;
+        }
+
+        long recordedMs = Math.max(0L, recording.getCombinedTotalRecordedDurationMs());
+        if (recordedMs <= 0L && recording.getStartedAt() > 0L) {
+            recordedMs = Math.max(0L, now - recording.getStartedAt());
+        }
+
+        return Math.max(0L, streamAgeMs - recordedMs);
+    }
 
     private long estimateDisplayedRecordedMs(RecordingItem recording, long now) {
         if (recording == null) {
