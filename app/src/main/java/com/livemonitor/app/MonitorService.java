@@ -1149,12 +1149,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     continue;
                 }
 
-                channel.markLiveDetected(liveInfo.videoId, liveInfo.videoUrl);
-                storage.upsertChannel(channel);
-                notificationHelper.showLiveDetectedNotification(channel);
-                notificationHelper.showChannelMonitoringNotification(channel);
+                ChannelItem latestBeforeRecording = storage.findChannelById(channelId);
+                if (latestBeforeRecording == null || !latestBeforeRecording.shouldMonitor() || !activeLoops.containsKey(channelId)) {
+                    activeLoops.remove(channelId);
+                    break;
+                }
+
+                latestBeforeRecording.markLiveDetected(liveInfo.videoId, liveInfo.videoUrl);
+                storage.upsertChannel(latestBeforeRecording);
+                notificationHelper.showLiveDetectedNotification(latestBeforeRecording);
+                notificationHelper.showChannelMonitoringNotification(latestBeforeRecording);
                 broadcastChannelUpdated("Live detected.");
-                startRecording(channel, liveInfo);
+                startRecording(latestBeforeRecording, liveInfo);
                 sleep(settings.getPollIntervalMillis());
             } catch (Exception e) {
                 ChannelItem latest = storage.findChannelById(channelId);
@@ -1169,6 +1175,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (channel == null || liveInfo == null || activeRecordings.containsKey(channel.getId())) {
             return;
         }
+
+        ChannelItem latestChannel = storage.findChannelById(channel.getId());
+        if (latestChannel == null || !latestChannel.shouldMonitor() || !activeLoops.containsKey(latestChannel.getId())) {
+            if (latestChannel != null) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_SERVICE,
+                    latestChannel,
+                    "Recording start skipped because channel monitoring is paused or stopped.",
+                    "videoId=" + liveInfo.videoId
+                );
+            }
+            return;
+        }
+
+        channel = latestChannel;
 
         if (!ensureRecordingStorageAvailable(channel, MIN_FREE_BYTES_BEFORE_RECORDING)) {
             return;
