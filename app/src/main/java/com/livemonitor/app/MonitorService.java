@@ -1,5 +1,7 @@
 package com.livemonitor.app;
 
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.net.Uri;
@@ -7,6 +9,7 @@ import android.provider.DocumentsContract;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -56,6 +59,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
     private static final long MISSED_STREAM_OUTAGE_MIN_MILLIS = 2L * 60L * 1_000L;
+    public static final String ACTION_KEEP_ALIVE_PING = "com.livemonitor.app.ACTION_KEEP_ALIVE_PING";
+    private static final int KEEP_ALIVE_REQUEST_CODE = 1001;
+    private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
     private AppStorage storage;
@@ -91,6 +98,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean ytDlpExecutableReady = false;
     private volatile boolean youtubedlAndroidReady = false;
     private volatile boolean youtubedlAndroidUpdateAttempted = false;
+    private volatile long networkLostAtMillis = 0L;
+    private volatile long lastOutageDiagnosticLogAtMillis = 0L;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -126,6 +135,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         networkMonitor.start();
         progressTracker.start();
         networkAvailable = networkMonitor.isConnectedNow();
+        acquireWakeLock();
+        scheduleKeepAlivePing();
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
@@ -229,6 +240,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             handlePauseRecording(intent);
         } else if (LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action)) {
             handleResumeRecording(intent);
+        } else if (ACTION_KEEP_ALIVE_PING.equals(action)) {
+            scheduleKeepAlivePing();
         } else if (LiveMonitorActions.ACTION_STOP_ALL.equals(action)
             || LiveMonitorActions.LEGACY_ACTION_STOP.equals(action)) {
             executor.execute(this::stopAll);
@@ -384,6 +397,70 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return null;
     }
 
+    private void detachRecordingFromActiveState(RecordingItem recording, String channelId) {
+        if (recording != null) {
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(recording.getChannelId());
+            progressTracker.untrack(recording);
+        }
+
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
+    }
+
+    private boolean shouldAbortRecorderRestartForTerminalState(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String context
+    ) {
+        if (recording == null || isBlank(recording.getId())) {
+            return true;
+        }
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        if (latest != null) {
+            recording = latest;
+        }
+
+        String status = recording.getStatus();
+        boolean terminalOrFinalizing = finalizingRecordingIds.contains(recording.getId())
+            || finalizedRecordingIds.contains(recording.getId())
+            || RecordingItem.STATUS_COMPLETED.equals(status)
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(status)
+            || RecordingItem.STATUS_STOPPED_BY_SYSTEM.equals(status)
+            || RecordingItem.STATUS_FAILED.equals(status)
+            || RecordingItem.STATUS_RECOVERABLE.equals(status);
+
+        if (!terminalOrFinalizing) {
+            return false;
+        }
+
+        detachRecordingFromActiveState(recording, channelId);
+
+        if (channel != null) {
+            channel.markRecordingFinished();
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Recorder restart skipped because recording is already finalizing or terminal.",
+            "recordingId=" + recording.getId()
+                + ", status=" + status
+                + ", finalizing=" + finalizingRecordingIds.contains(recording.getId())
+                + ", finalized=" + finalizedRecordingIds.contains(recording.getId())
+                + ", context=" + nullToEmpty(context)
+        );
+        broadcastRecordingUpdated("Recording finalization is already in progress.");
+        return true;
+    }
+
     private void handleStopChannel(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
         if (channel == null) return;
@@ -437,6 +514,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (finalizingRecordingIds.add(recordingId)) {
             return false;
         }
+
+        RecordingItem recording = storage.findRecordingById(recordingId);
+        if (recording != null) {
+            detachRecordingFromActiveState(recording, recording.getChannelId());
+        }
+
         log(
             LogItem.LEVEL_INFO,
             LogItem.SOURCE_RECORDER,
@@ -1157,6 +1240,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             channelRateLimitCooldownUntil.remove(channelId);
 
             if (!networkAvailable) {
+                logNetworkOutageDiagnosticIfDue();
                 channel.markPausedByNetwork("Waiting for internet connection.");
                 storage.upsertChannel(channel);
                 notificationHelper.showChannelMonitoringNotification(channel);
@@ -1214,6 +1298,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 startRecording(latestBeforeRecording, liveInfo);
                 sleep(settings.getPollIntervalMillis());
             } catch (Exception e) {
+                if (isNetworkResolutionError(e)) {
+                    logNetworkOutageDiagnosticIfDue();
+                }
                 ChannelItem latest = storage.findChannelById(channelId);
                 if (latest != null) handleRetry(latest, e.getMessage());
             }
@@ -2438,44 +2525,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        RecordingItem recording = storage.findRecordingById(recordingId);
-
-        if (recording == null || !recording.isActive()) {
+        if (skipDuplicateFinalizationRequest(recordingId, null)) {
             return;
         }
 
-        String channelId = recording.getChannelId();
-        ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+        try {
+            RecordingItem recording = storage.findRecordingById(recordingId);
 
-        activeRecordings.remove(recording.getId());
-        if (!isBlank(channelId)) {
-            activeRecordings.remove(channelId);
+            if (recording == null || !recording.isActive()) {
+                return;
+            }
+
+            String channelId = recording.getChannelId();
+            ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+
+            detachRecordingFromActiveState(recording, channelId);
+            cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
+            waitForRecordingFileAfterCancellation(recording);
+
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            RecordingItem toSave = latest == null ? recording : latest;
+            toSave.setDiagnosticMessage(reason);
+            storage.upsertRecording(toSave);
+            boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
+
+            detachRecordingFromActiveState(toSave, channelId);
+
+            if (channel != null) {
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            log(
+                saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
+                "recordingId=" + recordingId + ", reason=" + reason
+            );
+            broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
+        } finally {
+            finalizingRecordingIds.remove(recordingId);
         }
-        progressTracker.untrack(recording);
-        cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
-        waitForRecordingFileAfterCancellation(recording);
-
-        RecordingItem latest = storage.findRecordingById(recording.getId());
-        RecordingItem toSave = latest == null ? recording : latest;
-        toSave.setDiagnosticMessage(reason);
-        storage.upsertRecording(toSave);
-        boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
-
-        if (channel != null) {
-            channel.markRecordingFinished();
-            channel.markWaitingForLive();
-            storage.upsertChannel(channel);
-            notificationHelper.showChannelMonitoringNotification(channel);
-        }
-
-        log(
-            saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
-            "recordingId=" + recordingId + ", reason=" + reason
-        );
-        broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
     }
 
     private void executeYoutubedlAndroidRequest(
@@ -2853,15 +2946,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording = latest;
         }
 
-        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
-            storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording paused.");
+        if (shouldAbortRecorderRestartForTerminalState(
+            channelId,
+            channel,
+            recording,
+            "before FFmpeg fallback"
+        )) {
             return true;
         }
 
-        if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
             storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording stopped.");
+            broadcastRecordingUpdated("Recording paused.");
             return true;
         }
 
@@ -2898,7 +2994,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
             }
 
-            if (shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
+            if (shouldAbortRecorderRestartForTerminalState(
+                activeChannelId,
+                channel,
+                recording,
+                "after FFmpeg fallback stream resolution"
+            ) || shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
                 return true;
             }
 
@@ -6039,6 +6140,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public void onNetworkAvailable() {
         networkAvailable = true;
         long restoredAtMillis = System.currentTimeMillis();
+        long outageStartedAtMillis = networkLostAtMillis;
+        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_NETWORK, null,
+            "Internet connection restored.",
+            "wakeLock.isHeld=" + (wakeLock != null && wakeLock.isHeld())
+            + ", outageMillis=" + (outageStartedAtMillis > 0L ? restoredAtMillis - outageStartedAtMillis : 0L)
+        );
+        networkLostAtMillis = 0L;
+        lastOutageDiagnosticLogAtMillis = 0L;
         storage.saveNetworkRestoredAt(restoredAtMillis);
         long lostAtMillis = storage.loadNetworkLostAt();
         if (lostAtMillis > 0L) {
@@ -6077,7 +6186,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     @Override
     public void onNetworkLost() {
         networkAvailable = false;
-        storage.saveNetworkLostAt(System.currentTimeMillis());
+        networkLostAtMillis = System.currentTimeMillis();
+        lastOutageDiagnosticLogAtMillis = 0L;
+        storage.saveNetworkLostAt(networkLostAtMillis);
+        log(LogItem.LEVEL_WARNING, LogItem.SOURCE_NETWORK, null,
+            "Internet connection lost.",
+            "wakeLock.isHeld=" + (wakeLock != null && wakeLock.isHeld())
+            + ", serviceRunning=" + serviceRunning
+            + ", activeLoops=" + activeLoops.size()
+            + ", activeRecordings=" + activeRecordings.size()
+        );
 
         for (ChannelItem channel : storage.loadChannels()) {
             if (channel != null && channel.shouldMonitor()) {
@@ -6138,6 +6256,47 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         networkAvailable = connected;
     }
 
+    private void logNetworkOutageDiagnosticIfDue() {
+        long lostAtMillis = networkLostAtMillis;
+
+        if (lostAtMillis <= 0L) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long outageMillis = now - lostAtMillis;
+
+        if (outageMillis < 0L || now - lastOutageDiagnosticLogAtMillis < NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS) {
+            return;
+        }
+
+        lastOutageDiagnosticLogAtMillis = now;
+        log(LogItem.LEVEL_WARNING, LogItem.SOURCE_NETWORK, null,
+            "Network still unavailable.",
+            "outageMinutes=" + (outageMillis / 60_000L)
+            + ", wakeLock.isHeld=" + (wakeLock != null && wakeLock.isHeld())
+        );
+    }
+
+    private boolean isNetworkResolutionError(Throwable error) {
+        Throwable current = error;
+
+        while (current != null) {
+            if (current instanceof java.net.UnknownHostException) {
+                return true;
+            }
+
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(java.util.Locale.US).contains("unknownhost")) {
+                return true;
+            }
+
+            current = current.getCause();
+        }
+
+        return false;
+    }
+
     private void ensureForeground() {
         startForeground(
             NotificationHelper.SERVICE_NOTIFICATION_ID,
@@ -6152,6 +6311,51 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 notificationHelper.buildServiceNotification(activeLoops.size())
             );
         }
+    }
+
+    private void scheduleKeepAlivePing() {
+        AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+
+        if (alarmManager == null) {
+            return;
+        }
+
+        PendingIntent pendingIntent = buildKeepAlivePendingIntent();
+        long triggerAtMillis = SystemClock.elapsedRealtime() + KEEP_ALIVE_INTERVAL_MS;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            );
+        } else {
+            alarmManager.setExact(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            );
+        }
+    }
+
+    private void cancelKeepAlivePing() {
+        AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+
+        if (alarmManager != null) {
+            alarmManager.cancel(buildKeepAlivePendingIntent());
+        }
+    }
+
+    private PendingIntent buildKeepAlivePendingIntent() {
+        Intent intent = new Intent(this, KeepAliveReceiver.class);
+        intent.setAction(ACTION_KEEP_ALIVE_PING);
+
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+
+        return PendingIntent.getBroadcast(this, KEEP_ALIVE_REQUEST_CODE, intent, flags);
     }
 
     private void acquireWakeLock() {
@@ -6194,6 +6398,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         FFmpegRunner.cancel();
         YtDlpRunner.cancelAllRecordings();
         FFmpegKit.cancel();
+
+        cancelKeepAlivePing();
 
         if (progressTracker != null) progressTracker.stop();
         if (networkMonitor != null) networkMonitor.stop();
