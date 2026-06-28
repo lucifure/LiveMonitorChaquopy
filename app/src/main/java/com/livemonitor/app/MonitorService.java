@@ -397,6 +397,70 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return null;
     }
 
+    private void detachRecordingFromActiveState(RecordingItem recording, String channelId) {
+        if (recording != null) {
+            activeRecordings.remove(recording.getId());
+            activeRecordings.remove(recording.getChannelId());
+            progressTracker.untrack(recording);
+        }
+
+        if (!isBlank(channelId)) {
+            activeRecordings.remove(channelId);
+        }
+    }
+
+    private boolean shouldAbortRecorderRestartForTerminalState(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String context
+    ) {
+        if (recording == null || isBlank(recording.getId())) {
+            return true;
+        }
+
+        RecordingItem latest = storage.findRecordingById(recording.getId());
+        if (latest != null) {
+            recording = latest;
+        }
+
+        String status = recording.getStatus();
+        boolean terminalOrFinalizing = finalizingRecordingIds.contains(recording.getId())
+            || finalizedRecordingIds.contains(recording.getId())
+            || RecordingItem.STATUS_COMPLETED.equals(status)
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(status)
+            || RecordingItem.STATUS_STOPPED_BY_SYSTEM.equals(status)
+            || RecordingItem.STATUS_FAILED.equals(status)
+            || RecordingItem.STATUS_RECOVERABLE.equals(status);
+
+        if (!terminalOrFinalizing) {
+            return false;
+        }
+
+        detachRecordingFromActiveState(recording, channelId);
+
+        if (channel != null) {
+            channel.markRecordingFinished();
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Recorder restart skipped because recording is already finalizing or terminal.",
+            "recordingId=" + recording.getId()
+                + ", status=" + status
+                + ", finalizing=" + finalizingRecordingIds.contains(recording.getId())
+                + ", finalized=" + finalizedRecordingIds.contains(recording.getId())
+                + ", context=" + nullToEmpty(context)
+        );
+        broadcastRecordingUpdated("Recording finalization is already in progress.");
+        return true;
+    }
+
     private void handleStopChannel(Intent intent) {
         ChannelItem channel = getChannelFromIntent(intent);
         if (channel == null) return;
@@ -450,6 +514,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (finalizingRecordingIds.add(recordingId)) {
             return false;
         }
+
+        RecordingItem recording = storage.findRecordingById(recordingId);
+        if (recording != null) {
+            detachRecordingFromActiveState(recording, recording.getChannelId());
+        }
+
         log(
             LogItem.LEVEL_INFO,
             LogItem.SOURCE_RECORDER,
@@ -2455,44 +2525,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        RecordingItem recording = storage.findRecordingById(recordingId);
-
-        if (recording == null || !recording.isActive()) {
+        if (skipDuplicateFinalizationRequest(recordingId, null)) {
             return;
         }
 
-        String channelId = recording.getChannelId();
-        ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+        try {
+            RecordingItem recording = storage.findRecordingById(recordingId);
 
-        activeRecordings.remove(recording.getId());
-        if (!isBlank(channelId)) {
-            activeRecordings.remove(channelId);
+            if (recording == null || !recording.isActive()) {
+                return;
+            }
+
+            String channelId = recording.getChannelId();
+            ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
+
+            detachRecordingFromActiveState(recording, channelId);
+            cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
+            waitForRecordingFileAfterCancellation(recording);
+
+            RecordingItem latest = storage.findRecordingById(recording.getId());
+            RecordingItem toSave = latest == null ? recording : latest;
+            toSave.setDiagnosticMessage(reason);
+            storage.upsertRecording(toSave);
+            boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
+
+            detachRecordingFromActiveState(toSave, channelId);
+
+            if (channel != null) {
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            log(
+                saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
+                "recordingId=" + recordingId + ", reason=" + reason
+            );
+            broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
+        } finally {
+            finalizingRecordingIds.remove(recordingId);
         }
-        progressTracker.untrack(recording);
-        cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
-        waitForRecordingFileAfterCancellation(recording);
-
-        RecordingItem latest = storage.findRecordingById(recording.getId());
-        RecordingItem toSave = latest == null ? recording : latest;
-        toSave.setDiagnosticMessage(reason);
-        storage.upsertRecording(toSave);
-        boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
-
-        if (channel != null) {
-            channel.markRecordingFinished();
-            channel.markWaitingForLive();
-            storage.upsertChannel(channel);
-            notificationHelper.showChannelMonitoringNotification(channel);
-        }
-
-        log(
-            saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
-            "recordingId=" + recordingId + ", reason=" + reason
-        );
-        broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
     }
 
     private void executeYoutubedlAndroidRequest(
@@ -2870,15 +2946,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording = latest;
         }
 
-        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
-            storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording paused.");
+        if (shouldAbortRecorderRestartForTerminalState(
+            channelId,
+            channel,
+            recording,
+            "before FFmpeg fallback"
+        )) {
             return true;
         }
 
-        if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
+        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
             storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording stopped.");
+            broadcastRecordingUpdated("Recording paused.");
             return true;
         }
 
@@ -2915,7 +2994,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
             }
 
-            if (shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
+            if (shouldAbortRecorderRestartForTerminalState(
+                activeChannelId,
+                channel,
+                recording,
+                "after FFmpeg fallback stream resolution"
+            ) || shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
                 return true;
             }
 
