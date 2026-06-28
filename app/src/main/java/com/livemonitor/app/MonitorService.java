@@ -1619,6 +1619,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
 
+    private String describeYtDlpRetryPolicy(List<String> args) {
+        if (args == null || args.isEmpty()) {
+            return "";
+        }
+
+        return "retries=" + getYtDlpOptionValue(args, "--retries")
+            + ", fragmentRetries=" + getYtDlpOptionValue(args, "--fragment-retries")
+            + ", extractorRetries=" + getYtDlpOptionValue(args, "--extractor-retries")
+            + ", fileAccessRetries=" + getYtDlpOptionValue(args, "--file-access-retries");
+    }
+
+    private String getYtDlpOptionValue(List<String> args, String option) {
+        if (args == null || isBlank(option)) {
+            return "";
+        }
+
+        for (int i = 0; i < args.size() - 1; i++) {
+            if (option.equals(args.get(i))) {
+                return nullToEmpty(args.get(i + 1));
+            }
+        }
+
+        return "";
+    }
+
     private boolean canRunYtDlpProcessRecorder() {
         if (remoteConfig == null) {
             return false;
@@ -1760,7 +1785,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + attempt.playerClient
                     + ", "
                     + attempt.describe()
-                    + ", retries=infinite, command="
+                    + ", retryPolicy="
+                    + describeYtDlpRetryPolicy(attempt.args)
+                    + ", command="
                     + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 

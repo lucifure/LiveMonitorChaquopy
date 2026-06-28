@@ -21,6 +21,8 @@ import java.util.List;
 public class RecorderCommandBuilder {
 
     public static final String EXTRACTOR_ARGS_NONE = "__live_monitor_no_extractor_args__";
+    private static final String LIVE_PRIMARY_RETRY_COUNT = "10";
+    private static final String LIVE_PRIMARY_FRAGMENT_RETRY_COUNT = "3";
 
     /**
      * Builds yt-dlp style arguments for recording a live video URL to a TS file.
@@ -252,14 +254,19 @@ public class RecorderCommandBuilder {
         args.add("--hls-use-mpegts");
         args.add("--no-part");
         args.add("--skip-unavailable-fragments");
+        /*
+         * Keep retries bounded. YouTube returns repeated 404s for the next
+         * unavailable fragment when a live stream has ended; infinite fragment
+         * retries can keep the recorder alive after the archive is complete.
+         */
         args.add("--retries");
-        args.add("infinite");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--fragment-retries");
-        args.add("infinite");
+        args.add(LIVE_PRIMARY_FRAGMENT_RETRY_COUNT);
         args.add("--extractor-retries");
-        args.add("infinite");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--file-access-retries");
-        args.add("infinite");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--retry-sleep");
         args.add("5");
         args.add("--socket-timeout");
