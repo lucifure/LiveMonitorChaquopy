@@ -48,10 +48,13 @@ public class NotificationHelper {
         NotificationChannel serviceChannel = new NotificationChannel(
             CHANNEL_SERVICE,
             "Live Monitor Service",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_HIGH
         );
-        serviceChannel.setDescription("Keeps Live Monitor running while channels are monitored.");
-        serviceChannel.setShowBadge(false);
+        serviceChannel.setDescription("Live stream monitoring and recording");
+        serviceChannel.enableLights(true);
+        serviceChannel.enableVibration(false);
+        serviceChannel.setShowBadge(true);
+        serviceChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
 
         NotificationChannel monitoringChannel = new NotificationChannel(
             CHANNEL_MONITORING,
@@ -94,8 +97,9 @@ public class NotificationHelper {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build();
     }
 
@@ -120,8 +124,9 @@ public class NotificationHelper {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build();
     }
 
