@@ -66,12 +66,20 @@ public class RecordingFileManager {
     }
 
     public File createTempTsFile(ChannelItem channel, String videoId) {
-        String fileName = buildBaseFileName(channel, videoId) + ".ts";
+        return createTempTsFile(channel, videoId, "");
+    }
+
+    public File createTempTsFile(ChannelItem channel, String videoId, String liveTitle) {
+        String fileName = buildBaseFileName(channel, videoId, liveTitle) + ".ts";
         return new File(getTempDirectory(), fileName);
     }
 
     public File createFinalMp4File(ChannelItem channel, String videoId) {
-        String fileName = buildBaseFileName(channel, videoId) + ".mp4";
+        return createFinalMp4File(channel, videoId, "");
+    }
+
+    public File createFinalMp4File(ChannelItem channel, String videoId, String liveTitle) {
+        String fileName = buildBaseFileName(channel, videoId, liveTitle) + ".mp4";
         return new File(getCompletedDirectory(), fileName);
     }
 
@@ -90,13 +98,27 @@ public class RecordingFileManager {
             settings = storage.loadSettings();
         }
 
-        File tempTsFile = createTempTsFile(channel, videoId);
-        File finalMp4File = createFinalMp4File(channel, videoId);
+        return createRecordingItem(channel, videoId, videoUrl, "", settings);
+    }
+
+    public RecordingItem createRecordingItem(
+        ChannelItem channel,
+        String videoId,
+        String videoUrl,
+        String liveTitle,
+        AppSettings settings
+    ) {
+        if (settings == null) {
+            settings = storage.loadSettings();
+        }
+
+        File tempTsFile = createTempTsFile(channel, videoId, liveTitle);
+        File finalMp4File = createFinalMp4File(channel, videoId, liveTitle);
 
         String channelId = channel == null ? "" : channel.getId();
         String channelTitle = channel == null ? "" : channel.getDisplayTitle();
         String channelUrl = channel == null ? "" : channel.getUrl();
-        String title = buildHumanTitle(channel, videoId);
+        String title = isBlank(liveTitle) ? buildHumanTitle(channel, videoId) : liveTitle.trim();
 
         return new RecordingItem(
             channelId,
@@ -307,11 +329,17 @@ public class RecordingFileManager {
     }
 
     public static String buildBaseFileName(ChannelItem channel, String videoId) {
-        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(new Date());
-        String time = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
+        return buildBaseFileName(channel, videoId, "");
+    }
 
-        String title = channel == null ? "Live Stream" : channel.getDisplayTitle();
-        String safeTitle = sanitizeFileName(title, 60);
+    public static String buildBaseFileName(ChannelItem channel, String videoId, String liveTitle) {
+        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(new Date());
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+
+        String title = !isBlank(liveTitle)
+            ? liveTitle.trim()
+            : channel == null ? "Live Stream" : channel.getDisplayTitle();
+        String safeTitle = sanitizeFileName(title, 80);
 
         if (isBlank(safeTitle)) {
             safeTitle = isBlank(videoId) ? "Live_Stream" : sanitizeFileName(videoId, 60);

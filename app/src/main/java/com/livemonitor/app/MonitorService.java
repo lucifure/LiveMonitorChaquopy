@@ -1338,6 +1338,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             channel,
             liveInfo.videoId,
             liveInfo.videoUrl,
+            liveInfo.title,
             settings
         );
 

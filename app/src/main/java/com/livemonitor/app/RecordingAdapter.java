@@ -306,9 +306,9 @@ public class RecordingAdapter extends BaseAdapter {
         holder.details.setText(buildDetails(recording));
         long bytesRec = recording.getBytesRecorded();
         long totalMs = estimateDisplayedRecordedMs(recording, System.currentTimeMillis());
-        long sessionDurationSeconds = recording.getStartedAt() > 0L
+        long sessionDurationSeconds = recording.isActive() && recording.getStartedAt() > 0L
             ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1_000L)
-            : 0L;
+            : Math.max(0L, totalMs / 1_000L);
         holder.durationStat.setText("⏱ " + RecordingProgressTracker.formatDuration(sessionDurationSeconds));
         boolean showStartingSize = bytesRec <= 0L && recording.isActive() && sessionDurationSeconds < 10L;
         holder.sizeStat.setText(showStartingSize ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
