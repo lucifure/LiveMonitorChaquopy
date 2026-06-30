@@ -218,12 +218,26 @@ public class RecordingAdapter extends BaseAdapter {
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        FrameLayout thumbnailFrame = new FrameLayout(context);
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(116), dp(66));
+        thumbnailParams.rightMargin = dp(12);
+
         ImageView thumbnail = new ImageView(context);
         thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
         thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
-        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(116), dp(66));
-        thumbnailParams.rightMargin = dp(12);
-        topRow.addView(thumbnail, thumbnailParams);
+        thumbnailFrame.addView(thumbnail, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        TextView thumbnailDuration = new TextView(context);
+        thumbnailDuration.setTextColor(Color.WHITE);
+        thumbnailDuration.setTextSize(12);
+        thumbnailDuration.setTypeface(Typeface.DEFAULT_BOLD);
+        thumbnailDuration.setGravity(Gravity.CENTER);
+        thumbnailDuration.setPadding(dp(6), dp(2), dp(6), dp(2));
+        thumbnailDuration.setBackground(rounded(Color.argb(190, 0, 0, 0), dp(3), Color.TRANSPARENT));
+        FrameLayout.LayoutParams durationParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.BOTTOM);
+        durationParams.setMargins(0, 0, dp(6), dp(5));
+        thumbnailFrame.addView(thumbnailDuration, durationParams);
+        topRow.addView(thumbnailFrame, thumbnailParams);
 
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
@@ -357,6 +371,8 @@ public class RecordingAdapter extends BaseAdapter {
         holder.pauseResumeButton = pauseResumeButton;
         holder.deleteButton = deleteButton;
         holder.thumbnail = thumbnail;
+        holder.thumbnailFrame = thumbnailFrame;
+        holder.thumbnailDuration = thumbnailDuration;
 
         return holder;
     }
@@ -373,6 +389,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.openButton.setVisibility(View.GONE);
             holder.pauseResumeButton.setVisibility(View.GONE);
             holder.deleteButton.setVisibility(View.GONE);
+            if (holder.thumbnailDuration != null) holder.thumbnailDuration.setVisibility(View.GONE);
             return;
         }
 
@@ -524,11 +541,14 @@ public class RecordingAdapter extends BaseAdapter {
         holder.openButton.setVisibility(downloadedMode ? View.GONE : holder.openButton.getVisibility());
         holder.pauseResumeButton.setVisibility(downloadedMode ? View.GONE : holder.pauseResumeButton.getVisibility());
         holder.deleteButton.setVisibility(downloadedMode ? View.GONE : holder.deleteButton.getVisibility());
+        holder.thumbnailFrame.setVisibility(downloadedMode ? View.VISIBLE : View.GONE);
         holder.thumbnail.setVisibility(downloadedMode ? View.VISIBLE : View.GONE);
         if (downloadedMode) {
             bindThumbnail(holder.thumbnail, recording);
+            bindThumbnailDuration(holder.thumbnailDuration, recording);
         } else {
             holder.thumbnail.setImageDrawable(null);
+            holder.thumbnailDuration.setVisibility(View.GONE);
         }
         holder.title.setTextSize(downloadedMode ? 16 : 15);
         holder.subtitle.setText(recording.getDisplaySubtitle());
@@ -547,6 +567,16 @@ public class RecordingAdapter extends BaseAdapter {
         } catch (Exception ignored) {
             thumbnail.setImageDrawable(null);
         }
+    }
+
+    private void bindThumbnailDuration(TextView durationView, RecordingItem recording) {
+        if (durationView == null || recording == null) return;
+        long seconds = Math.max(0L, estimateDisplayedRecordedMs(recording, System.currentTimeMillis()) / 1_000L);
+        if (seconds <= 0L) {
+            seconds = Math.max(0L, recording.getDurationSeconds());
+        }
+        durationView.setText(RecordingProgressTracker.formatDuration(seconds));
+        durationView.setVisibility(seconds > 0L ? View.VISIBLE : View.GONE);
     }
 
     private String buildDownloadedSubtitle(RecordingItem recording) {
@@ -773,6 +803,8 @@ public class RecordingAdapter extends BaseAdapter {
         Button openButton;
         Button pauseResumeButton;
         Button deleteButton;
+        FrameLayout thumbnailFrame;
         ImageView thumbnail;
+        TextView thumbnailDuration;
     }
 }

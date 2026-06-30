@@ -1,5 +1,7 @@
 package com.livemonitor.app;
 
+import java.io.File;
+import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -183,6 +185,50 @@ public final class UiTextUtils {
         }
 
         return builder.toString();
+    }
+
+    public static String formatRecordingDetailsLikeMx(RecordingItem recording) {
+        if (recording == null) {
+            return "";
+        }
+
+        String path = defaultIfBlank(recording.getBestPlayablePath(), recording.getFinalMp4Path());
+        File file = path.trim().isEmpty() ? null : new File(path);
+        String fileName = file == null ? recording.getDisplayTitle() : file.getName();
+        String location = file == null || file.getParent() == null ? "Unknown" : file.getParent();
+        long bytes = file != null && file.exists() ? file.length() : recording.getBytesRecorded();
+        long date = file != null && file.exists() ? file.lastModified() : recording.getFinishedAt();
+        if (date <= 0L) {
+            date = recording.getUpdatedAt();
+        }
+
+        StringBuilder builder = new StringBuilder();
+        builder.append(shortenMiddle(fileName, 34));
+        builder.append("\n\nFile\n");
+        builder.append("File        ").append(fileName).append("\n");
+        builder.append("Location    ").append(location).append("\n");
+        builder.append("Size        ").append(RecordingProgressTracker.formatBytes(bytes));
+        builder.append(" (").append(NumberFormat.getInstance(Locale.US).format(bytes)).append(" bytes)\n");
+        builder.append("Date        ").append(formatLongDate(date)).append("\n\n");
+        builder.append("Media\n");
+        builder.append("Format      ").append(formatMediaType(path));
+        return builder.toString();
+    }
+
+    private static String formatLongDate(long timestamp) {
+        if (timestamp <= 0L) {
+            return "Unknown";
+        }
+        SimpleDateFormat format = new SimpleDateFormat("d MMMM yyyy 'at' h:mm a", Locale.US);
+        return format.format(new Date(timestamp)).replace("AM", "am").replace("PM", "pm");
+    }
+
+    private static String formatMediaType(String path) {
+        String lower = path == null ? "" : path.toLowerCase(Locale.US);
+        if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "MPEG-4";
+        if (lower.endsWith(".ts")) return "MPEG-TS";
+        if (lower.endsWith(".mkv")) return "Matroska";
+        return "Video";
     }
 
     public static String emptyIfNull(String value) {
