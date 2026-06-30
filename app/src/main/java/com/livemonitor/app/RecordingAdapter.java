@@ -3,6 +3,9 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.ThumbnailUtils;
 import android.provider.MediaStore;
 import android.graphics.Typeface;
@@ -19,8 +22,10 @@ import android.widget.TextView;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -58,6 +63,7 @@ public class RecordingAdapter extends BaseAdapter {
     private Listener listener;
     private Mode mode;
     private final Set<String> selectedRecordingIds = new HashSet<>();
+    private final Map<String, Long> mediaDurationCacheMs = new HashMap<>();
 
     public RecordingAdapter(Context context) {
         this.context = context;
@@ -77,6 +83,7 @@ public class RecordingAdapter extends BaseAdapter {
     public void setRecordings(List<RecordingItem> newRecordings) {
         recordings.clear();
         selectedRecordingIds.clear();
+        mediaDurationCacheMs.clear();
 
         if (newRecordings != null) {
             recordings.addAll(newRecordings);
@@ -218,12 +225,26 @@ public class RecordingAdapter extends BaseAdapter {
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        FrameLayout thumbnailFrame = new FrameLayout(context);
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(116), dp(66));
+        thumbnailParams.rightMargin = dp(12);
+
         ImageView thumbnail = new ImageView(context);
         thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
         thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
-        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(116), dp(66));
-        thumbnailParams.rightMargin = dp(12);
-        topRow.addView(thumbnail, thumbnailParams);
+        thumbnailFrame.addView(thumbnail, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        TextView thumbnailDuration = new TextView(context);
+        thumbnailDuration.setTextColor(Color.WHITE);
+        thumbnailDuration.setTextSize(12);
+        thumbnailDuration.setTypeface(Typeface.DEFAULT_BOLD);
+        thumbnailDuration.setGravity(Gravity.CENTER);
+        thumbnailDuration.setPadding(dp(6), dp(2), dp(6), dp(2));
+        thumbnailDuration.setBackground(rounded(Color.argb(190, 0, 0, 0), dp(3), Color.TRANSPARENT));
+        FrameLayout.LayoutParams durationParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.BOTTOM);
+        durationParams.setMargins(0, 0, dp(6), dp(5));
+        thumbnailFrame.addView(thumbnailDuration, durationParams);
+        topRow.addView(thumbnailFrame, thumbnailParams);
 
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
@@ -357,6 +378,8 @@ public class RecordingAdapter extends BaseAdapter {
         holder.pauseResumeButton = pauseResumeButton;
         holder.deleteButton = deleteButton;
         holder.thumbnail = thumbnail;
+        holder.thumbnailFrame = thumbnailFrame;
+        holder.thumbnailDuration = thumbnailDuration;
 
         return holder;
     }
@@ -373,6 +396,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.openButton.setVisibility(View.GONE);
             holder.pauseResumeButton.setVisibility(View.GONE);
             holder.deleteButton.setVisibility(View.GONE);
+            if (holder.thumbnailDuration != null) holder.thumbnailDuration.setVisibility(View.GONE);
             return;
         }
 
@@ -524,11 +548,14 @@ public class RecordingAdapter extends BaseAdapter {
         holder.openButton.setVisibility(downloadedMode ? View.GONE : holder.openButton.getVisibility());
         holder.pauseResumeButton.setVisibility(downloadedMode ? View.GONE : holder.pauseResumeButton.getVisibility());
         holder.deleteButton.setVisibility(downloadedMode ? View.GONE : holder.deleteButton.getVisibility());
+        holder.thumbnailFrame.setVisibility(downloadedMode ? View.VISIBLE : View.GONE);
         holder.thumbnail.setVisibility(downloadedMode ? View.VISIBLE : View.GONE);
         if (downloadedMode) {
             bindThumbnail(holder.thumbnail, recording);
+            bindThumbnailDuration(holder.thumbnailDuration, recording);
         } else {
             holder.thumbnail.setImageDrawable(null);
+            holder.thumbnailDuration.setVisibility(View.GONE);
         }
         holder.title.setTextSize(downloadedMode ? 16 : 15);
         holder.subtitle.setText(recording.getDisplaySubtitle());
@@ -549,9 +576,85 @@ public class RecordingAdapter extends BaseAdapter {
         }
     }
 
+    private void bindThumbnailDuration(TextView durationView, RecordingItem recording) {
+        if (durationView == null || recording == null) return;
+        long seconds = getPlayableFileDurationSeconds(recording);
+        durationView.setText(RecordingProgressTracker.formatDuration(seconds));
+        durationView.setVisibility(seconds > 0L ? View.VISIBLE : View.GONE);
+    }
+
+    private long getPlayableFileDurationSeconds(RecordingItem recording) {
+        if (recording == null) {
+            return 0L;
+        }
+        long mediaDurationMs = readMediaDurationMs(recording.getBestPlayablePath());
+        if (mediaDurationMs > 0L) {
+            return Math.max(1L, mediaDurationMs / 1_000L);
+        }
+        return Math.max(0L, recording.getDurationSeconds());
+    }
+
+    private long readMediaDurationMs(String path) {
+        if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
+            return 0L;
+        }
+
+        String normalizedPath = path.trim();
+        Long cachedDuration = mediaDurationCacheMs.get(normalizedPath);
+        if (cachedDuration != null) {
+            return cachedDuration;
+        }
+
+        long durationMs = readExtractorDurationMs(normalizedPath);
+        if (durationMs <= 0L) {
+            durationMs = readMetadataRetrieverDurationMs(normalizedPath);
+        }
+        mediaDurationCacheMs.put(normalizedPath, durationMs);
+        return durationMs;
+    }
+
+    private long readExtractorDurationMs(String path) {
+        MediaExtractor extractor = new MediaExtractor();
+        try {
+            extractor.setDataSource(path);
+            long maxDurationUs = 0L;
+            for (int i = 0; i < extractor.getTrackCount(); i++) {
+                MediaFormat format = extractor.getTrackFormat(i);
+                if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                    maxDurationUs = Math.max(maxDurationUs, format.getLong(MediaFormat.KEY_DURATION));
+                }
+            }
+            return maxDurationUs > 0L ? maxDurationUs / 1_000L : 0L;
+        } catch (Exception ignored) {
+            return 0L;
+        } finally {
+            extractor.release();
+        }
+    }
+
+    private long readMetadataRetrieverDurationMs(String path) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(path);
+            String duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            if (duration == null || duration.trim().isEmpty()) {
+                return 0L;
+            }
+            return Math.max(0L, Long.parseLong(duration.trim()));
+        } catch (Exception ignored) {
+            return 0L;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+                // Ignore cleanup failures.
+            }
+        }
+    }
+
     private String buildDownloadedSubtitle(RecordingItem recording) {
         if (recording == null) return "";
-        String duration = RecordingProgressTracker.formatDuration(Math.max(0L, estimateDisplayedRecordedMs(recording, System.currentTimeMillis()) / 1_000L));
+        String duration = RecordingProgressTracker.formatDuration(getPlayableFileDurationSeconds(recording));
         String size = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
         return duration + " • " + size + " • " + recording.getQuality();
     }
@@ -773,6 +876,8 @@ public class RecordingAdapter extends BaseAdapter {
         Button openButton;
         Button pauseResumeButton;
         Button deleteButton;
+        FrameLayout thumbnailFrame;
         ImageView thumbnail;
+        TextView thumbnailDuration;
     }
 }
