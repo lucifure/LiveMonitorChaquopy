@@ -105,6 +105,17 @@ public class RecordingAdapter extends BaseAdapter {
         notifyDataSetChanged();
     }
 
+    public void selectAll() {
+        selectedRecordingIds.clear();
+        for (RecordingItem recording : recordings) {
+            if (recording != null && recording.getId() != null) {
+                selectedRecordingIds.add(recording.getId());
+            }
+        }
+        notifySelectionChanged();
+        notifyDataSetChanged();
+    }
+
     public boolean hasSelection() {
         return !selectedRecordingIds.isEmpty();
     }
@@ -207,6 +218,13 @@ public class RecordingAdapter extends BaseAdapter {
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        ImageView thumbnail = new ImageView(context);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(116), dp(66));
+        thumbnailParams.rightMargin = dp(12);
+        topRow.addView(thumbnail, thumbnailParams);
+
         TextView title = new TextView(context);
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
@@ -221,13 +239,6 @@ public class RecordingAdapter extends BaseAdapter {
                 1f
             )
         );
-
-        ImageView thumbnail = new ImageView(context);
-        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
-        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(96), dp(54));
-        thumbnailParams.leftMargin = dp(10);
-        topRow.addView(thumbnail, thumbnailParams);
 
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
@@ -337,6 +348,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.durationStat = durationStat;
         holder.sizeStat = sizeStat;
         holder.qualityStat = qualityStat;
+        holder.statsRow = statsRow;
         holder.savedTo = savedTo;
         holder.progressBar = progressBar;
         holder.progressLabel = progressLabel;
@@ -503,6 +515,8 @@ public class RecordingAdapter extends BaseAdapter {
         holder.root.setForeground(selected ? rounded(Color.argb(75, 93, 216, 232), dp(12), Color.rgb(93, 216, 232)) : null);
         holder.statusBadge.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
         holder.details.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.subtitle.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.statsRow.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
         holder.savedTo.setVisibility(downloadedMode ? View.GONE : holder.savedTo.getVisibility());
         holder.progressBar.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
         holder.progressLabel.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
@@ -515,8 +529,8 @@ public class RecordingAdapter extends BaseAdapter {
         } else {
             holder.thumbnail.setImageDrawable(null);
         }
-        holder.title.setTextSize(downloadedMode ? 17 : 15);
-        holder.subtitle.setText(downloadedMode ? buildDownloadedSubtitle(recording) : recording.getDisplaySubtitle());
+        holder.title.setTextSize(downloadedMode ? 16 : 15);
+        holder.subtitle.setText(recording.getDisplaySubtitle());
     }
 
     private void bindThumbnail(ImageView thumbnail, RecordingItem recording) {
@@ -751,6 +765,7 @@ public class RecordingAdapter extends BaseAdapter {
         TextView durationStat;
         TextView sizeStat;
         TextView qualityStat;
+        LinearLayout statsRow;
         TextView savedTo;
         RecordingLagProgressView progressBar;
         TextView progressLabel;
