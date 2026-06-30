@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.media.MediaMetadataRetriever;
 import android.media.ThumbnailUtils;
 import android.provider.MediaStore;
 import android.graphics.Typeface;
@@ -571,17 +572,48 @@ public class RecordingAdapter extends BaseAdapter {
 
     private void bindThumbnailDuration(TextView durationView, RecordingItem recording) {
         if (durationView == null || recording == null) return;
-        long seconds = Math.max(0L, estimateDisplayedRecordedMs(recording, System.currentTimeMillis()) / 1_000L);
-        if (seconds <= 0L) {
-            seconds = Math.max(0L, recording.getDurationSeconds());
-        }
+        long seconds = getPlayableFileDurationSeconds(recording);
         durationView.setText(RecordingProgressTracker.formatDuration(seconds));
         durationView.setVisibility(seconds > 0L ? View.VISIBLE : View.GONE);
     }
 
+    private long getPlayableFileDurationSeconds(RecordingItem recording) {
+        if (recording == null) {
+            return 0L;
+        }
+        long mediaDurationMs = readMediaDurationMs(recording.getBestPlayablePath());
+        if (mediaDurationMs > 0L) {
+            return Math.max(1L, mediaDurationMs / 1_000L);
+        }
+        return Math.max(0L, recording.getDurationSeconds());
+    }
+
+    private long readMediaDurationMs(String path) {
+        if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
+            return 0L;
+        }
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(path);
+            String duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            if (duration == null || duration.trim().isEmpty()) {
+                return 0L;
+            }
+            return Math.max(0L, Long.parseLong(duration.trim()));
+        } catch (Exception ignored) {
+            return 0L;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+                // Ignore cleanup failures.
+            }
+        }
+    }
+
     private String buildDownloadedSubtitle(RecordingItem recording) {
         if (recording == null) return "";
-        String duration = RecordingProgressTracker.formatDuration(Math.max(0L, estimateDisplayedRecordedMs(recording, System.currentTimeMillis()) / 1_000L));
+        String duration = RecordingProgressTracker.formatDuration(getPlayableFileDurationSeconds(recording));
         String size = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
         return duration + " • " + size + " • " + recording.getQuality();
     }
