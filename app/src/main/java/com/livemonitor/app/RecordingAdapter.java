@@ -3,6 +3,8 @@ package com.livemonitor.app;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.ThumbnailUtils;
 import android.provider.MediaStore;
@@ -20,8 +22,10 @@ import android.widget.TextView;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -59,6 +63,7 @@ public class RecordingAdapter extends BaseAdapter {
     private Listener listener;
     private Mode mode;
     private final Set<String> selectedRecordingIds = new HashSet<>();
+    private final Map<String, Long> mediaDurationCacheMs = new HashMap<>();
 
     public RecordingAdapter(Context context) {
         this.context = context;
@@ -78,6 +83,7 @@ public class RecordingAdapter extends BaseAdapter {
     public void setRecordings(List<RecordingItem> newRecordings) {
         recordings.clear();
         selectedRecordingIds.clear();
+        mediaDurationCacheMs.clear();
 
         if (newRecordings != null) {
             recordings.addAll(newRecordings);
@@ -592,6 +598,41 @@ public class RecordingAdapter extends BaseAdapter {
         if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
             return 0L;
         }
+
+        String normalizedPath = path.trim();
+        Long cachedDuration = mediaDurationCacheMs.get(normalizedPath);
+        if (cachedDuration != null) {
+            return cachedDuration;
+        }
+
+        long durationMs = readExtractorDurationMs(normalizedPath);
+        if (durationMs <= 0L) {
+            durationMs = readMetadataRetrieverDurationMs(normalizedPath);
+        }
+        mediaDurationCacheMs.put(normalizedPath, durationMs);
+        return durationMs;
+    }
+
+    private long readExtractorDurationMs(String path) {
+        MediaExtractor extractor = new MediaExtractor();
+        try {
+            extractor.setDataSource(path);
+            long maxDurationUs = 0L;
+            for (int i = 0; i < extractor.getTrackCount(); i++) {
+                MediaFormat format = extractor.getTrackFormat(i);
+                if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                    maxDurationUs = Math.max(maxDurationUs, format.getLong(MediaFormat.KEY_DURATION));
+                }
+            }
+            return maxDurationUs > 0L ? maxDurationUs / 1_000L : 0L;
+        } catch (Exception ignored) {
+            return 0L;
+        } finally {
+            extractor.release();
+        }
+    }
+
+    private long readMetadataRetrieverDurationMs(String path) {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
             retriever.setDataSource(path);
