@@ -153,6 +153,11 @@ public class MainActivity extends AppCompatActivity {
             public void onDeleteClicked(RecordingItem recording) {
                 confirmStopDownload(recording);
             }
+
+            @Override
+            public void onSelectionChanged(int selectedCount) {
+                // Selection is only used by the Past Recordings screen.
+            }
         });
 
         setupMonitoringListHeader();

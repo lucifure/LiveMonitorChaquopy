@@ -33,6 +33,9 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     private TextView emptyView;
     private ListView listView;
     private TextView summaryView;
+    private LinearLayout selectionBar;
+    private TextView selectionSummaryView;
+    private Button selectAllButton;
     private android.widget.EditText searchInput;
     private List<RecordingItem> allCompleted;
 
@@ -62,6 +65,11 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             @Override
             public void onDeleteClicked(RecordingItem recording) {
                 confirmDeleteDownloadedFile(recording);
+            }
+
+            @Override
+            public void onSelectionChanged(int selectedCount) {
+                updateSelectionBar(selectedCount);
             }
         });
 
@@ -119,32 +127,49 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         });
         root.addView(searchInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
 
-        TextView filters = new TextView(this);
-        filters.setText("All   Completed   Failed   Stopped");
-        filters.setTextColor(getResources().getColor(R.color.lm_text_secondary));
-        filters.setPadding(0, dp(12), 0, dp(12));
-        root.addView(filters);
+        LinearLayout topActionRow = new LinearLayout(this);
+        topActionRow.setOrientation(LinearLayout.HORIZONTAL);
+        topActionRow.setGravity(Gravity.CENTER_VERTICAL);
+        topActionRow.setPadding(0, dp(10), 0, dp(8));
 
-        LinearLayout actionRow = new LinearLayout(this);
-        actionRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button refreshButton = new Button(this);
-        refreshButton.setAllCaps(false);
-        refreshButton.setText("Refresh");
-        styleCyberButton(refreshButton);
-        refreshButton.setOnClickListener(v -> refreshFiles());
-        Button openFolderButton = new Button(this);
-        openFolderButton.setAllCaps(false);
-        openFolderButton.setText("Open folder");
-        styleCyberButton(openFolderButton);
-        openFolderButton.setOnClickListener(v -> openSelectedFolder());
-        actionRow.addView(refreshButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        actionRow.addView(openFolderButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        LinearLayout.LayoutParams actionRowParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        actionRowParams.setMargins(0, 0, 0, dp(12));
-        root.addView(actionRow, actionRowParams);
+        selectionSummaryView = new TextView(this);
+        selectionSummaryView.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+        selectionSummaryView.setTextSize(18);
+
+        selectionBar = new LinearLayout(this);
+        selectionBar.setOrientation(LinearLayout.HORIZONTAL);
+        selectionBar.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+
+        Button detailsButton = new Button(this);
+        detailsButton.setAllCaps(false);
+        detailsButton.setText("ℹ️");
+        styleIconButton(detailsButton);
+        detailsButton.setOnClickListener(v -> showSelectedDetails());
+
+        Button deleteSelectedButton = new Button(this);
+        deleteSelectedButton.setAllCaps(false);
+        deleteSelectedButton.setText("🗑️");
+        styleIconButton(deleteSelectedButton);
+        deleteSelectedButton.setOnClickListener(v -> confirmDeleteSelectedFiles());
+
+        selectAllButton = new Button(this);
+        selectAllButton.setAllCaps(false);
+        selectAllButton.setText("✓");
+        styleIconButton(selectAllButton);
+        selectAllButton.setOnClickListener(v -> selectAllRecordings());
+
+        selectionBar.addView(detailsButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        deleteParams.leftMargin = dp(8);
+        selectionBar.addView(deleteSelectedButton, deleteParams);
+
+        topActionRow.addView(selectionSummaryView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        topActionRow.addView(selectionBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        selectAllParams.leftMargin = dp(8);
+        topActionRow.addView(selectAllButton, selectAllParams);
+        selectionBar.setVisibility(android.view.View.GONE);
+        root.addView(topActionRow);
 
         emptyView = new TextView(this);
         emptyView.setText("No history yet. Completed and stopped recordings will appear here.");
@@ -192,6 +217,16 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         button.setMinWidth(0);
     }
 
+    private void styleIconButton(Button button) {
+        button.setTextColor(getResources().getColor(R.color.lm_text_primary));
+        button.setTextSize(22);
+        button.setBackgroundResource(R.drawable.lm_glass_button_background);
+        button.setStateListAnimator(null);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(0, 0, 0, 0);
+    }
+
     private void refreshFiles() {
         storage.removeEmptyOrUnplayableFinishedRecordings();
 
@@ -212,6 +247,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             }
         }
         adapter.setRecordings(filtered);
+        updateSelectionBar(0);
     }
 
     private void updateSummary(List<RecordingItem> recordings) {
@@ -239,6 +275,67 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         } catch (Exception e) {
             Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void updateSelectionBar(int selectedCount) {
+        if (selectionBar == null || selectionSummaryView == null) {
+            return;
+        }
+        selectionSummaryView.setText(selectedCount > 0 ? selectedCount + " selected" : "");
+        selectionBar.setVisibility(selectedCount > 0 ? android.view.View.VISIBLE : android.view.View.GONE);
+    }
+
+    private void selectAllRecordings() {
+        adapter.selectAll();
+    }
+
+    private void showSelectedDetails() {
+        List<RecordingItem> selected = adapter.getSelectedRecordings();
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Long-press a recording to select it first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        StringBuilder message = new StringBuilder();
+        for (RecordingItem recording : selected) {
+            if (message.length() > 0) message.append("\n\n");
+            message.append(UiTextUtils.formatRecordingDetails(recording));
+        }
+        new AlertDialog.Builder(this)
+            .setTitle(selected.size() == 1 ? "Recording details" : "Selected recording details")
+            .setMessage(message.toString())
+            .setPositiveButton("OK", null)
+            .show();
+    }
+
+    private void confirmDeleteSelectedFiles() {
+        List<RecordingItem> selected = adapter.getSelectedRecordings();
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Long-press recordings to select them first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Delete selected files?")
+            .setMessage("Delete " + selected.size() + " selected recording file(s) from storage?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete", (dialog, which) -> deleteSelectedFiles(selected))
+            .show();
+    }
+
+    private void deleteSelectedFiles(List<RecordingItem> selected) {
+        boolean allDeleted = true;
+        for (RecordingItem recording : selected) {
+            if (recording == null) continue;
+            boolean finalDeleted = deletePathIfPresent(recording.getFinalMp4Path());
+            boolean tempDeleted = deletePathIfPresent(recording.getTempTsPath());
+            allDeleted = allDeleted && finalDeleted && tempDeleted;
+            if (finalDeleted && tempDeleted) {
+                storage.removeRecording(recording.getId());
+            }
+        }
+        adapter.clearSelection();
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Selected downloaded files deleted."));
+        refreshFiles();
+        Toast.makeText(this, allDeleted ? "Selected files deleted." : "Could not delete one or more files.", Toast.LENGTH_LONG).show();
     }
 
     private void confirmDeleteDownloadedFile(RecordingItem recording) {

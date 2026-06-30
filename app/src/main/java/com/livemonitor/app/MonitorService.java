@@ -4125,7 +4125,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 getContentResolver(),
                 parentUri,
                 source.getName().endsWith(".ts") ? "video/mp2t" : "video/mp4",
-                source.getName()
+                buildVisibleSelectedFolderFileName(source.getName())
             );
 
             if (destination == null) {
@@ -4155,6 +4155,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording.setSavedToDisplay("App storage (folder copy failed: " + normalizeErrorMessage(e) + ")");
             log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Folder copy failed.", copyDetails + ", error=" + normalizeErrorMessage(e));
         }
+    }
+
+
+    private String buildVisibleSelectedFolderFileName(String fileName) {
+        if (isBlank(fileName)) {
+            return "Live_Recording.mp4";
+        }
+        String cleaned = fileName.trim();
+        while (cleaned.startsWith(".") || cleaned.startsWith("_")) {
+            cleaned = cleaned.substring(1);
+        }
+        while (cleaned.toLowerCase(java.util.Locale.US).startsWith("trashed-")) {
+            cleaned = cleaned.substring("trashed-".length());
+            while (cleaned.startsWith(".") || cleaned.startsWith("_")) {
+                cleaned = cleaned.substring(1);
+            }
+        }
+        return isBlank(cleaned) ? "Live_Recording.mp4" : cleaned;
     }
 
     private String buildSelectedFolderCopyDetails(RecordingItem recording, File source, String folderName) {
