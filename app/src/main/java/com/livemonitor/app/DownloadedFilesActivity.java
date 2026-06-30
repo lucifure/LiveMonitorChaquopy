@@ -9,6 +9,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -36,6 +37,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     private LinearLayout selectionBar;
     private TextView selectionSummaryView;
     private Button selectAllButton;
+    private Button deselectAllButton;
     private android.widget.EditText searchInput;
     private List<RecordingItem> allCompleted;
 
@@ -91,15 +93,28 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
         root.setBackgroundResource(R.drawable.lm_screen_background);
 
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        titleRow.setPadding(0, 0, 0, dp(8));
+
+        ImageButton backButton = new ImageButton(this);
+        backButton.setImageResource(R.drawable.ic_arrow_back_24);
+        backButton.setColorFilter(getResources().getColor(R.color.lm_text_primary));
+        backButton.setBackgroundColor(Color.TRANSPARENT);
+        backButton.setContentDescription("Back");
+        backButton.setOnClickListener(v -> finish());
+        titleRow.addView(backButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
         TextView title = new TextView(this);
         title.setText("Past Recordings");
         title.setTextSize(30);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, 0, 0, dp(8));
         title.setTextColor(getResources().getColor(R.color.lm_text_primary));
+        titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         root.addView(
-            title,
+            titleRow,
             new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -118,7 +133,10 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         searchInput.setHintTextColor(getResources().getColor(R.color.lm_text_tertiary));
         searchInput.setTextSize(18);
         searchInput.setSingleLine(true);
+        searchInput.setGravity(Gravity.CENTER);
         searchInput.setPadding(dp(18), 0, dp(18), 0);
+        searchInput.setCompoundDrawablesWithIntrinsicBounds(0, 0, android.R.drawable.ic_menu_search, 0);
+        searchInput.setCompoundDrawablePadding(dp(10));
         searchInput.setBackgroundResource(R.drawable.lm_input_background);
         searchInput.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -154,9 +172,15 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
         selectAllButton = new Button(this);
         selectAllButton.setAllCaps(false);
-        selectAllButton.setText("✓");
-        styleIconButton(selectAllButton);
+        selectAllButton.setText("Select all");
+        styleCyberButton(selectAllButton);
         selectAllButton.setOnClickListener(v -> selectAllRecordings());
+
+        deselectAllButton = new Button(this);
+        deselectAllButton.setAllCaps(false);
+        deselectAllButton.setText("Deselect all");
+        styleCyberButton(deselectAllButton);
+        deselectAllButton.setOnClickListener(v -> adapter.clearSelection());
 
         selectionBar.addView(detailsButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(48), dp(48));
@@ -165,10 +189,15 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
         topActionRow.addView(selectionSummaryView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         topActionRow.addView(selectionBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(dp(104), dp(48));
         selectAllParams.leftMargin = dp(8);
         topActionRow.addView(selectAllButton, selectAllParams);
+        LinearLayout.LayoutParams deselectAllParams = new LinearLayout.LayoutParams(dp(124), dp(48));
+        deselectAllParams.leftMargin = dp(8);
+        topActionRow.addView(deselectAllButton, deselectAllParams);
         selectionBar.setVisibility(android.view.View.GONE);
+        selectAllButton.setVisibility(android.view.View.GONE);
+        deselectAllButton.setVisibility(android.view.View.GONE);
         root.addView(topActionRow);
 
         emptyView = new TextView(this);
@@ -281,8 +310,11 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         if (selectionBar == null || selectionSummaryView == null) {
             return;
         }
-        selectionSummaryView.setText(selectedCount > 0 ? selectedCount + " selected" : "");
-        selectionBar.setVisibility(selectedCount > 0 ? android.view.View.VISIBLE : android.view.View.GONE);
+        boolean hasSelection = selectedCount > 0;
+        selectionSummaryView.setText(hasSelection ? selectedCount + " selected" : "");
+        selectionBar.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
+        if (selectAllButton != null) selectAllButton.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
+        if (deselectAllButton != null) deselectAllButton.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
     }
 
     private void selectAllRecordings() {
@@ -298,7 +330,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         StringBuilder message = new StringBuilder();
         for (RecordingItem recording : selected) {
             if (message.length() > 0) message.append("\n\n");
-            message.append(UiTextUtils.formatRecordingDetails(recording));
+            message.append(UiTextUtils.formatRecordingDetailsLikeMx(recording));
         }
         new AlertDialog.Builder(this)
             .setTitle(selected.size() == 1 ? "Recording details" : "Selected recording details")
