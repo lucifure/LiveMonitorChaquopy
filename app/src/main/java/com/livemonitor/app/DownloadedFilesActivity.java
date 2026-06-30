@@ -33,6 +33,8 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     private TextView emptyView;
     private ListView listView;
     private TextView summaryView;
+    private LinearLayout selectionBar;
+    private TextView selectionSummaryView;
     private android.widget.EditText searchInput;
     private List<RecordingItem> allCompleted;
 
@@ -62,6 +64,11 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             @Override
             public void onDeleteClicked(RecordingItem recording) {
                 confirmDeleteDownloadedFile(recording);
+            }
+
+            @Override
+            public void onSelectionChanged(int selectedCount) {
+                updateSelectionBar(selectedCount);
             }
         });
 
@@ -124,6 +131,29 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         filters.setTextColor(getResources().getColor(R.color.lm_text_secondary));
         filters.setPadding(0, dp(12), 0, dp(12));
         root.addView(filters);
+
+        selectionBar = new LinearLayout(this);
+        selectionBar.setOrientation(LinearLayout.HORIZONTAL);
+        selectionBar.setGravity(Gravity.CENTER_VERTICAL);
+        selectionBar.setPadding(0, 0, 0, dp(8));
+        selectionSummaryView = new TextView(this);
+        selectionSummaryView.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+        selectionSummaryView.setTextSize(14);
+        Button detailsButton = new Button(this);
+        detailsButton.setAllCaps(false);
+        detailsButton.setText("See details");
+        styleCyberButton(detailsButton);
+        detailsButton.setOnClickListener(v -> showSelectedDetails());
+        Button deleteSelectedButton = new Button(this);
+        deleteSelectedButton.setAllCaps(false);
+        deleteSelectedButton.setText("Delete selected");
+        styleCyberButton(deleteSelectedButton);
+        deleteSelectedButton.setOnClickListener(v -> confirmDeleteSelectedFiles());
+        selectionBar.addView(selectionSummaryView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        selectionBar.addView(detailsButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        selectionBar.addView(deleteSelectedButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        selectionBar.setVisibility(android.view.View.GONE);
+        root.addView(selectionBar);
 
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -212,6 +242,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             }
         }
         adapter.setRecordings(filtered);
+        updateSelectionBar(0);
     }
 
     private void updateSummary(List<RecordingItem> recordings) {
@@ -239,6 +270,63 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         } catch (Exception e) {
             Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void updateSelectionBar(int selectedCount) {
+        if (selectionBar == null || selectionSummaryView == null) {
+            return;
+        }
+        selectionSummaryView.setText(selectedCount + " selected");
+        selectionBar.setVisibility(selectedCount > 0 ? android.view.View.VISIBLE : android.view.View.GONE);
+    }
+
+    private void showSelectedDetails() {
+        List<RecordingItem> selected = adapter.getSelectedRecordings();
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Long-press a recording to select it first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        StringBuilder message = new StringBuilder();
+        for (RecordingItem recording : selected) {
+            if (message.length() > 0) message.append("\n\n");
+            message.append(UiTextUtils.formatRecordingDetails(recording));
+        }
+        new AlertDialog.Builder(this)
+            .setTitle(selected.size() == 1 ? "Recording details" : "Selected recording details")
+            .setMessage(message.toString())
+            .setPositiveButton("OK", null)
+            .show();
+    }
+
+    private void confirmDeleteSelectedFiles() {
+        List<RecordingItem> selected = adapter.getSelectedRecordings();
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Long-press recordings to select them first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Delete selected files?")
+            .setMessage("Delete " + selected.size() + " selected recording file(s) from storage?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete", (dialog, which) -> deleteSelectedFiles(selected))
+            .show();
+    }
+
+    private void deleteSelectedFiles(List<RecordingItem> selected) {
+        boolean allDeleted = true;
+        for (RecordingItem recording : selected) {
+            if (recording == null) continue;
+            boolean finalDeleted = deletePathIfPresent(recording.getFinalMp4Path());
+            boolean tempDeleted = deletePathIfPresent(recording.getTempTsPath());
+            allDeleted = allDeleted && finalDeleted && tempDeleted;
+            if (finalDeleted && tempDeleted) {
+                storage.removeRecording(recording.getId());
+            }
+        }
+        adapter.clearSelection();
+        storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Selected downloaded files deleted."));
+        refreshFiles();
+        Toast.makeText(this, allDeleted ? "Selected files deleted." : "Could not delete one or more files.", Toast.LENGTH_LONG).show();
     }
 
     private void confirmDeleteDownloadedFile(RecordingItem recording) {

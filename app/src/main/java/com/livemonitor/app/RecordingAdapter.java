@@ -2,6 +2,9 @@ package com.livemonitor.app;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.media.ThumbnailUtils;
+import android.provider.MediaStore;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
@@ -11,10 +14,14 @@ import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Adapter for Downloads tab.
@@ -42,12 +49,15 @@ public class RecordingAdapter extends BaseAdapter {
         void onPauseResumeClicked(RecordingItem recording);
 
         void onDeleteClicked(RecordingItem recording);
+
+        void onSelectionChanged(int selectedCount);
     }
 
     private final Context context;
     private final List<RecordingItem> recordings;
     private Listener listener;
     private Mode mode;
+    private final Set<String> selectedRecordingIds = new HashSet<>();
 
     public RecordingAdapter(Context context) {
         this.context = context;
@@ -66,12 +76,56 @@ public class RecordingAdapter extends BaseAdapter {
 
     public void setRecordings(List<RecordingItem> newRecordings) {
         recordings.clear();
+        selectedRecordingIds.clear();
 
         if (newRecordings != null) {
             recordings.addAll(newRecordings);
         }
 
+        notifySelectionChanged();
         notifyDataSetChanged();
+    }
+
+    public List<RecordingItem> getSelectedRecordings() {
+        List<RecordingItem> selected = new ArrayList<>();
+        for (RecordingItem recording : recordings) {
+            if (recording != null && selectedRecordingIds.contains(recording.getId())) {
+                selected.add(recording);
+            }
+        }
+        return selected;
+    }
+
+    public void clearSelection() {
+        if (selectedRecordingIds.isEmpty()) {
+            return;
+        }
+        selectedRecordingIds.clear();
+        notifySelectionChanged();
+        notifyDataSetChanged();
+    }
+
+    public boolean hasSelection() {
+        return !selectedRecordingIds.isEmpty();
+    }
+
+    private void toggleSelection(RecordingItem recording) {
+        if (recording == null || recording.getId() == null) {
+            return;
+        }
+        if (selectedRecordingIds.contains(recording.getId())) {
+            selectedRecordingIds.remove(recording.getId());
+        } else {
+            selectedRecordingIds.add(recording.getId());
+        }
+        notifySelectionChanged();
+        notifyDataSetChanged();
+    }
+
+    private void notifySelectionChanged() {
+        if (listener != null) {
+            listener.onSelectionChanged(selectedRecordingIds.size());
+        }
     }
 
     public void addOrUpdate(RecordingItem recording) {
@@ -167,6 +221,13 @@ public class RecordingAdapter extends BaseAdapter {
                 1f
             )
         );
+
+        ImageView thumbnail = new ImageView(context);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(96), dp(54));
+        thumbnailParams.leftMargin = dp(10);
+        topRow.addView(thumbnail, thumbnailParams);
 
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
@@ -282,6 +343,7 @@ public class RecordingAdapter extends BaseAdapter {
         holder.openButton = openButton;
         holder.pauseResumeButton = pauseResumeButton;
         holder.deleteButton = deleteButton;
+        holder.thumbnail = thumbnail;
 
         return holder;
     }
@@ -331,9 +393,11 @@ public class RecordingAdapter extends BaseAdapter {
         holder.pauseResumeButton.setEnabled(true);
         holder.pauseResumeButton.setAlpha(1f);
         holder.pauseResumeButton.setText(recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause");
-        holder.deleteButton.setVisibility(canDelete ? View.VISIBLE : View.GONE);
+        holder.deleteButton.setVisibility(canDelete && !downloadedMode ? View.VISIBLE : View.GONE);
         holder.deleteButton.setEnabled(true);
         holder.deleteButton.setAlpha(1f);
+        applyDownloadedCompactLayout(holder, recording, downloadedMode);
+
         if (downloadedMode) {
             holder.deleteButton.setText("Delete");
             styleCardActionButton(holder.deleteButton);
@@ -346,9 +410,21 @@ public class RecordingAdapter extends BaseAdapter {
         }
 
         holder.root.setOnClickListener(v -> {
+            if (downloadedMode && hasSelection()) {
+                toggleSelection(recording);
+                return;
+            }
             if (listener != null) {
                 listener.onRecordingClicked(recording);
             }
+        });
+
+        holder.root.setOnLongClickListener(v -> {
+            if (downloadedMode) {
+                toggleSelection(recording);
+                return true;
+            }
+            return false;
         });
 
         holder.openButton.setOnClickListener(v -> {
@@ -395,12 +471,74 @@ public class RecordingAdapter extends BaseAdapter {
             builder.append(recording.getVideoId());
         }
 
-        if (recording.getErrorMessage() != null && !recording.getErrorMessage().trim().isEmpty()) {
+        if (mode != Mode.DOWNLOADED && recording.getErrorMessage() != null && !recording.getErrorMessage().trim().isEmpty()) {
             builder.append("\n");
-            builder.append(recording.getErrorMessage());
+            builder.append(compactErrorMessage(recording.getErrorMessage()));
         }
 
         return builder.toString();
+    }
+
+    private String compactErrorMessage(String message) {
+        if (message == null) return "";
+        String[] lines = message.split("\\r?\\n");
+        StringBuilder builder = new StringBuilder();
+        int added = 0;
+        for (String line : lines) {
+            if (line == null) continue;
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("Retrying (") || trimmed.contains("Video is no longer live")) {
+                continue;
+            }
+            if (added > 0) builder.append("\n");
+            builder.append(trimmed);
+            added++;
+            if (added >= 2) break;
+        }
+        return builder.length() == 0 ? "See Logs for recorder retry details." : builder.toString();
+    }
+
+    private void applyDownloadedCompactLayout(RecordingViewHolder holder, RecordingItem recording, boolean downloadedMode) {
+        boolean selected = downloadedMode && recording != null && selectedRecordingIds.contains(recording.getId());
+        holder.root.setForeground(selected ? rounded(Color.argb(75, 93, 216, 232), dp(12), Color.rgb(93, 216, 232)) : null);
+        holder.statusBadge.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.details.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.savedTo.setVisibility(downloadedMode ? View.GONE : holder.savedTo.getVisibility());
+        holder.progressBar.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.progressLabel.setVisibility(downloadedMode ? View.GONE : View.VISIBLE);
+        holder.openButton.setVisibility(downloadedMode ? View.GONE : holder.openButton.getVisibility());
+        holder.pauseResumeButton.setVisibility(downloadedMode ? View.GONE : holder.pauseResumeButton.getVisibility());
+        holder.deleteButton.setVisibility(downloadedMode ? View.GONE : holder.deleteButton.getVisibility());
+        holder.thumbnail.setVisibility(downloadedMode ? View.VISIBLE : View.GONE);
+        if (downloadedMode) {
+            bindThumbnail(holder.thumbnail, recording);
+        } else {
+            holder.thumbnail.setImageDrawable(null);
+        }
+        holder.title.setTextSize(downloadedMode ? 17 : 15);
+        holder.subtitle.setText(downloadedMode ? buildDownloadedSubtitle(recording) : recording.getDisplaySubtitle());
+    }
+
+    private void bindThumbnail(ImageView thumbnail, RecordingItem recording) {
+        if (thumbnail == null || recording == null) return;
+        String path = recording.getBestPlayablePath();
+        if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
+            thumbnail.setImageDrawable(null);
+            return;
+        }
+        try {
+            Bitmap bitmap = ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);
+            thumbnail.setImageBitmap(bitmap);
+        } catch (Exception ignored) {
+            thumbnail.setImageDrawable(null);
+        }
+    }
+
+    private String buildDownloadedSubtitle(RecordingItem recording) {
+        if (recording == null) return "";
+        String duration = RecordingProgressTracker.formatDuration(Math.max(0L, estimateDisplayedRecordedMs(recording, System.currentTimeMillis()) / 1_000L));
+        String size = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
+        return duration + " • " + size + " • " + recording.getQuality();
     }
 
     private String formatStatus(String status) {
@@ -619,5 +757,6 @@ public class RecordingAdapter extends BaseAdapter {
         Button openButton;
         Button pauseResumeButton;
         Button deleteButton;
+        ImageView thumbnail;
     }
 }
