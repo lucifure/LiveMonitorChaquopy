@@ -240,6 +240,13 @@ public class RecordingAdapter extends BaseAdapter {
             )
         );
 
+        ImageView thumbnail = new ImageView(context);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumbnail.setBackground(rounded(Color.rgb(18, 24, 32), dp(8), Color.rgb(48, 56, 68)));
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(96), dp(54));
+        thumbnailParams.leftMargin = dp(10);
+        topRow.addView(thumbnail, thumbnailParams);
+
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
         statusBadge.setTextSize(12);
