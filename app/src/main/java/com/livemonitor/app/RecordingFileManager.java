@@ -375,7 +375,15 @@ public class RecordingFileManager {
             .replaceAll("\\s+", "_")
             .replaceAll("_+", "_");
 
-        if (sanitized.startsWith("_")) {
+        while (sanitized.startsWith("_") || sanitized.startsWith(".")) {
+            sanitized = sanitized.substring(1);
+        }
+
+        while (sanitized.toLowerCase(Locale.US).startsWith("trashed-")) {
+            sanitized = sanitized.substring("trashed-".length());
+        }
+
+        while (sanitized.startsWith("_") || sanitized.startsWith(".")) {
             sanitized = sanitized.substring(1);
         }
 
