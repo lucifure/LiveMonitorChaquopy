@@ -145,60 +145,65 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         });
         root.addView(searchInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
 
-        LinearLayout topActionRow = new LinearLayout(this);
-        topActionRow.setOrientation(LinearLayout.HORIZONTAL);
-        topActionRow.setGravity(Gravity.CENTER_VERTICAL);
-        topActionRow.setPadding(0, dp(10), 0, dp(8));
+        selectionBar = new LinearLayout(this);
+        selectionBar.setOrientation(LinearLayout.VERTICAL);
+        selectionBar.setPadding(0, dp(10), 0, dp(8));
+
+        LinearLayout selectionTopRow = new LinearLayout(this);
+        selectionTopRow.setOrientation(LinearLayout.HORIZONTAL);
+        selectionTopRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout selectionBottomRow = new LinearLayout(this);
+        selectionBottomRow.setOrientation(LinearLayout.HORIZONTAL);
+        selectionBottomRow.setGravity(Gravity.CENTER_VERTICAL);
+        selectionBottomRow.setPadding(0, dp(8), 0, 0);
+
+        deselectAllButton = new Button(this);
+        deselectAllButton.setAllCaps(false);
+        deselectAllButton.setText("×");
+        styleIconButton(deselectAllButton);
+        deselectAllButton.setContentDescription("Deselect all");
+        deselectAllButton.setOnClickListener(v -> adapter.clearSelection());
 
         selectionSummaryView = new TextView(this);
         selectionSummaryView.setTextColor(getResources().getColor(R.color.lm_text_secondary));
         selectionSummaryView.setTextSize(18);
-
-        selectionBar = new LinearLayout(this);
-        selectionBar.setOrientation(LinearLayout.HORIZONTAL);
-        selectionBar.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+        selectionSummaryView.setGravity(Gravity.CENTER);
 
         Button detailsButton = new Button(this);
         detailsButton.setAllCaps(false);
-        detailsButton.setText("ℹ️");
+        detailsButton.setText("i");
         styleIconButton(detailsButton);
+        detailsButton.setContentDescription("Details");
         detailsButton.setOnClickListener(v -> showSelectedDetails());
-
-        Button deleteSelectedButton = new Button(this);
-        deleteSelectedButton.setAllCaps(false);
-        deleteSelectedButton.setText("🗑️");
-        styleIconButton(deleteSelectedButton);
-        deleteSelectedButton.setOnClickListener(v -> confirmDeleteSelectedFiles());
 
         selectAllButton = new Button(this);
         selectAllButton.setAllCaps(false);
-        selectAllButton.setText("Select all");
-        styleCyberButton(selectAllButton);
+        selectAllButton.setText("✓");
+        styleIconButton(selectAllButton);
+        selectAllButton.setContentDescription("Select all");
         selectAllButton.setOnClickListener(v -> selectAllRecordings());
 
-        deselectAllButton = new Button(this);
-        deselectAllButton.setAllCaps(false);
-        deselectAllButton.setText("Deselect all");
-        styleCyberButton(deselectAllButton);
-        deselectAllButton.setOnClickListener(v -> adapter.clearSelection());
+        Button deleteSelectedButton = new Button(this);
+        deleteSelectedButton.setAllCaps(false);
+        deleteSelectedButton.setText("🗑");
+        styleIconButton(deleteSelectedButton);
+        deleteSelectedButton.setContentDescription("Delete selected");
+        deleteSelectedButton.setOnClickListener(v -> confirmDeleteSelectedFiles());
 
-        selectionBar.addView(detailsButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(48), dp(48));
-        deleteParams.leftMargin = dp(8);
-        selectionBar.addView(deleteSelectedButton, deleteParams);
+        selectionTopRow.addView(deselectAllButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        selectionTopRow.addView(selectionSummaryView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        selectionTopRow.addView(detailsButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
 
-        topActionRow.addView(selectionSummaryView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        topActionRow.addView(selectionBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(dp(104), dp(48));
-        selectAllParams.leftMargin = dp(8);
-        topActionRow.addView(selectAllButton, selectAllParams);
-        LinearLayout.LayoutParams deselectAllParams = new LinearLayout.LayoutParams(dp(124), dp(48));
-        deselectAllParams.leftMargin = dp(8);
-        topActionRow.addView(deselectAllButton, deselectAllParams);
+        selectionBottomRow.addView(selectAllButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        android.view.View bottomSpacer = new android.view.View(this);
+        selectionBottomRow.addView(bottomSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        selectionBottomRow.addView(deleteSelectedButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
+
+        selectionBar.addView(selectionTopRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        selectionBar.addView(selectionBottomRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         selectionBar.setVisibility(android.view.View.GONE);
-        selectAllButton.setVisibility(android.view.View.GONE);
-        deselectAllButton.setVisibility(android.view.View.GONE);
-        root.addView(topActionRow);
+        root.addView(selectionBar);
 
         emptyView = new TextView(this);
         emptyView.setText("No history yet. Completed and stopped recordings will appear here.");
@@ -248,7 +253,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
     private void styleIconButton(Button button) {
         button.setTextColor(getResources().getColor(R.color.lm_text_primary));
-        button.setTextSize(22);
+        button.setTextSize(28);
         button.setBackgroundResource(R.drawable.lm_glass_button_background);
         button.setStateListAnimator(null);
         button.setMinHeight(0);
@@ -313,8 +318,6 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         boolean hasSelection = selectedCount > 0;
         selectionSummaryView.setText(hasSelection ? selectedCount + " selected" : "");
         selectionBar.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
-        if (selectAllButton != null) selectAllButton.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
-        if (deselectAllButton != null) deselectAllButton.setVisibility(hasSelection ? android.view.View.VISIBLE : android.view.View.GONE);
     }
 
     private void selectAllRecordings() {
