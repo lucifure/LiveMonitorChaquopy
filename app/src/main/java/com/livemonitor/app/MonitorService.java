@@ -4146,17 +4146,35 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             }
 
-            recording.markCompleted(source.getAbsolutePath());
+            recording.markCompleted(destination.toString());
             recording.markCopiedToSelectedFolder(folderName);
+            deleteInternalCompletedCopy(source, channel, copyDetails);
+            storage.upsertRecording(recording);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_STORAGE, channel, "Saved to selected folder.", copyDetails);
             broadcastRecordingUpdated("Saved to: " + folderName);
         } catch (Exception e) {
             recording.markCompleted(source.getAbsolutePath());
             recording.setSavedToDisplay("App storage (folder copy failed: " + normalizeErrorMessage(e) + ")");
+            storage.upsertRecording(recording);
             log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Folder copy failed.", copyDetails + ", error=" + normalizeErrorMessage(e));
         }
     }
 
+    private void deleteInternalCompletedCopy(File source, ChannelItem channel, String copyDetails) {
+        if (source == null || !source.exists()) {
+            return;
+        }
+
+        try {
+            if (source.delete()) {
+                log(LogItem.LEVEL_INFO, LogItem.SOURCE_STORAGE, channel, "Removed internal completed copy after selected-folder save.", copyDetails);
+            } else {
+                log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Could not remove internal completed copy after selected-folder save.", copyDetails);
+            }
+        } catch (Exception e) {
+            log(LogItem.LEVEL_WARNING, LogItem.SOURCE_STORAGE, channel, "Internal completed-copy cleanup failed.", copyDetails + ", error=" + normalizeErrorMessage(e));
+        }
+    }
 
     private String buildVisibleSelectedFolderFileName(String fileName) {
         if (isBlank(fileName)) {

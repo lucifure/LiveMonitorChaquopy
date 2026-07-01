@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.graphics.Color;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -431,6 +432,9 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         }
 
         try {
+            if (isContentUri(path)) {
+                return DocumentsContract.deleteDocument(getContentResolver(), Uri.parse(path.trim()));
+            }
             File file = new File(path);
             return !file.exists() || file.delete();
         } catch (Exception ignored) {
@@ -450,19 +454,24 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             return;
         }
 
-        File file = new File(path);
-
-        if (!file.exists()) {
-            Toast.makeText(this, "File not found.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
         try {
-            Uri uri = FileProvider.getUriForFile(
-                this,
-                getPackageName() + ".fileprovider",
-                file
-            );
+            Uri uri;
+            if (isContentUri(path)) {
+                uri = Uri.parse(path.trim());
+            } else {
+                File file = new File(path);
+
+                if (!file.exists()) {
+                    Toast.makeText(this, "File not found.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                uri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    file
+                );
+            }
 
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(uri, path.endsWith(".ts") ? "video/mp2t" : "video/mp4");
@@ -478,6 +487,9 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         }
     }
 
+    private static boolean isContentUri(String path) {
+        return path != null && path.trim().toLowerCase(java.util.Locale.US).startsWith("content://");
+    }
 
     private int dp(int value) {
         float density = getResources().getDisplayMetrics().density;

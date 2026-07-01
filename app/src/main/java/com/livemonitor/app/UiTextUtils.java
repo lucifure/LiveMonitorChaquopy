@@ -193,9 +193,13 @@ public final class UiTextUtils {
         }
 
         String path = defaultIfBlank(recording.getBestPlayablePath(), recording.getFinalMp4Path());
-        File file = path.trim().isEmpty() ? null : new File(path);
-        String fileName = file == null ? recording.getDisplayTitle() : file.getName();
-        String location = file == null || file.getParent() == null ? "Unknown" : file.getParent();
+        boolean contentUri = isContentUri(path);
+        File file = path.trim().isEmpty() || contentUri ? null : new File(path);
+        String fileName = contentUri ? recording.getDisplayTitle() : file == null ? recording.getDisplayTitle() : file.getName();
+        String location = contentUri ? recording.getSavedToDisplay() : file == null || file.getParent() == null ? "Unknown" : file.getParent();
+        if (location == null || location.trim().isEmpty()) {
+            location = contentUri ? path : "Unknown";
+        }
         long bytes = file != null && file.exists() ? file.length() : recording.getBytesRecorded();
         long date = file != null && file.exists() ? file.lastModified() : recording.getFinishedAt();
         if (date <= 0L) {
@@ -213,6 +217,9 @@ public final class UiTextUtils {
         builder.append("Media\n");
         builder.append("Format      ").append(formatMediaType(path));
         return builder.toString();
+    }
+    private static boolean isContentUri(String path) {
+        return path != null && path.trim().toLowerCase(Locale.US).startsWith("content://");
     }
 
     private static String formatLongDate(long timestamp) {
