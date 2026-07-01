@@ -10,6 +10,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -128,14 +129,16 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         summaryView.setPadding(0, 0, 0, dp(8));
         root.addView(summaryView);
 
+        FrameLayout searchContainer = new FrameLayout(this);
+
         searchInput = new android.widget.EditText(this);
         searchInput.setHint("Search by channel name");
         searchInput.setTextColor(getResources().getColor(R.color.lm_text_primary));
         searchInput.setHintTextColor(getResources().getColor(R.color.lm_text_tertiary));
         searchInput.setTextSize(18);
         searchInput.setSingleLine(true);
-        searchInput.setGravity(Gravity.CENTER);
-        searchInput.setPadding(dp(18), 0, dp(18), 0);
+        searchInput.setGravity(Gravity.CENTER_VERTICAL);
+        searchInput.setPadding(dp(62), 0, dp(18), 0);
         searchInput.setCompoundDrawablesWithIntrinsicBounds(0, 0, android.R.drawable.ic_menu_search, 0);
         searchInput.setCompoundDrawablePadding(dp(10));
         searchInput.setBackgroundResource(R.drawable.lm_input_background);
@@ -144,30 +147,20 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { applyFilter(); }
             @Override public void afterTextChanged(Editable s) {}
         });
-        root.addView(searchInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        searchContainer.addView(searchInput, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        LinearLayout folderActions = new LinearLayout(this);
-        folderActions.setOrientation(LinearLayout.HORIZONTAL);
-        folderActions.setPadding(0, dp(10), 0, 0);
-
-        Button refreshFolderButton = new Button(this);
-        refreshFolderButton.setAllCaps(false);
-        refreshFolderButton.setText("Refresh selected folder");
-        styleCyberButton(refreshFolderButton);
+        ImageButton refreshFolderButton = new ImageButton(this);
+        refreshFolderButton.setImageResource(R.drawable.ic_refresh_24);
+        refreshFolderButton.setColorFilter(getResources().getColor(R.color.lm_accent_blue_glow));
+        refreshFolderButton.setBackgroundColor(Color.TRANSPARENT);
+        refreshFolderButton.setContentDescription("Refresh selected folder");
+        refreshFolderButton.setPadding(dp(12), dp(12), dp(12), dp(12));
         refreshFolderButton.setOnClickListener(v -> importSelectedFolderRecordings(true));
+        FrameLayout.LayoutParams refreshParams = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        refreshParams.leftMargin = dp(5);
+        searchContainer.addView(refreshFolderButton, refreshParams);
 
-        Button openFolderButton = new Button(this);
-        openFolderButton.setAllCaps(false);
-        openFolderButton.setText("Open folder");
-        styleCyberButton(openFolderButton);
-        openFolderButton.setOnClickListener(v -> openSelectedFolder());
-
-        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        openParams.leftMargin = dp(10);
-        folderActions.addView(refreshFolderButton, refreshParams);
-        folderActions.addView(openFolderButton, openParams);
-        root.addView(folderActions);
+        root.addView(searchContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
 
         selectionBar = new LinearLayout(this);
         selectionBar.setOrientation(LinearLayout.HORIZONTAL);
