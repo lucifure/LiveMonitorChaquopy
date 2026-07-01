@@ -5,11 +5,14 @@ import android.os.Build;
 import android.util.Size;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.ThumbnailUtils;
 import android.provider.MediaStore;
+import android.os.Handler;
+import android.os.Looper;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
@@ -23,12 +26,17 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Adapter for Downloads tab.
@@ -67,6 +75,9 @@ public class RecordingAdapter extends BaseAdapter {
     private final Set<String> selectedRecordingIds = new HashSet<>();
     private final Map<String, Long> mediaDurationCacheMs = new HashMap<>();
     private final Map<String, Bitmap> thumbnailCache = new HashMap<>();
+    private final Set<String> pendingThumbnailLoads = new HashSet<>();
+    private final ExecutorService thumbnailExecutor = Executors.newFixedThreadPool(2);
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public RecordingAdapter(Context context) {
         this.context = context;
@@ -88,6 +99,7 @@ public class RecordingAdapter extends BaseAdapter {
         selectedRecordingIds.clear();
         mediaDurationCacheMs.clear();
         thumbnailCache.clear();
+        pendingThumbnailLoads.clear();
 
         if (newRecordings != null) {
             recordings.addAll(newRecordings);
@@ -567,25 +579,208 @@ public class RecordingAdapter extends BaseAdapter {
 
     private void bindThumbnail(ImageView thumbnail, RecordingItem recording) {
         if (thumbnail == null || recording == null) return;
-        String path = recording.getBestPlayablePath();
-        if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
+
+        String thumbnailKey = buildThumbnailKey(recording);
+        if (thumbnailKey.isEmpty()) {
+            thumbnail.setTag(null);
             thumbnail.setImageDrawable(null);
             return;
         }
 
-        String normalizedPath = path.trim();
-        Bitmap cached = thumbnailCache.get(normalizedPath);
+        thumbnail.setTag(thumbnailKey);
+        Bitmap cached = thumbnailCache.get(thumbnailKey);
         if (cached != null && !cached.isRecycled()) {
             thumbnail.setImageBitmap(cached);
             return;
         }
 
-        Bitmap bitmap = createVideoThumbnail(normalizedPath);
+        thumbnail.setImageDrawable(null);
+        loadThumbnailAsync(thumbnail, recording, thumbnailKey);
+    }
+
+    private String buildThumbnailKey(RecordingItem recording) {
+        if (recording == null) {
+            return "";
+        }
+        String videoId = resolveVideoId(recording);
+        if (!videoId.isEmpty()) {
+            return "youtube:" + videoId;
+        }
+        String path = recording.getBestPlayablePath();
+        if (path != null && !path.trim().isEmpty() && new File(path.trim()).exists()) {
+            return "file:" + path.trim();
+        }
+        return "";
+    }
+
+    private String resolveVideoId(RecordingItem recording) {
+        if (recording == null) {
+            return "";
+        }
+        String videoId = recording.getVideoId();
+        if (videoId != null && !videoId.trim().isEmpty()) {
+            return videoId.trim();
+        }
+        return extractVideoIdFromUrl(recording.getVideoUrl());
+    }
+
+    private String extractVideoIdFromUrl(String videoUrl) {
+        if (videoUrl == null || videoUrl.trim().isEmpty()) {
+            return "";
+        }
+
+        String trimmedUrl = videoUrl.trim();
+        int watchIndex = trimmedUrl.indexOf("v=");
+        if (watchIndex >= 0) {
+            return trimVideoIdAtSeparator(trimmedUrl.substring(watchIndex + 2));
+        }
+
+        int shortIndex = trimmedUrl.indexOf("youtu.be/");
+        if (shortIndex >= 0) {
+            return trimVideoIdAtSeparator(trimmedUrl.substring(shortIndex + "youtu.be/".length()));
+        }
+
+        int shortsIndex = trimmedUrl.indexOf("/shorts/");
+        if (shortsIndex >= 0) {
+            return trimVideoIdAtSeparator(trimmedUrl.substring(shortsIndex + "/shorts/".length()));
+        }
+
+        return "";
+    }
+
+    private String trimVideoIdAtSeparator(String candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        int end = candidate.length();
+        char[] separators = new char[] {'&', '?', '#', '/'};
+        for (char separator : separators) {
+            int separatorIndex = candidate.indexOf(separator);
+            if (separatorIndex >= 0) {
+                end = Math.min(end, separatorIndex);
+            }
+        }
+        return candidate.substring(0, end).trim();
+    }
+
+    private void loadThumbnailAsync(ImageView thumbnail, RecordingItem recording, String thumbnailKey) {
+        if (pendingThumbnailLoads.contains(thumbnailKey)) {
+            return;
+        }
+
+        pendingThumbnailLoads.add(thumbnailKey);
+        String videoId = resolveVideoId(recording);
+        String path = recording.getBestPlayablePath();
+        thumbnailExecutor.execute(() -> {
+            Bitmap bitmap = createRemoteVideoThumbnail(videoId);
+            if (bitmap == null && path != null && !path.trim().isEmpty() && new File(path.trim()).exists()) {
+                bitmap = createVideoThumbnail(path.trim());
+            }
+
+            Bitmap loadedBitmap = bitmap;
+            mainHandler.post(() -> {
+                pendingThumbnailLoads.remove(thumbnailKey);
+                if (loadedBitmap != null) {
+                    thumbnailCache.put(thumbnailKey, loadedBitmap);
+                    if (thumbnailKey.equals(thumbnail.getTag())) {
+                        thumbnail.setImageBitmap(loadedBitmap);
+                    }
+                    notifyDataSetChanged();
+                }
+            });
+        });
+    }
+
+    private Bitmap createRemoteVideoThumbnail(String videoId) {
+        if (videoId == null || videoId.trim().isEmpty()) {
+            return null;
+        }
+
+        String normalizedVideoId = videoId.trim();
+        String[] thumbnailUrls = new String[] {
+            "https://i.ytimg.com/vi/" + normalizedVideoId + "/maxresdefault.jpg",
+            "https://i.ytimg.com/vi/" + normalizedVideoId + "/hqdefault.jpg",
+            "https://i.ytimg.com/vi/" + normalizedVideoId + "/mqdefault.jpg"
+        };
+
+        for (String thumbnailUrl : thumbnailUrls) {
+            Bitmap bitmap = downloadBitmap(thumbnailUrl);
+            if (bitmap != null) {
+                return bitmap;
+            }
+        }
+        return null;
+    }
+
+    private Bitmap downloadBitmap(String thumbnailUrl) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(thumbnailUrl).openConnection();
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(5_000);
+            connection.setInstanceFollowRedirects(true);
+            int responseCode = connection.getResponseCode();
+            if (responseCode < 200 || responseCode >= 300) {
+                return null;
+            }
+            try (InputStream inputStream = connection.getInputStream()) {
+                return BitmapFactory.decodeStream(inputStream);
+            }
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private Bitmap createVideoThumbnail(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return null;
+        }
+
+        Bitmap bitmap = createPlatformVideoThumbnail(path.trim());
         if (bitmap != null) {
-            thumbnailCache.put(normalizedPath, bitmap);
-            thumbnail.setImageBitmap(bitmap);
-        } else {
-            thumbnail.setImageDrawable(null);
+            return bitmap;
+        }
+
+        return createRetrieverVideoThumbnail(path.trim());
+    }
+
+    private Bitmap createPlatformVideoThumbnail(String path) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                return ThumbnailUtils.createVideoThumbnail(new File(path), new Size(dp(232), dp(132)), null);
+            }
+            return ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Bitmap createRetrieverVideoThumbnail(String path) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(path);
+            long durationUs = Math.max(0L, readMediaDurationMs(path) * 1_000L);
+            long preferredFrameUs = durationUs > 0L ? Math.min(durationUs / 10L, 30_000_000L) : 1_000_000L;
+            long[] frameTimesUs = new long[] {preferredFrameUs, 1_000_000L, 5_000_000L, 0L};
+            for (long frameTimeUs : frameTimesUs) {
+                Bitmap frame = retriever.getFrameAtTime(frameTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                if (frame != null) {
+                    return frame;
+                }
+            }
+            return null;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+                // Ignore cleanup failures.
+            }
         }
     }
 
