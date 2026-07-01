@@ -476,6 +476,10 @@ public class RecordingItem {
             return false;
         }
 
+        if (isContentUri(finalMp4Path)) {
+            return true;
+        }
+
         File file = new File(finalMp4Path);
         return file.exists() && file.isFile() && file.length() > 0L;
     }
@@ -621,8 +625,16 @@ public class RecordingItem {
             return false;
         }
 
+        if (isContentUri(path)) {
+            return true;
+        }
+
         File file = new File(path);
         return file.exists() && file.isFile() && file.length() > 0L;
+    }
+
+    private static boolean isContentUri(String path) {
+        return path != null && path.trim().toLowerCase(java.util.Locale.US).startsWith("content://");
     }
 
     private static List<String> parseTempChunkPaths(JSONArray array) {
