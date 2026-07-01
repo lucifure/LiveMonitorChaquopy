@@ -406,6 +406,23 @@ public class AppStorage {
         return null;
     }
 
+
+    public synchronized RecordingItem findCompletedRecordingForVideo(String videoId) {
+        if (isBlank(videoId)) {
+            return null;
+        }
+
+        List<RecordingItem> recordings = loadRecordings();
+
+        for (RecordingItem recording : recordings) {
+            if (recording != null && recording.matchesVideo(videoId) && recording.isPlayableCompletedFile()) {
+                return recording;
+            }
+        }
+
+        return null;
+    }
+
     public synchronized List<RecordingItem> loadActiveRecordings() {
         List<RecordingItem> result = new ArrayList<>();
 
@@ -431,6 +448,14 @@ public class AppStorage {
     }
 
     public synchronized void removeEmptyOrUnplayableFinishedRecordings() {
+        /*
+         * Before pruning stale Android/data paths, try to relink/import files from
+         * the selected save folder. Users often move completed recordings out of
+         * app storage manually; this keeps Past Recordings connected to those
+         * selected-folder copies instead of deleting history entries immediately.
+         */
+        new SelectedFolderRecordingImporter(appContext).importFromSelectedFolder();
+
         List<RecordingItem> recordings = loadRecordings();
         boolean changed = false;
         Iterator<RecordingItem> iterator = recordings.iterator();

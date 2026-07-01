@@ -146,6 +146,29 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         });
         root.addView(searchInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
 
+        LinearLayout folderActions = new LinearLayout(this);
+        folderActions.setOrientation(LinearLayout.HORIZONTAL);
+        folderActions.setPadding(0, dp(10), 0, 0);
+
+        Button refreshFolderButton = new Button(this);
+        refreshFolderButton.setAllCaps(false);
+        refreshFolderButton.setText("Refresh selected folder");
+        styleCyberButton(refreshFolderButton);
+        refreshFolderButton.setOnClickListener(v -> importSelectedFolderRecordings(true));
+
+        Button openFolderButton = new Button(this);
+        openFolderButton.setAllCaps(false);
+        openFolderButton.setText("Open folder");
+        styleCyberButton(openFolderButton);
+        openFolderButton.setOnClickListener(v -> openSelectedFolder());
+
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        openParams.leftMargin = dp(10);
+        folderActions.addView(refreshFolderButton, refreshParams);
+        folderActions.addView(openFolderButton, openParams);
+        root.addView(folderActions);
+
         selectionBar = new LinearLayout(this);
         selectionBar.setOrientation(LinearLayout.HORIZONTAL);
         selectionBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -257,6 +280,18 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     private void refreshFiles() {
         storage.removeEmptyOrUnplayableFinishedRecordings();
 
+        allCompleted = storage.loadCompletedRecordings();
+        sortNewestFirst(allCompleted);
+        updateSummary(allCompleted);
+        applyFilter();
+    }
+
+    private void importSelectedFolderRecordings(boolean showToast) {
+        SelectedFolderRecordingImporter.Result result = new SelectedFolderRecordingImporter(this).importFromSelectedFolder();
+        storage.appendLog(new LogItem(LogItem.LEVEL_INFO, LogItem.SOURCE_UI, "", "", "", "", "Selected save folder refreshed.", result.getMessage()));
+        if (showToast) {
+            Toast.makeText(this, result.getMessage(), Toast.LENGTH_LONG).show();
+        }
         allCompleted = storage.loadCompletedRecordings();
         sortNewestFirst(allCompleted);
         updateSummary(allCompleted);
