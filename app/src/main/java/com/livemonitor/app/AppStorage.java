@@ -406,6 +406,23 @@ public class AppStorage {
         return null;
     }
 
+
+    public synchronized RecordingItem findCompletedRecordingForVideo(String videoId) {
+        if (isBlank(videoId)) {
+            return null;
+        }
+
+        List<RecordingItem> recordings = loadRecordings();
+
+        for (RecordingItem recording : recordings) {
+            if (recording != null && recording.matchesVideo(videoId) && recording.isPlayableCompletedFile()) {
+                return recording;
+            }
+        }
+
+        return null;
+    }
+
     public synchronized List<RecordingItem> loadActiveRecordings() {
         List<RecordingItem> result = new ArrayList<>();
 

@@ -375,17 +375,7 @@ public class RecordingFileManager {
             .replaceAll("\\s+", "_")
             .replaceAll("_+", "_");
 
-        while (sanitized.startsWith("_") || sanitized.startsWith(".")) {
-            sanitized = sanitized.substring(1);
-        }
-
-        while (sanitized.toLowerCase(Locale.US).startsWith("trashed-")) {
-            sanitized = sanitized.substring("trashed-".length());
-        }
-
-        while (sanitized.startsWith("_") || sanitized.startsWith(".")) {
-            sanitized = sanitized.substring(1);
-        }
+        sanitized = stripHiddenTrashPrefix(sanitized);
 
         if (sanitized.endsWith("_")) {
             sanitized = sanitized.substring(0, sanitized.length() - 1);
@@ -397,6 +387,36 @@ public class RecordingFileManager {
         }
 
         return sanitized;
+    }
+
+    public static String stripHiddenTrashPrefix(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        String cleaned = value.trim();
+        boolean changed;
+        do {
+            changed = false;
+            while (cleaned.startsWith("_") || cleaned.startsWith(".")) {
+                cleaned = cleaned.substring(1);
+                changed = true;
+            }
+            String lower = cleaned.toLowerCase(Locale.US);
+            if (lower.startsWith("trashed-")) {
+                cleaned = cleaned.substring("trashed-".length());
+                changed = true;
+                int nextDash = cleaned.indexOf('-');
+                if (nextDash > 0) {
+                    String maybeTimestamp = cleaned.substring(0, nextDash);
+                    if (maybeTimestamp.matches("\\d{6,}")) {
+                        cleaned = cleaned.substring(nextDash + 1);
+                    }
+                }
+            }
+        } while (changed);
+
+        return cleaned;
     }
 
     private void scanRecoverableTsFilesInDirectory(
