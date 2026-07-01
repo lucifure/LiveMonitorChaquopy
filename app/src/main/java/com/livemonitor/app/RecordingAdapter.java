@@ -784,6 +784,55 @@ public class RecordingAdapter extends BaseAdapter {
         }
     }
 
+    private Bitmap createVideoThumbnail(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return null;
+        }
+
+        Bitmap bitmap = createPlatformVideoThumbnail(path.trim());
+        if (bitmap != null) {
+            return bitmap;
+        }
+
+        return createRetrieverVideoThumbnail(path.trim());
+    }
+
+    private Bitmap createPlatformVideoThumbnail(String path) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                return ThumbnailUtils.createVideoThumbnail(new File(path), new Size(dp(232), dp(132)), null);
+            }
+            return ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Bitmap createRetrieverVideoThumbnail(String path) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(path);
+            long durationUs = Math.max(0L, readMediaDurationMs(path) * 1_000L);
+            long preferredFrameUs = durationUs > 0L ? Math.min(durationUs / 10L, 30_000_000L) : 1_000_000L;
+            long[] frameTimesUs = new long[] {preferredFrameUs, 1_000_000L, 5_000_000L, 0L};
+            for (long frameTimeUs : frameTimesUs) {
+                Bitmap frame = retriever.getFrameAtTime(frameTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                if (frame != null) {
+                    return frame;
+                }
+            }
+            return null;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+                // Ignore cleanup failures.
+            }
+        }
+    }
+
     private void bindThumbnailDuration(TextView durationView, RecordingItem recording) {
         if (durationView == null || recording == null) return;
         long seconds = getPlayableFileDurationSeconds(recording);
