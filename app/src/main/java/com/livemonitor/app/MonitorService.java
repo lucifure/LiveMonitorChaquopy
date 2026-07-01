@@ -488,9 +488,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         videoId = videoId.trim();
-        if (directDownloadVideoIds.contains(videoId)) {
+        RecordingItem activeRecording = storage.findActiveRecordingForVideo(videoId);
+        if (activeRecording != null || !directDownloadVideoIds.add(videoId)) {
             log(LogItem.LEVEL_INFO, LogItem.SOURCE_RECORDER, null, "Direct download already running.", "videoId=" + videoId);
             broadcastRecordingUpdated("Direct download is already running.");
+            return;
+        }
+
+        RecordingItem completedRecording = storage.findCompletedRecordingForVideo(videoId);
+        if (completedRecording != null) {
+            directDownloadVideoIds.remove(videoId);
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Skipping duplicate direct download; video is already saved.",
+                "videoId=" + videoId + ", savedPath=" + completedRecording.getBestPlayablePath()
+            );
+            broadcastRecordingUpdated("Video is already downloaded.");
             return;
         }
 
@@ -502,7 +517,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertRecording(recording);
         activeRecordings.put(recording.getId(), recording);
         progressTracker.track(recording);
-        directDownloadVideoIds.add(videoId);
         executor.execute(() -> runDirectVideoDownload(recording));
         broadcastRecordingUpdated("Direct download started.");
     }
@@ -4181,15 +4195,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return "Live_Recording.mp4";
         }
         String cleaned = fileName.trim();
-        while (cleaned.startsWith(".") || cleaned.startsWith("_")) {
-            cleaned = cleaned.substring(1);
-        }
-        while (cleaned.toLowerCase(java.util.Locale.US).startsWith("trashed-")) {
-            cleaned = cleaned.substring("trashed-".length());
-            while (cleaned.startsWith(".") || cleaned.startsWith("_")) {
-                cleaned = cleaned.substring(1);
-            }
-        }
+        cleaned = RecordingFileManager.stripHiddenTrashPrefix(cleaned);
         return isBlank(cleaned) ? "Live_Recording.mp4" : cleaned;
     }
 
