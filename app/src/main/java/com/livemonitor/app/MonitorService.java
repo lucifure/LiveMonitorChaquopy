@@ -100,6 +100,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean youtubedlAndroidUpdateAttempted = false;
     private volatile long networkLostAtMillis = 0L;
     private volatile long lastOutageDiagnosticLogAtMillis = 0L;
+    private volatile long lastResolverReadyLoggedAt = 0L;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -191,13 +192,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             details += " path=" + result.getExecutablePath();
         }
 
-        log(
-            ytDlpExecutableReady ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
-            LogItem.SOURCE_REMOTE_CONFIG,
-            null,
-            ytDlpExecutableReady ? "yt-dlp resolver ready." : "yt-dlp executable needs setup.",
-            details
-        );
+        if (ytDlpExecutableReady) {
+            long now = System.currentTimeMillis();
+            if (now - lastResolverReadyLoggedAt > 30L * 60L * 1000L) {
+                lastResolverReadyLoggedAt = now;
+                log(
+                    LogItem.LEVEL_SUCCESS,
+                    LogItem.SOURCE_REMOTE_CONFIG,
+                    null,
+                    "yt-dlp resolver ready.",
+                    details
+                );
+            }
+        } else {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "yt-dlp executable needs setup.",
+                details
+            );
+        }
     }
 
     @Override
