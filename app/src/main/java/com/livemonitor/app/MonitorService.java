@@ -62,6 +62,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public static final String ACTION_KEEP_ALIVE_PING = "com.livemonitor.app.ACTION_KEEP_ALIVE_PING";
     private static final int KEEP_ALIVE_REQUEST_CODE = 1001;
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
@@ -1285,6 +1286,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 continue;
             }
 
+            if (activeRecordings.containsKey(channelId)) {
+                sleep(ACTIVE_RECORDING_POLL_INTERVAL_MS);
+                continue;
+            }
+
             try {
                 channel.setLastCheckAt(System.currentTimeMillis());
                 storage.upsertChannel(channel);
@@ -1309,7 +1315,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
 
                 if (channel.isSameCurrentVideo(liveInfo.videoId) && channel.isRecording()) {
-                    sleep(settings.getPollIntervalMillis());
+                    sleep(ACTIVE_RECORDING_POLL_INTERVAL_MS);
                     continue;
                 }
 
