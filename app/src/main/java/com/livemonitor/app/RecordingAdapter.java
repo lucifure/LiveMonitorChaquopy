@@ -1,6 +1,7 @@
 package com.livemonitor.app;
 
 import android.content.Context;
+import android.net.Uri;
 import android.os.Build;
 import android.util.Size;
 import android.graphics.Color;
@@ -607,8 +608,11 @@ public class RecordingAdapter extends BaseAdapter {
             return "youtube:" + videoId;
         }
         String path = recording.getBestPlayablePath();
-        if (path != null && !path.trim().isEmpty() && new File(path.trim()).exists()) {
-            return "file:" + path.trim();
+        if (path != null && !path.trim().isEmpty()) {
+            String normalizedPath = path.trim();
+            if (isContentUri(normalizedPath) || new File(normalizedPath).exists()) {
+                return "file:" + normalizedPath;
+            }
         }
         return "";
     }
@@ -673,7 +677,7 @@ public class RecordingAdapter extends BaseAdapter {
         String path = recording.getBestPlayablePath();
         thumbnailExecutor.execute(() -> {
             Bitmap bitmap = createRemoteVideoThumbnail(videoId);
-            if (bitmap == null && path != null && !path.trim().isEmpty() && new File(path.trim()).exists()) {
+            if (bitmap == null && path != null && !path.trim().isEmpty() && isReadableVideoSource(path.trim())) {
                 bitmap = createLocalVideoThumbnail(path.trim());
             }
 
@@ -740,12 +744,13 @@ public class RecordingAdapter extends BaseAdapter {
             return null;
         }
 
-        Bitmap bitmap = createPlatformLocalVideoThumbnail(path.trim());
+        String normalizedPath = path.trim();
+        Bitmap bitmap = isContentUri(normalizedPath) ? null : createPlatformLocalVideoThumbnail(normalizedPath);
         if (bitmap != null) {
             return bitmap;
         }
 
-        return createRetrieverLocalVideoThumbnail(path.trim());
+        return createRetrieverLocalVideoThumbnail(normalizedPath);
     }
 
     private Bitmap createPlatformLocalVideoThumbnail(String path) {
@@ -762,7 +767,7 @@ public class RecordingAdapter extends BaseAdapter {
     private Bitmap createRetrieverLocalVideoThumbnail(String path) {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
-            retriever.setDataSource(path);
+            setRetrieverDataSource(retriever, path);
             long durationUs = Math.max(0L, readMediaDurationMs(path) * 1_000L);
             long preferredFrameUs = durationUs > 0L ? Math.min(durationUs / 10L, 30_000_000L) : 1_000_000L;
             long[] frameTimesUs = new long[] {preferredFrameUs, 1_000_000L, 5_000_000L, 0L};
@@ -803,11 +808,14 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private long readMediaDurationMs(String path) {
-        if (path == null || path.trim().isEmpty() || !new File(path).exists()) {
+        if (path == null || path.trim().isEmpty()) {
             return 0L;
         }
 
         String normalizedPath = path.trim();
+        if (!isReadableVideoSource(normalizedPath)) {
+            return 0L;
+        }
         Long cachedDuration = mediaDurationCacheMs.get(normalizedPath);
         if (cachedDuration != null) {
             return cachedDuration;
@@ -824,7 +832,11 @@ public class RecordingAdapter extends BaseAdapter {
     private long readExtractorDurationMs(String path) {
         MediaExtractor extractor = new MediaExtractor();
         try {
-            extractor.setDataSource(path);
+            if (isContentUri(path)) {
+                extractor.setDataSource(context, Uri.parse(path), null);
+            } else {
+                extractor.setDataSource(path);
+            }
             long maxDurationUs = 0L;
             for (int i = 0; i < extractor.getTrackCount(); i++) {
                 MediaFormat format = extractor.getTrackFormat(i);
@@ -843,7 +855,7 @@ public class RecordingAdapter extends BaseAdapter {
     private long readMetadataRetrieverDurationMs(String path) {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
-            retriever.setDataSource(path);
+            setRetrieverDataSource(retriever, path);
             String duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
             if (duration == null || duration.trim().isEmpty()) {
                 return 0L;
@@ -857,6 +869,30 @@ public class RecordingAdapter extends BaseAdapter {
             } catch (Exception ignored) {
                 // Ignore cleanup failures.
             }
+        }
+    }
+
+
+    private boolean isReadableVideoSource(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return false;
+        }
+        String normalizedPath = path.trim();
+        if (isContentUri(normalizedPath)) {
+            return true;
+        }
+        return new File(normalizedPath).exists();
+    }
+
+    private boolean isContentUri(String path) {
+        return path != null && path.trim().toLowerCase(java.util.Locale.US).startsWith("content://");
+    }
+
+    private void setRetrieverDataSource(MediaMetadataRetriever retriever, String path) {
+        if (isContentUri(path)) {
+            retriever.setDataSource(context, Uri.parse(path));
+        } else {
+            retriever.setDataSource(path);
         }
     }
 
