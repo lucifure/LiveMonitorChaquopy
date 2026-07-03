@@ -3650,7 +3650,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             storage.upsertRecording(recording);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
         } catch (Exception e) {
-            if (isCancellationException(e) && savePartialDirectDownload(recording)) {
+            if (isCancellationException(e) || isDirectDownloadStopRequested(recording)) {
+                handleCanceledDirectDownload(recording);
                 return;
             }
             recording.markFailed(normalizeErrorMessage(e));
@@ -3692,7 +3693,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         try {
             executeYoutubedlAndroidRequest(request, processId, callback);
         } catch (Exception e) {
-            if (!useTvEmbeddedClient) {
+            if (!useTvEmbeddedClient || shouldSkipDirectDownloadFallback(recording, e)) {
                 throw e;
             }
             log(
@@ -3794,6 +3795,57 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         for (File file : findDirectDownloadTempFiles(tempOutputPath)) {
             safeDelete(file.getAbsolutePath());
         }
+    }
+
+
+    private boolean shouldSkipDirectDownloadFallback(RecordingItem recording, Exception error) {
+        return isCancellationException(error) || isDirectDownloadStopRequested(recording);
+    }
+
+    private boolean isDirectDownloadStopRequested(RecordingItem recording) {
+        if (recording == null || isBlank(recording.getId())) {
+            return false;
+        }
+        String recordingId = recording.getId();
+        return discardDirectDownloadPartialIds.contains(recordingId)
+            || stoppingRecordingIds.contains(recordingId)
+            || userHaltedRecordingIds.contains(recordingId)
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus());
+    }
+
+    private void handleCanceledDirectDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        if (discardDirectDownloadPartialIds.contains(recording.getId())) {
+            deleteDirectDownloadTempFiles(recording.getTempTsPath());
+            recording.markStoppedByUser();
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Direct download canceled; partial file discarded.",
+                "recordingId=" + recording.getId() + ", videoId=" + recording.getVideoId()
+            );
+            return;
+        }
+
+        if (savePartialDirectDownload(recording)) {
+            return;
+        }
+
+        recording.markStoppedByUser();
+        storage.upsertRecording(recording);
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            null,
+            "Direct download canceled before a playable partial file was available.",
+            "recordingId=" + recording.getId() + ", videoId=" + recording.getVideoId()
+        );
     }
 
     private boolean isCancellationException(Exception e) {
