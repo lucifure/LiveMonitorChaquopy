@@ -813,7 +813,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (changed) {
-            storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Reconciled active recording UI state."));
+            storage.appendLog(LogItem.debug(LogItem.SOURCE_UI, "Reconciled active recording UI state."));
         }
     }
 

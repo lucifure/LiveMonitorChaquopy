@@ -5,6 +5,7 @@ import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MenuItem;
@@ -363,9 +364,27 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void openSelectedSaveFolder() {
         String uriString = settings == null ? "" : settings.getSaveLocationUri();
-        if (uriString == null || uriString.trim().isEmpty()) { Toast.makeText(this, "No custom save folder selected yet.", Toast.LENGTH_SHORT).show(); return; }
-        try { Intent intent = new Intent(Intent.ACTION_VIEW); intent.setData(Uri.parse(uriString)); intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(intent); }
-        catch (Exception e) { Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+        if (uriString == null || uriString.trim().isEmpty()) {
+            Toast.makeText(this, "No custom save folder selected yet.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Uri folderUri = Uri.parse(uriString);
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(folderUri, DocumentsContract.Document.MIME_TYPE_DIR);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivity(intent);
+        } catch (Exception viewError) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folderUri);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                startActivity(intent);
+            } catch (Exception treeError) {
+                Toast.makeText(this, "Unable to open folder: " + treeError.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     private EditText addEditText(LinearLayout root, String label, String hint) { addLabel(root, label); EditText e = new EditText(this); e.setSingleLine(true); e.setHint(hint); root.addView(e, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)); return e; }

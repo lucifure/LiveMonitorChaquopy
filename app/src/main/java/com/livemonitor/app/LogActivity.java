@@ -127,6 +127,8 @@ public class LogActivity extends AppCompatActivity {
         );
 
         listView = new ListView(this);
+        listView.setFastScrollEnabled(true);
+        listView.setFastScrollAlwaysVisible(true);
         listView.setTranscriptMode(ListView.TRANSCRIPT_MODE_NORMAL);
         listView.setStackFromBottom(false);
         listView.setAdapter(adapter);
