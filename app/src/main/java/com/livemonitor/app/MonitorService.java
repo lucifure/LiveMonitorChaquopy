@@ -62,6 +62,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public static final String ACTION_KEEP_ALIVE_PING = "com.livemonitor.app.ACTION_KEEP_ALIVE_PING";
     private static final int KEEP_ALIVE_REQUEST_CODE = 1001;
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
@@ -100,6 +101,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean youtubedlAndroidUpdateAttempted = false;
     private volatile long networkLostAtMillis = 0L;
     private volatile long lastOutageDiagnosticLogAtMillis = 0L;
+    private volatile long lastResolverReadyLoggedAt = 0L;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -191,13 +193,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             details += " path=" + result.getExecutablePath();
         }
 
-        log(
-            ytDlpExecutableReady ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
-            LogItem.SOURCE_REMOTE_CONFIG,
-            null,
-            ytDlpExecutableReady ? "yt-dlp resolver ready." : "yt-dlp executable needs setup.",
-            details
-        );
+        if (ytDlpExecutableReady) {
+            long now = System.currentTimeMillis();
+            if (now - lastResolverReadyLoggedAt > 30L * 60L * 1000L) {
+                lastResolverReadyLoggedAt = now;
+                log(
+                    LogItem.LEVEL_SUCCESS,
+                    LogItem.SOURCE_REMOTE_CONFIG,
+                    null,
+                    "yt-dlp resolver ready.",
+                    details
+                );
+            }
+        } else {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_REMOTE_CONFIG,
+                null,
+                "yt-dlp executable needs setup.",
+                details
+            );
+        }
     }
 
     @Override
@@ -510,8 +526,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         String watchUrl = YouTubeUrlUtils.buildWatchUrl(videoId);
-        RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
-        recording.setTitle("Direct download - " + videoId);
+        String videoTitle = resolveVideoTitleForDirectDownload(watchUrl);
+        String fileTitle = isBlank(videoTitle) ? videoId : videoTitle;
+        RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, fileTitle, settings);
+        if (isBlank(videoTitle)) {
+            recording.setTitle("Direct download - " + videoId);
+        }
         recording.markRecording();
         recording.setDiagnosticMessage("Direct download journal opened.");
         storage.upsertRecording(recording);
@@ -519,6 +539,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         progressTracker.track(recording);
         executor.execute(() -> runDirectVideoDownload(recording));
         broadcastRecordingUpdated("Direct download started.");
+    }
+
+
+    private String resolveVideoTitleForDirectDownload(String watchUrl) {
+        if (isBlank(watchUrl)) {
+            return "";
+        }
+
+        try {
+            JSONObject playerResponse = extractInitialPlayerResponse(httpGet(watchUrl));
+            JSONObject videoDetails = playerResponse == null ? null : playerResponse.optJSONObject("videoDetails");
+            String title = videoDetails == null ? "" : videoDetails.optString("title", "");
+            return title == null ? "" : title.trim();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private boolean skipDuplicateFinalizationRequest(String recordingId, ChannelItem channel) {
@@ -1270,6 +1306,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 continue;
             }
 
+            if (activeRecordings.containsKey(channelId)) {
+                sleep(ACTIVE_RECORDING_POLL_INTERVAL_MS);
+                continue;
+            }
+
             try {
                 channel.setLastCheckAt(System.currentTimeMillis());
                 storage.upsertChannel(channel);
@@ -1294,7 +1335,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
 
                 if (channel.isSameCurrentVideo(liveInfo.videoId) && channel.isRecording()) {
-                    sleep(settings.getPollIntervalMillis());
+                    sleep(ACTIVE_RECORDING_POLL_INTERVAL_MS);
                     continue;
                 }
 
@@ -3629,7 +3670,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             storage.upsertRecording(recording);
             log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
         } catch (Exception e) {
-            if (isCancellationException(e) && savePartialDirectDownload(recording)) {
+            if (isCancellationException(e) || isDirectDownloadStopRequested(recording)) {
+                handleCanceledDirectDownload(recording);
                 return;
             }
             recording.markFailed(normalizeErrorMessage(e));
@@ -3671,7 +3713,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         try {
             executeYoutubedlAndroidRequest(request, processId, callback);
         } catch (Exception e) {
-            if (!useTvEmbeddedClient) {
+            if (!useTvEmbeddedClient || shouldSkipDirectDownloadFallback(recording, e)) {
                 throw e;
             }
             log(
@@ -3773,6 +3815,57 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         for (File file : findDirectDownloadTempFiles(tempOutputPath)) {
             safeDelete(file.getAbsolutePath());
         }
+    }
+
+
+    private boolean shouldSkipDirectDownloadFallback(RecordingItem recording, Exception error) {
+        return isCancellationException(error) || isDirectDownloadStopRequested(recording);
+    }
+
+    private boolean isDirectDownloadStopRequested(RecordingItem recording) {
+        if (recording == null || isBlank(recording.getId())) {
+            return false;
+        }
+        String recordingId = recording.getId();
+        return discardDirectDownloadPartialIds.contains(recordingId)
+            || stoppingRecordingIds.contains(recordingId)
+            || userHaltedRecordingIds.contains(recordingId)
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus());
+    }
+
+    private void handleCanceledDirectDownload(RecordingItem recording) {
+        if (recording == null) {
+            return;
+        }
+
+        if (discardDirectDownloadPartialIds.contains(recording.getId())) {
+            deleteDirectDownloadTempFiles(recording.getTempTsPath());
+            recording.markStoppedByUser();
+            recording.hideFromDownloading();
+            storage.upsertRecording(recording);
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Direct download canceled; partial file discarded.",
+                "recordingId=" + recording.getId() + ", videoId=" + recording.getVideoId()
+            );
+            return;
+        }
+
+        if (savePartialDirectDownload(recording)) {
+            return;
+        }
+
+        recording.markStoppedByUser();
+        storage.upsertRecording(recording);
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            null,
+            "Direct download canceled before a playable partial file was available.",
+            "recordingId=" + recording.getId() + ", videoId=" + recording.getVideoId()
+        );
     }
 
     private boolean isCancellationException(Exception e) {

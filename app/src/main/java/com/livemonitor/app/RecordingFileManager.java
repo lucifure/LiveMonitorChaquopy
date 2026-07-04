@@ -333,8 +333,9 @@ public class RecordingFileManager {
     }
 
     public static String buildBaseFileName(ChannelItem channel, String videoId, String liveTitle) {
-        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(new Date());
-        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+        Date now = new Date();
+        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(now);
+        String time = new SimpleDateFormat("HH-mm-ss", Locale.US).format(now);
 
         String title = !isBlank(liveTitle)
             ? liveTitle.trim()
@@ -371,7 +372,10 @@ public class RecordingFileManager {
 
         String sanitized = value
             .trim()
-            .replaceAll("[\\\\/:*?\"<>|]", "_")
+            .replace('/', '-')
+            .replace('\\', '_')
+            .replaceAll("[:*?\"<>|]", "_")
+            .replaceAll("[()\\[\\]{}]", "")
             .replaceAll("\\s+", "_")
             .replaceAll("_+", "_");
 
