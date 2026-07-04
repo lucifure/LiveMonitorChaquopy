@@ -31,6 +31,9 @@ public class RemoteConfigFetcher {
 
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int READ_TIMEOUT_MS = 15_000;
+    private static final long FAILURE_LOG_INTERVAL_MS = 30L * 60L * 1000L;
+
+    private static volatile long lastFetchFailureLoggedAt = 0L;
 
     private final Context appContext;
     private final AppStorage storage;
@@ -229,16 +232,7 @@ public class RemoteConfigFetcher {
 
             return FetchResult.success(config, "Remote config fetched successfully.");
         } catch (Exception e) {
-            storage.appendLog(new LogItem(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_REMOTE_CONFIG,
-                "",
-                "",
-                "",
-                "",
-                "Remote config fetch failed.",
-                e.getMessage()
-            ));
+            logFetchFailureIfDue(e);
 
             return FetchResult.failure("Remote config fetch failed: " + e.getMessage());
         } finally {
@@ -246,6 +240,26 @@ public class RemoteConfigFetcher {
                 connection.disconnect();
             }
         }
+    }
+
+
+    private void logFetchFailureIfDue(Exception e) {
+        long now = System.currentTimeMillis();
+        if (now - lastFetchFailureLoggedAt <= FAILURE_LOG_INTERVAL_MS) {
+            return;
+        }
+
+        lastFetchFailureLoggedAt = now;
+        storage.appendLog(new LogItem(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_REMOTE_CONFIG,
+            "",
+            "",
+            "",
+            "",
+            "Remote config fetch failed.",
+            e == null ? "" : e.getMessage()
+        ));
     }
 
     private int getAppVersionCode() {

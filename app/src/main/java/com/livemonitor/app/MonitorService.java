@@ -526,8 +526,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         String watchUrl = YouTubeUrlUtils.buildWatchUrl(videoId);
-        RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, settings);
-        recording.setTitle("Direct download - " + videoId);
+        String videoTitle = resolveVideoTitleForDirectDownload(watchUrl);
+        String fileTitle = isBlank(videoTitle) ? videoId : videoTitle;
+        RecordingItem recording = fileManager.createRecordingItem(null, videoId, watchUrl, fileTitle, settings);
+        if (isBlank(videoTitle)) {
+            recording.setTitle("Direct download - " + videoId);
+        }
         recording.markRecording();
         recording.setDiagnosticMessage("Direct download journal opened.");
         storage.upsertRecording(recording);
@@ -535,6 +539,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         progressTracker.track(recording);
         executor.execute(() -> runDirectVideoDownload(recording));
         broadcastRecordingUpdated("Direct download started.");
+    }
+
+
+    private String resolveVideoTitleForDirectDownload(String watchUrl) {
+        if (isBlank(watchUrl)) {
+            return "";
+        }
+
+        try {
+            JSONObject playerResponse = extractInitialPlayerResponse(httpGet(watchUrl));
+            JSONObject videoDetails = playerResponse == null ? null : playerResponse.optJSONObject("videoDetails");
+            String title = videoDetails == null ? "" : videoDetails.optString("title", "");
+            return title == null ? "" : title.trim();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private boolean skipDuplicateFinalizationRequest(String recordingId, ChannelItem channel) {
