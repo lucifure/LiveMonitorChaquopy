@@ -4904,7 +4904,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         RecordingItem current = storage.findRecordingById(recordingId);
 
         if (current != null
-            && (current.isFinalized() || RecordingItem.STATUS_COMPLETED.equals(current.getStatus()))) {
+            && (finalizedRecordingIds.contains(current.getId()) || current.isCompleted())) {
             if (logSkip) {
                 log(
                     LogItem.LEVEL_INFO,
