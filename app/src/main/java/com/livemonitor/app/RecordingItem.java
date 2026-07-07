@@ -771,6 +771,11 @@ public class RecordingItem {
         return startedAt;
     }
 
+    public void setStartedAt(long startedAt) {
+        this.startedAt = Math.max(0L, startedAt);
+        touch();
+    }
+
     public long getStreamStartedAt() {
         return streamStartedAt;
     }
