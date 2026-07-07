@@ -70,7 +70,11 @@ public class RecordingFileManager {
     }
 
     public File createTempTsFile(ChannelItem channel, String videoId, String liveTitle) {
-        String fileName = buildBaseFileName(channel, videoId, liveTitle) + ".ts";
+        return createTempTsFile(channel, videoId, liveTitle, System.currentTimeMillis());
+    }
+
+    public File createTempTsFile(ChannelItem channel, String videoId, String liveTitle, long startedAt) {
+        String fileName = buildBaseFileName(channel, videoId, liveTitle, startedAt) + ".ts";
         return new File(getTempDirectory(), fileName);
     }
 
@@ -79,7 +83,11 @@ public class RecordingFileManager {
     }
 
     public File createFinalMp4File(ChannelItem channel, String videoId, String liveTitle) {
-        String fileName = buildBaseFileName(channel, videoId, liveTitle) + ".mp4";
+        return createFinalMp4File(channel, videoId, liveTitle, System.currentTimeMillis());
+    }
+
+    public File createFinalMp4File(ChannelItem channel, String videoId, String liveTitle, long startedAt) {
+        String fileName = buildBaseFileName(channel, videoId, liveTitle, startedAt) + ".mp4";
         return new File(getCompletedDirectory(), fileName);
     }
 
@@ -112,15 +120,16 @@ public class RecordingFileManager {
             settings = storage.loadSettings();
         }
 
-        File tempTsFile = createTempTsFile(channel, videoId, liveTitle);
-        File finalMp4File = createFinalMp4File(channel, videoId, liveTitle);
+        long startedAt = System.currentTimeMillis();
+        File tempTsFile = createTempTsFile(channel, videoId, liveTitle, startedAt);
+        File finalMp4File = createFinalMp4File(channel, videoId, liveTitle, startedAt);
 
         String channelId = channel == null ? "" : channel.getId();
         String channelTitle = channel == null ? "" : channel.getDisplayTitle();
         String channelUrl = channel == null ? "" : channel.getUrl();
         String title = isBlank(liveTitle) ? buildHumanTitle(channel, videoId) : liveTitle.trim();
 
-        return new RecordingItem(
+        RecordingItem recording = new RecordingItem(
             channelId,
             channelTitle,
             channelUrl,
@@ -131,6 +140,8 @@ public class RecordingFileManager {
             tempTsFile.getAbsolutePath(),
             finalMp4File.getAbsolutePath()
         );
+        recording.setStartedAt(startedAt);
+        return recording;
     }
 
     public void cleanupTempFolderBeforeRecording() {
@@ -333,20 +344,30 @@ public class RecordingFileManager {
     }
 
     public static String buildBaseFileName(ChannelItem channel, String videoId, String liveTitle) {
-        Date now = new Date();
-        String date = new SimpleDateFormat("ddMMyyyy", Locale.US).format(now);
-        String time = new SimpleDateFormat("HH-mm-ss", Locale.US).format(now);
+        return buildBaseFileName(channel, videoId, liveTitle, System.currentTimeMillis());
+    }
+
+    public static String buildBaseFileName(
+        ChannelItem channel,
+        String videoId,
+        String liveTitle,
+        long startedAt
+    ) {
+        Date startedDate = new Date(startedAt > 0L ? startedAt : System.currentTimeMillis());
+        String date = new SimpleDateFormat("ddMMyyyy", Locale.getDefault()).format(startedDate);
+        String time = new SimpleDateFormat("HH-mm-ss", Locale.getDefault()).format(startedDate);
+        String suffix = "_" + date + "_" + time;
 
         String title = !isBlank(liveTitle)
             ? liveTitle.trim()
-            : channel == null ? "Live Stream" : channel.getDisplayTitle();
-        String safeTitle = sanitizeFileName(title, 80);
+            : buildChannelHandleFallback(channel);
+        String safeTitle = sanitizeFileName(title, Math.max(1, 100 - suffix.length()));
 
         if (isBlank(safeTitle)) {
-            safeTitle = isBlank(videoId) ? "Live_Stream" : sanitizeFileName(videoId, 60);
+            safeTitle = isBlank(videoId) ? "Live_Stream" : sanitizeFileName(videoId, Math.max(1, 100 - suffix.length()));
         }
 
-        return safeTitle + "_" + date + "_" + time;
+        return safeTitle + suffix;
     }
 
     public static String buildHumanTitle(ChannelItem channel, String videoId) {
@@ -372,25 +393,36 @@ public class RecordingFileManager {
 
         String sanitized = value
             .trim()
-            .replace('/', '-')
-            .replace('\\', '_')
-            .replaceAll("[:*?\"<>|]", "_")
-            .replaceAll("[()\\[\\]{}]", "")
-            .replaceAll("\\s+", "_")
-            .replaceAll("_+", "_");
+            .replaceAll("[/:*?\"<>|\\\n\r]", "_")
+            .replaceAll("[ _]+", "_");
 
-        sanitized = stripHiddenTrashPrefix(sanitized);
-
-        if (sanitized.endsWith("_")) {
-            sanitized = sanitized.substring(0, sanitized.length() - 1);
-        }
+        sanitized = stripHiddenTrashPrefix(sanitized)
+            .replaceAll("^[ _]+", "")
+            .replaceAll("[ _]+$", "");
 
         int safeMaxLength = Math.max(1, maxLength);
         if (sanitized.length() > safeMaxLength) {
-            sanitized = sanitized.substring(0, safeMaxLength).trim();
+            sanitized = sanitized.substring(0, safeMaxLength)
+                .replaceAll("[ _]+$", "");
         }
 
         return sanitized;
+    }
+
+    private static String buildChannelHandleFallback(ChannelItem channel) {
+        if (channel == null) {
+            return "";
+        }
+
+        String url = channel.getUrl();
+        if (!isBlank(url) && url.contains("/@")) {
+            String handle = url.substring(url.indexOf("/@") + 2).replaceAll("[/?#].*", "");
+            if (!isBlank(handle)) {
+                return handle;
+            }
+        }
+
+        return channel.getDisplayTitle();
     }
 
     public static String stripHiddenTrashPrefix(String value) {
