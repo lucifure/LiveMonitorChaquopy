@@ -732,7 +732,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             String resolvedChannelId = channel == null ? null : resolveChannelId(channel.getUrl());
-            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId, channel);
 
             if (liveInfo == null || !recording.matchesVideo(liveInfo.videoId)) {
                 activeRecordings.remove(recording.getId());
@@ -1322,7 +1322,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     continue;
                 }
 
-                LiveInfo liveInfo = checkLive(resolvedChannelId);
+                LiveInfo liveInfo = checkLive(resolvedChannelId, channel);
 
                 if (liveInfo == null) {
                     channel.markWaitingForLive();
@@ -3323,7 +3323,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             String resolvedChannelId = resolveChannelId(channel.getUrl());
-            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId);
+            LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId, channel);
 
             if (recorderProcessRunning && liveInfo != null && stalledRecording.matchesVideo(liveInfo.videoId)) {
                 finalizeLikelyEndedRecording(
@@ -4412,6 +4412,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LiveInfo checkLive(String channelId) {
+        return checkLive(channelId, null);
+    }
+
+    private LiveInfo checkLive(String channelId, ChannelItem channel) {
+        LiveInfo liveInfo = checkLiveFromChannelLivePage(channelId, channel);
+        if (liveInfo != null) {
+            return liveInfo;
+        }
+
+        if (isBlank(getApiKey())) {
+            return null;
+        }
+
         try {
             String apiUrl = "https://www.googleapis.com/youtube/v3/search"
                 + "?part=snippet&channelId=" + URLEncoder.encode(channelId, "UTF-8")
@@ -4428,21 +4441,37 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId, fetchLiveStartTimestampMillis(videoId));
             }
         } catch (Exception e) {
-            Log.w(TAG, "YouTube Data API live check failed; trying channel /live fallback", e);
+            Log.w(TAG, "YouTube Data API live check also failed", e);
         }
 
-        return checkLiveFromChannelLivePage(channelId);
+        return null;
     }
 
-    private LiveInfo checkLiveFromChannelLivePage(String channelId) {
+    private LiveInfo checkLiveFromChannelLivePage(String channelId, ChannelItem channel) {
         if (isBlank(channelId)) {
             return null;
         }
 
-        String liveUrl = remoteConfig.getWebPlayerBaseUrl()
-            + "/channel/"
-            + urlEncodeForQuery(channelId)
-            + "/live";
+        LiveInfo liveInfo = checkLiveFromChannelLivePageUrl(
+            channelId,
+            remoteConfig.getWebPlayerBaseUrl() + "/channel/" + urlEncodeForQuery(channelId) + "/live"
+        );
+        if (liveInfo != null) {
+            return liveInfo;
+        }
+
+        String channelLiveUrl = buildChannelLiveUrl(channel == null ? "" : channel.getUrl());
+        if (!isBlank(channelLiveUrl)) {
+            return checkLiveFromChannelLivePageUrl(channelId, channelLiveUrl);
+        }
+
+        return null;
+    }
+
+    private LiveInfo checkLiveFromChannelLivePageUrl(String channelId, String liveUrl) {
+        if (isBlank(liveUrl)) {
+            return null;
+        }
 
         try {
             String html = httpGet(liveUrl);
@@ -5366,7 +5395,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             throw new IllegalStateException("Could not resolve channel ID for live status re-check.");
         }
 
-        return checkLive(resolvedChannelId);
+        return checkLive(resolvedChannelId, channel);
     }
 
     private LiveInfo resolveFreshLiveInfo(ChannelItem channel, String currentVideoId) {
