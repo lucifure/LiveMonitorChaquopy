@@ -3070,10 +3070,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             progressTracker.track(recording);
 
             String videoId = liveInfo == null ? recording.getVideoId() : liveInfo.videoId;
-            ResolvedInput resolvedInput = resolveRecordingInputUrl(videoId, channel, liveInfo, true);
+            ResolvedInput resolvedInput = resolveRecordingInputUrl(
+                videoId,
+                channel,
+                liveInfo,
+                true,
+                recording.getId()
+            );
             String manifestUrl = resolvedInput.url;
 
             if (isBlank(manifestUrl)) {
+                if (shouldSkipFallbackResolverForCompletedRecording(recording.getId(), channel, false)) {
+                    return true;
+                }
+
                 throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
             }
 
@@ -4556,6 +4566,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         LiveInfo liveInfo,
         boolean allowLiveIdRetry
     ) throws Exception {
+        return resolveRecordingInputUrl(videoId, channel, liveInfo, allowLiveIdRetry, null);
+    }
+
+    private ResolvedInput resolveRecordingInputUrl(
+        String videoId,
+        ChannelItem channel,
+        LiveInfo liveInfo,
+        boolean allowLiveIdRetry,
+        String recordingIdToSkipIfComplete
+    ) throws Exception {
         String safeVideoId = normalizeVideoIdForLookup(videoId);
         String videoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
             ? liveInfo.videoUrl
@@ -4566,7 +4586,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
             if (ytDlpExecutableReady) {
                 try {
-                    return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+                    return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
                 } catch (Exception e) {
                     ytDlpError = e;
 
@@ -4612,7 +4632,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (!remoteConfig.isYtDlpFirst() && remoteConfig.isYtDlpEnabled()) {
             if (ytDlpExecutableReady) {
                 try {
-                    return resolveWithYtDlp(videoUrl, safeVideoId, channel);
+                    return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
                 } catch (Exception e) {
                     ytDlpError = e;
 
@@ -4654,7 +4674,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
                 channel.markRecording(freshLiveInfo.videoId, freshLiveInfo.videoUrl);
                 storage.upsertChannel(channel);
-                return resolveRecordingInputUrl(freshLiveInfo.videoId, channel, freshLiveInfo, false);
+                return resolveRecordingInputUrl(freshLiveInfo.videoId, channel, freshLiveInfo, false, recordingIdToSkipIfComplete);
             }
 
             log(
@@ -4761,7 +4781,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private ResolvedInput resolveWithYtDlp(
         String videoUrl,
         String videoId,
-        ChannelItem channel
+        ChannelItem channel,
+        String recordingIdToSkipIfComplete
     ) throws Exception {
         if (isBlank(videoUrl)) {
             throw new IllegalArgumentException("video URL is empty.");
@@ -4777,6 +4798,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         Exception lastError = null;
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
+            if (shouldSkipFallbackResolverForCompletedRecording(recordingIdToSkipIfComplete, channel, true)) {
+                return new ResolvedInput("", videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
+            }
+
             throwIfChannelMonitoringHalted(channel, videoId);
             YtDlpResolveAttempt attempt = attempts.get(attemptIndex);
 
@@ -4865,6 +4890,35 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         throw new IllegalStateException("yt-dlp did not run any resolver attempts.");
+    }
+
+    private boolean shouldSkipFallbackResolverForCompletedRecording(
+        String recordingId,
+        ChannelItem channel,
+        boolean logSkip
+    ) {
+        if (isBlank(recordingId)) {
+            return false;
+        }
+
+        RecordingItem current = storage.findRecordingById(recordingId);
+
+        if (current != null
+            && (finalizedRecordingIds.contains(current.getId()) || current.isCompleted())) {
+            if (logSkip) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Skipping fallback resolver — recording already completed.",
+                    "recordingId=" + recordingId
+                );
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private boolean refreshYoutubedlAndroidAfterExtractorFailure(
