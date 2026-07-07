@@ -1,6 +1,7 @@
 package com.livemonitor.app;
 
 import java.io.File;
+import java.net.URLDecoder;
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -192,10 +193,10 @@ public final class UiTextUtils {
             return "";
         }
 
-        String path = defaultIfBlank(recording.getBestPlayablePath(), recording.getFinalMp4Path());
+        String path = defaultIfBlank(recording.getFinalMp4Path(), recording.getBestPlayablePath());
         boolean contentUri = isContentUri(path);
         File file = path.trim().isEmpty() || contentUri ? null : new File(path);
-        String fileName = contentUri ? recording.getDisplayTitle() : file == null ? recording.getDisplayTitle() : file.getName();
+        String fileName = resolveRecordingFileName(recording, path, file, contentUri);
         String location = contentUri ? recording.getSavedToDisplay() : file == null || file.getParent() == null ? "Unknown" : file.getParent();
         if (location == null || location.trim().isEmpty()) {
             location = contentUri ? path : "Unknown";
@@ -218,6 +219,56 @@ public final class UiTextUtils {
         builder.append("Format      ").append(formatMediaType(path));
         return builder.toString();
     }
+
+    private static String resolveRecordingFileName(
+        RecordingItem recording,
+        String path,
+        File file,
+        boolean contentUri
+    ) {
+        if (file != null && file.getName() != null && !file.getName().trim().isEmpty()) {
+            return file.getName();
+        }
+
+        if (contentUri) {
+            String uriName = extractFileNameFromContentUri(path);
+            if (uriName != null && !uriName.trim().isEmpty()) {
+                return uriName;
+            }
+        }
+
+        return recording == null ? "" : recording.getDisplayTitle();
+    }
+
+    private static String extractFileNameFromContentUri(String uriText) {
+        if (uriText == null || uriText.trim().isEmpty()) {
+            return "";
+        }
+
+        String value = uriText.trim();
+        int slashIndex = value.lastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex + 1 < value.length()) {
+            value = value.substring(slashIndex + 1);
+        }
+
+        try {
+            value = URLDecoder.decode(value, "UTF-8");
+        } catch (Exception ignored) {
+        }
+
+        slashIndex = value.lastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex + 1 < value.length()) {
+            value = value.substring(slashIndex + 1);
+        }
+
+        int colonIndex = value.lastIndexOf(':');
+        if (colonIndex >= 0 && colonIndex + 1 < value.length()) {
+            value = value.substring(colonIndex + 1);
+        }
+
+        return value.trim();
+    }
+
     private static boolean isContentUri(String path) {
         return path != null && path.trim().toLowerCase(Locale.US).startsWith("content://");
     }
