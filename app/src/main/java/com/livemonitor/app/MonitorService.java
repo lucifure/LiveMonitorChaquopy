@@ -3120,6 +3120,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             );
 
             return true;
+        } catch (LiveStreamEndedException ended) {
+            restartingRecordings.remove(recording.getId());
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "FFmpeg fallback skipped because resolver confirmed the live event ended.",
+                normalizeErrorMessage(ended)
+            );
+            onRecordingFinished(channelId, recording.getId(), 0);
+            return true;
         } catch (Exception fallbackError) {
             if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
                 return true;
@@ -3234,6 +3245,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || lower.contains("gvs po")
             || lower.contains("precondition check failed")
             || lower.contains("token required");
+    }
+
+    private boolean isResolverBotDetectionError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+        return lower.contains("sign in to confirm you're not a bot")
+            || lower.contains("sign in to confirm you’re not a bot")
+            || lower.contains("login_required")
+            || lower.contains("please sign in");
+    }
+
+    private boolean isLiveEventEndedError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        return message.toLowerCase(java.util.Locale.US).contains("this live event has ended");
     }
 
     private boolean isLiveNotReadyError(String message) {
@@ -4416,35 +4447,34 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LiveInfo checkLive(String channelId, ChannelItem channel) {
-        LiveInfo liveInfo = checkLiveFromChannelLivePage(channelId, channel);
-        if (liveInfo != null) {
-            return liveInfo;
-        }
+        // Try YouTube Data API first if key is available
+        if (!isBlank(getApiKey())) {
+            try {
+                String apiUrl = "https://www.googleapis.com/youtube/v3/search"
+                    + "?part=snippet&channelId="
+                    + URLEncoder.encode(channelId, "UTF-8")
+                    + "&eventType=live&type=video&maxResults=1&key="
+                    + getApiKey();
 
-        if (isBlank(getApiKey())) {
-            return null;
-        }
+                JSONObject json = new JSONObject(httpGet(apiUrl));
+                JSONArray items = json.optJSONArray("items");
 
-        try {
-            String apiUrl = "https://www.googleapis.com/youtube/v3/search"
-                + "?part=snippet&channelId=" + URLEncoder.encode(channelId, "UTF-8")
-                + "&eventType=live&type=video&maxResults=1&key=" + getApiKey();
-
-            JSONObject json = new JSONObject(httpGet(apiUrl));
-            JSONArray items = json.optJSONArray("items");
-
-            if (items != null && items.length() > 0) {
-                JSONObject item = items.getJSONObject(0);
-                String videoId = item.getJSONObject("id").getString("videoId");
-                String title = item.getJSONObject("snippet").getString("title");
-
-                return new LiveInfo(videoId, title, "https://youtube.com/watch?v=" + videoId, fetchLiveStartTimestampMillis(videoId));
+                if (items != null && items.length() > 0) {
+                    JSONObject item = items.getJSONObject(0);
+                    String videoId = item.getJSONObject("id").getString("videoId");
+                    String title = item.getJSONObject("snippet").getString("title");
+                    return new LiveInfo(
+                        videoId, title,
+                        "https://youtube.com/watch?v=" + videoId,
+                        fetchLiveStartTimestampMillis(videoId)
+                    );
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
             }
-        } catch (Exception e) {
-            Log.w(TAG, "YouTube Data API live check also failed", e);
         }
 
-        return null;
+        return checkLiveFromChannelLivePage(channelId, channel);
     }
 
     private LiveInfo checkLiveFromChannelLivePage(String channelId, ChannelItem channel) {
@@ -4616,6 +4646,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
+                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                    throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
 
@@ -4662,6 +4694,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
+                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                    throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
 
@@ -4825,6 +4859,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
         List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, videoUrl);
         Exception lastError = null;
+        int consecutiveBotDetectionErrors = 0;
+        int initialLiveEndedErrors = 0;
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
             if (shouldSkipFallbackResolverForCompletedRecording(recordingIdToSkipIfComplete, channel, true)) {
@@ -4887,18 +4923,65 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return new ResolvedInput(url, videoId, youtubedlAndroidReady ? "youtubedl-android" : "yt-dlp");
             } catch (Exception e) {
                 lastError = e;
+                String errorMessage = normalizeErrorMessage(e);
 
                 throwIfChannelMonitoringHalted(channel, videoId);
 
-                if (isHttp429Error(normalizeErrorMessage(e))) {
-                    startHttp429Cooldown(channel, normalizeErrorMessage(e));
+                if (isHttp429Error(errorMessage)) {
+                    startHttp429Cooldown(channel, errorMessage);
                     throw e;
+                }
+
+                if (isResolverBotDetectionError(errorMessage)) {
+                    consecutiveBotDetectionErrors++;
+
+                    if (consecutiveBotDetectionErrors >= 3) {
+                        String abortMessage = "Resolver chain aborted early — bot detection active. Tried "
+                            + (attemptIndex + 1)
+                            + "/"
+                            + attempts.size()
+                            + " clients.";
+                        log(
+                            LogItem.LEVEL_WARNING,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            abortMessage,
+                            "videoId=" + videoId + ", lastError=" + errorMessage
+                        );
+                        throw new BotDetectionActiveException(abortMessage + " " + errorMessage, e);
+                    }
+                } else {
+                    consecutiveBotDetectionErrors = 0;
+                }
+
+                if (isLiveEventEndedError(errorMessage)) {
+                    if (attemptIndex < 2) {
+                        initialLiveEndedErrors++;
+                    }
+
+                    if (attemptIndex == 1 && initialLiveEndedErrors >= 2) {
+                        String endedMessage = "Resolver chain aborted early — first two clients reported the live event has ended. Tried "
+                            + (attemptIndex + 1)
+                            + "/"
+                            + attempts.size()
+                            + " clients.";
+                        log(
+                            LogItem.LEVEL_INFO,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            endedMessage,
+                            "videoId=" + videoId + ", lastError=" + errorMessage
+                        );
+                        throw new LiveStreamEndedException(endedMessage + " " + errorMessage, e);
+                    }
                 }
 
                 if (refreshYoutubedlAndroidAfterExtractorFailure(e, videoId, channel)) {
                     attempts = buildYtDlpResolveAttempts(builder, videoUrl);
                     attemptIndex = -1;
                     lastError = null;
+                    consecutiveBotDetectionErrors = 0;
+                    initialLiveEndedErrors = 0;
                     continue;
                 }
 
@@ -4908,8 +4991,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         LogItem.SOURCE_RECORDER,
                         channel,
                         "yt-dlp resolver attempt failed; trying next YouTube client.",
-                        "videoId=" + videoId + ", " + attempt.describe() + ", error=" + normalizeErrorMessage(e)
+                        "videoId=" + videoId + ", " + attempt.describe() + ", error=" + errorMessage
                     );
+                    sleep(3_000L);
                 }
             }
         }
@@ -6827,6 +6911,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             this.url = nullToEmpty(url).trim();
             this.videoId = nullToEmpty(videoId).trim();
             this.source = isBlank(source) ? "unknown" : source.trim();
+        }
+    }
+
+    private static class BotDetectionActiveException extends Exception {
+        BotDetectionActiveException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static class LiveStreamEndedException extends Exception {
+        LiveStreamEndedException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
