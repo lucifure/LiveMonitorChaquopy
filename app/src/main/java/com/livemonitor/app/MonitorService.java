@@ -4469,6 +4469,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         fetchLiveStartTimestampMillis(videoId)
                     );
                 }
+
+                // A successful empty API response means the channel is not live.
+                // Avoid scraping the much larger /live page on every poll, which
+                // can burn hundreds of MB overnight when scheduled streams sit in
+                // LIVE_STREAM_OFFLINE/UNPLAYABLE states.
+                return null;
             } catch (Exception e) {
                 Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
             }
