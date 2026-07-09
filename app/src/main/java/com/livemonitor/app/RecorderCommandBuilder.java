@@ -21,7 +21,7 @@ import java.util.List;
 public class RecorderCommandBuilder {
 
     public static final String EXTRACTOR_ARGS_NONE = "__live_monitor_no_extractor_args__";
-    private static final String LIVE_PRIMARY_RETRY_COUNT = "10";
+    private static final String LIVE_PRIMARY_RETRY_COUNT = "3";
     private static final String LIVE_PRIMARY_FRAGMENT_RETRY_COUNT = "3";
 
     /**
@@ -84,7 +84,7 @@ public class RecorderCommandBuilder {
         if (settings.isSkipUnavailableFragmentsEnabled()) {
             args.add("--skip-unavailable-fragments");
             args.add("--fragment-retries");
-            args.add("10");
+            args.add(LIVE_PRIMARY_FRAGMENT_RETRY_COUNT);
         }
 
         /*
@@ -107,11 +107,11 @@ public class RecorderCommandBuilder {
          * so Android does not keep a broken recorder alive forever.
          */
         args.add("--retries");
-        args.add("10");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--extractor-retries");
-        args.add("10");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--file-access-retries");
-        args.add("10");
+        args.add(LIVE_PRIMARY_RETRY_COUNT);
         args.add("--retry-sleep");
         args.add("5");
 
