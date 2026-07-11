@@ -3074,6 +3074,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording = latest;
         }
 
+        if (restartingRecordings.contains(recording.getId())) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "FFmpeg fallback skipped because stalled recording recovery is already restarting this recording.",
+                "recordingId=" + recording.getId() + ", reason=" + shortenForLog(failureReason, 300)
+            );
+            return true;
+        }
+
         if (shouldAbortRecorderRestartForTerminalState(
             channelId,
             channel,
@@ -3416,11 +3427,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId, channel);
 
             if (recorderProcessRunning && liveInfo != null && stalledRecording.matchesVideo(liveInfo.videoId)) {
-                finalizeLikelyEndedRecording(
-                    recordingId,
-                    "No recorder file growth for the stall threshold even though /live still reports the same video."
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Recording stalled while live is still active; restarting recorder instead of finalizing.",
+                    "recordingId="
+                        + recordingId
+                        + ", videoId="
+                        + liveInfo.videoId
+                        + ", currentBytes="
+                        + stalledRecording.getBytesRecorded()
                 );
-                return;
+                cancelRequested = cancelActiveRecording(stalledRecording, "recoverStalledRecording same live still active");
+                waitForRecordingFileAfterCancellation(stalledRecording);
             }
 
             if (liveInfo == null) {
