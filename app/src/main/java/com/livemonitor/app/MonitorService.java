@@ -4737,12 +4737,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return json.names().toString();
     }
 
-    private StreamEndStatus confirmStreamEnded(String videoId, String channelId) {
+    private StreamEndStatus confirmStreamEnded(String videoId, String channelId, ChannelItem channel) {
         String safeVideoId = normalizeVideoIdForLookup(videoId);
 
         if (!isBlank(channelId)) {
             try {
-                LiveInfo liveInfo = checkLiveFromChannelLivePage(channelId);
+                LiveInfo liveInfo = checkLiveFromChannelLivePage(channelId, channel);
 
                 if (liveInfo != null && safeVideoId.equals(normalizeVideoIdForLookup(liveInfo.videoId))) {
                     log(
@@ -4836,7 +4836,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             channelId = recording.getChannelId();
         }
 
-        return confirmStreamEnded(videoId, channelId);
+        return confirmStreamEnded(videoId, channelId, channel);
     }
 
     private void sleepForStreamEndRecheck() {
