@@ -55,6 +55,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
     private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
+    private static final long MIN_PARTIAL_RECORDING_SAVE_BYTES = 1L * 1024L * 1024L;
     private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
@@ -939,6 +940,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return false;
     }
 
+
+    private boolean savePartialRecordingAfterVideoDeletionIfLargeEnough(RecordingItem recording, ChannelItem channel) {
+        long estimatedSize = estimateExistingTempRecordingBytes(recording);
+
+        if (estimatedSize <= MIN_PARTIAL_RECORDING_SAVE_BYTES) {
+            return false;
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Saving partial recording after video deletion by uploader.",
+            "recordingId=" + recording.getId() + ", estimatedSize=" + estimatedSize + " bytes"
+        );
+
+        return saveStoppedRecordingForDownloads(recording, channel);
+    }
+
+    private long estimateExistingTempRecordingBytes(RecordingItem recording) {
+        if (recording == null) {
+            return 0L;
+        }
+
+        long totalBytes = 0L;
+
+        for (String path : recording.getTempSegmentPaths()) {
+            if (isBlank(path)) {
+                continue;
+            }
+
+            try {
+                File file = new File(path);
+
+                if (file.exists() && file.isFile()) {
+                    totalBytes += Math.max(0L, file.length());
+                }
+            } catch (RuntimeException ignored) {
+                // Ignore unreadable paths while estimating best-effort partial recording size.
+            }
+        }
+
+        return totalBytes;
+    }
 
     private boolean mergeStoppedDashSidecars(RecordingItem recording, ChannelItem channel) {
         List<File> sidecars = findYtDlpDashSidecarFiles(recording);
@@ -3163,6 +3208,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 combinedError
             );
 
+            if (isVideoDeletedOrUnavailableError(combinedError)) {
+                savePartialRecordingAfterVideoDeletionIfLargeEnough(recording, channel);
+            }
+
             broadcastRecordingUpdated("Recording is recoverable; fallback failed.");
             return true;
         }
@@ -3257,6 +3306,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || lower.contains("sign in to confirm you’re not a bot")
             || lower.contains("login_required")
             || lower.contains("please sign in");
+    }
+
+    private boolean isVideoDeletedOrUnavailableError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+        return lower.contains("this video has been removed by the uploader")
+            || lower.contains("video unavailable");
     }
 
     private boolean isLiveEventEndedError(String message) {
@@ -4538,8 +4597,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             String status = playabilityStatus == null
                 ? ""
                 : playabilityStatus.optString("status", "");
+            boolean activeLivePage = isActiveLivePageResponse(playerResponse, status, streamingData);
 
-            if (isBlank(hlsManifestUrl)) {
+            if (!activeLivePage) {
                 String responseSummary = summarizeInnertubeResponseForLog(playerResponse);
                 if (shouldLogLiveFallbackState(channelId, "inactive:" + videoId + ":" + status)) {
                     log(
@@ -4564,7 +4624,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.SOURCE_SERVICE,
                     null,
                     "Channel /live fallback found an active live video.",
-                    "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
+                    "channelId="
+                        + channelId
+                        + ", videoId="
+                        + videoId
+                        + ", status="
+                        + status
+                        + ", hlsManifest="
+                        + !isBlank(hlsManifestUrl)
+                        + ", streamingDataKeys="
+                        + describeJsonKeys(streamingData)
                 );
             }
 
@@ -4573,6 +4642,32 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             Log.w(TAG, "channel /live fallback failed", e);
             return null;
         }
+    }
+
+    private boolean isActiveLivePageResponse(JSONObject playerResponse, String status, JSONObject streamingData) {
+        if (streamingData == null || !"OK".equalsIgnoreCase(nullToEmpty(status).trim())) {
+            return false;
+        }
+
+        JSONObject videoDetails = playerResponse == null ? null : playerResponse.optJSONObject("videoDetails");
+        boolean isLiveContent = videoDetails != null && videoDetails.optBoolean("isLiveContent", false);
+        boolean hasPlayableFormat = !isBlank(streamingData.optString("hlsManifestUrl", ""))
+            || hasJsonArrayEntries(streamingData.optJSONArray("formats"))
+            || hasJsonArrayEntries(streamingData.optJSONArray("adaptiveFormats"));
+
+        return isLiveContent && hasPlayableFormat;
+    }
+
+    private boolean hasJsonArrayEntries(JSONArray array) {
+        return array != null && array.length() > 0;
+    }
+
+    private String describeJsonKeys(JSONObject json) {
+        if (json == null || json.names() == null) {
+            return "[]";
+        }
+
+        return json.names().toString();
     }
 
     private long fetchLiveStartTimestampMillis(String videoId) {
@@ -4652,7 +4747,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
-                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                } catch (BotDetectionActiveException | LiveStreamEndedException | VideoDeletedOrUnavailableException e) {
                     throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
@@ -4700,7 +4795,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
-                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                } catch (BotDetectionActiveException | LiveStreamEndedException | VideoDeletedOrUnavailableException e) {
                     throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
@@ -4866,6 +4961,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, videoUrl);
         Exception lastError = null;
         int consecutiveBotDetectionErrors = 0;
+        int consecutiveUnavailableErrors = 0;
         int initialLiveEndedErrors = 0;
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
@@ -4960,6 +5056,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     consecutiveBotDetectionErrors = 0;
                 }
 
+                if (isVideoDeletedOrUnavailableError(errorMessage)) {
+                    consecutiveUnavailableErrors++;
+
+                    if (consecutiveUnavailableErrors >= 2) {
+                        int attemptsTried = attemptIndex + 1;
+                        String abortMessage = "Resolver chain aborted — video confirmed deleted/unavailable after "
+                            + attemptsTried
+                            + " attempts. Saving partial recording.";
+                        log(
+                            LogItem.LEVEL_WARNING,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            abortMessage,
+                            "videoId=" + videoId + ", lastError=" + errorMessage
+                        );
+                        throw new VideoDeletedOrUnavailableException(abortMessage + " " + errorMessage, e);
+                    }
+                } else {
+                    consecutiveUnavailableErrors = 0;
+                }
+
                 if (isLiveEventEndedError(errorMessage)) {
                     if (attemptIndex < 2) {
                         initialLiveEndedErrors++;
@@ -4987,6 +5104,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     attemptIndex = -1;
                     lastError = null;
                     consecutiveBotDetectionErrors = 0;
+                    consecutiveUnavailableErrors = 0;
                     initialLiveEndedErrors = 0;
                     continue;
                 }
@@ -5564,6 +5682,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
 
         String lastFailure = "";
+        int consecutiveUnavailableErrors = 0;
 
         for (int clientIndex = 0; clientIndex < clients.size(); clientIndex++) {
             RemoteConfig.YoutubeClient client = clients.get(clientIndex);
@@ -5649,6 +5768,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                             lastFailure
                         );
 
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            reason
+                        );
+
                         continue;
                     }
 
@@ -5670,6 +5797,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                             channel,
                             "HLS manifest attempt failed.",
                             lastFailure
+                        );
+
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            reason
                         );
 
                         continue;
@@ -5695,6 +5830,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         lastFailure
                     );
 
+                    if (isVideoDeletedOrUnavailableError(normalizeErrorMessage(e))) {
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            normalizeErrorMessage(e)
+                        );
+                    } else {
+                        consecutiveUnavailableErrors = 0;
+                    }
+
                     Log.w(TAG, "getHlsManifestUrl attempt failed: " + lastFailure, e);
                 }
             }
@@ -5707,6 +5854,36 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         throw new IllegalStateException("Could not get HLS manifest URL. " + lastFailure);
+    }
+
+    private int updateUnavailableManifestFailureCount(
+        int currentCount,
+        int attemptsTried,
+        String videoId,
+        ChannelItem channel,
+        String reason
+    ) {
+        if (!isVideoDeletedOrUnavailableError(reason)) {
+            return 0;
+        }
+
+        int updatedCount = currentCount + 1;
+
+        if (updatedCount >= 2) {
+            String abortMessage = "Resolver chain aborted — video confirmed deleted/unavailable after "
+                + attemptsTried
+                + " attempts. Saving partial recording.";
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                abortMessage,
+                "videoId=" + videoId + ", lastError=" + reason
+            );
+            throw new VideoDeletedOrUnavailableException(abortMessage + " " + reason, null);
+        }
+
+        return updatedCount;
     }
 
     private String getHlsManifestUrlFromWatchPage(
@@ -6928,6 +7105,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private static class LiveStreamEndedException extends Exception {
         LiveStreamEndedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static class VideoDeletedOrUnavailableException extends RuntimeException {
+        VideoDeletedOrUnavailableException(String message, Throwable cause) {
             super(message, cause);
         }
     }
