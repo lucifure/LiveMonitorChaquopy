@@ -5255,11 +5255,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     consecutiveUnavailableErrors = 0;
                 }
 
-                if (isLiveEventEndedError(errorMessage) || isVideoRemovedByUploaderError(errorMessage)) {
+                if (isLiveEventEndedError(errorMessage)) {
                     consecutiveEndedErrors++;
 
-                    if (attemptIndex < 2 && isLiveEventEndedError(errorMessage)) {
-                if (isLiveEventEndedError(errorMessage)) {
                     if (attemptIndex < 2) {
                         initialLiveEndedErrors++;
                     }
