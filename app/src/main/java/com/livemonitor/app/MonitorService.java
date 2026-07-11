@@ -55,6 +55,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
     private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
+    private static final long MIN_PARTIAL_RECORDING_SAVE_BYTES = 1L * 1024L * 1024L;
     private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
@@ -127,7 +128,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             @Override
             public void onRecordingStalled(RecordingItem recording) {
                 if (recording != null) {
-                    executor.execute(() -> recoverStalledRecording(recording.getId()));
+                    executor.execute(() -> handleRecordingStall(
+                        recording.getId(),
+                        "No recorder file growth for the stall threshold."
+                    ));
                 }
             }
         });
@@ -939,6 +943,50 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return false;
     }
 
+
+    private boolean savePartialRecordingAfterVideoDeletionIfLargeEnough(RecordingItem recording, ChannelItem channel) {
+        long estimatedSize = estimateExistingTempRecordingBytes(recording);
+
+        if (estimatedSize <= MIN_PARTIAL_RECORDING_SAVE_BYTES) {
+            return false;
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Saving partial recording after video deletion by uploader.",
+            "recordingId=" + recording.getId() + ", estimatedSize=" + estimatedSize + " bytes"
+        );
+
+        return saveStoppedRecordingForDownloads(recording, channel);
+    }
+
+    private long estimateExistingTempRecordingBytes(RecordingItem recording) {
+        if (recording == null) {
+            return 0L;
+        }
+
+        long totalBytes = 0L;
+
+        for (String path : recording.getTempSegmentPaths()) {
+            if (isBlank(path)) {
+                continue;
+            }
+
+            try {
+                File file = new File(path);
+
+                if (file.exists() && file.isFile()) {
+                    totalBytes += Math.max(0L, file.length());
+                }
+            } catch (RuntimeException ignored) {
+                // Ignore unreadable paths while estimating best-effort partial recording size.
+            }
+        }
+
+        return totalBytes;
+    }
 
     private boolean mergeStoppedDashSidecars(RecordingItem recording, ChannelItem channel) {
         List<File> sidecars = findYtDlpDashSidecarFiles(recording);
@@ -2545,7 +2593,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     );
 
                     if (fragmentEndSignal && ytDlpFragmentEndSignals.add(processId)) {
-                        executor.execute(() -> finalizeLikelyEndedRecording(
+                        executor.execute(() -> handleRecordingStall(
                             processId,
                             "yt-dlp reported fragment download failures: " + shortLine
                         ));
@@ -2603,55 +2651,141 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return false;
     }
 
-    private void finalizeLikelyEndedRecording(String recordingId, String reason) {
+    private void handleRecordingStall(String recordingId, String reason) {
         if (isBlank(recordingId)) {
             return;
         }
 
-        if (skipDuplicateFinalizationRequest(recordingId, null)) {
+        if (!finalizingRecordingIds.add(recordingId)) {
             return;
         }
 
-        try {
-            RecordingItem recording = storage.findRecordingById(recordingId);
+        RecordingItem recording = storage.findRecordingById(recordingId);
 
-            if (recording == null || !recording.isActive()) {
+        if (recording == null) {
+            finalizingRecordingIds.remove(recordingId);
+            return;
+        }
+
+        ChannelItem channel = isBlank(recording.getChannelId()) ? null : storage.findChannelById(recording.getChannelId());
+        handleRecordingStall(recording, channel, reason);
+    }
+
+    private void handleRecordingStall(RecordingItem recording, ChannelItem channel, String reason) {
+        if (recording == null || !recording.isActive()) {
+            if (recording != null) {
+                finalizingRecordingIds.remove(recording.getId());
+            }
+            return;
+        }
+
+        String recordingId = recording.getId();
+        String channelId = recording.getChannelId();
+
+        try {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recording file growth stalled. Checking if stream is still live.",
+                "videoId=" + recording.getVideoId() + ", recordingId=" + recordingId + ", reason=" + nullToEmpty(reason)
+            );
+
+            StreamEndStatus endStatus = confirmStreamEnded(recording, channel);
+
+            if (endStatus == StreamEndStatus.UNKNOWN) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Stall detected, stream status unknown. Waiting 2 minutes.",
+                    "videoId=" + recording.getVideoId()
+                );
+                sleepForStreamEndRecheck();
+                endStatus = confirmStreamEnded(recording, channel);
+            }
+
+            if (endStatus == StreamEndStatus.STILL_LIVE) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Stall detected but stream confirmed still live. Restarting recorder.",
+                    "videoId=" + recording.getVideoId()
+                );
+                restartingRecordings.add(recordingId);
+                cancelActiveRecording(recording, "stall-recovery restart");
+                waitForRecordingFileAfterCancellation(recording);
+                restartPrimaryRecorder(recording, channel);
                 return;
             }
 
-            String channelId = recording.getChannelId();
-            ChannelItem channel = isBlank(channelId) ? null : storage.findChannelById(channelId);
-
-            detachRecordingFromActiveState(recording, channelId);
-            cancelActiveRecording(recording, "finalizeLikelyEndedRecording");
-            waitForRecordingFileAfterCancellation(recording);
-
-            RecordingItem latest = storage.findRecordingById(recording.getId());
-            RecordingItem toSave = latest == null ? recording : latest;
-            toSave.setDiagnosticMessage(reason);
-            storage.upsertRecording(toSave);
-            boolean saved = saveStoppedRecordingForDownloads(toSave, channel);
-
-            detachRecordingFromActiveState(toSave, channelId);
-
-            if (channel != null) {
-                channel.markRecordingFinished();
-                channel.markWaitingForLive();
-                storage.upsertChannel(channel);
-                notificationHelper.showChannelMonitoringNotification(channel);
-            }
-
             log(
-                saved ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+                LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                saved ? "Likely-ended recording finalized." : "Likely-ended recording stopped without a playable file.",
-                "recordingId=" + recordingId + ", reason=" + reason
+                "Stall detected and stream confirmed ended. Finalizing.",
+                "videoId=" + recording.getVideoId() + ", status=" + endStatus
             );
-            broadcastRecordingUpdated(saved ? "Recording ended and was saved." : "Recording ended, but no playable file was found.");
+            cancelActiveRecording(recording, "stall confirmed ended");
+            waitForRecordingFileAfterCancellation(recording);
+            finalizeCompletedRecording(recording, channel);
         } finally {
             finalizingRecordingIds.remove(recordingId);
         }
+    }
+
+    private void restartPrimaryRecorder(RecordingItem recording, ChannelItem channel) {
+        if (recording == null) {
+            return;
+        }
+
+        String channelId = recording.getChannelId();
+        LiveInfo checkedLiveInfo = null;
+
+        if (channel != null) {
+            String youtubeChannelId = resolveChannelId(channel.getUrl());
+            checkedLiveInfo = isBlank(youtubeChannelId) ? null : checkLiveFromChannelLivePage(youtubeChannelId, channel);
+        }
+
+        final LiveInfo liveInfo = checkedLiveInfo == null
+            ? new LiveInfo(recording.getVideoId(), recording.getTitle(), recording.getVideoUrl(), recording.getStartedAt())
+            : checkedLiveInfo;
+
+        recording.markRecording();
+        recording.showInDownloading();
+        recording.setDiagnosticMessage("Stream confirmed live; restarting recorder.");
+        storage.upsertRecording(recording);
+        activeRecordings.put(channelId, recording);
+        activeRecordings.put(recording.getId(), recording);
+        progressTracker.track(recording);
+
+        if (channel != null) {
+            channel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        executor.execute(() -> runRecording(channelId, recording, liveInfo));
+    }
+
+    private void finalizeCompletedRecording(RecordingItem recording, ChannelItem channel) {
+        if (recording == null) {
+            return;
+        }
+
+        String channelId = recording.getChannelId();
+        detachRecordingFromActiveState(recording, channelId);
+        saveStoppedRecordingForDownloads(recording, channel);
+
+        if (channel != null) {
+            channel.markRecordingFinished();
+            channel.markWaitingForLive();
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        broadcastRecordingUpdated("Recording ended and was saved.");
     }
 
     private void executeYoutubedlAndroidRequest(
@@ -3029,6 +3163,58 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             recording = latest;
         }
 
+        if (restartingRecordings.contains(recording.getId())) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "FFmpeg fallback skipped because stalled recording recovery is already restarting this recording.",
+                "recordingId=" + recording.getId() + ", reason=" + shortenForLog(failureReason, 300)
+            );
+            return true;
+        }
+
+        StreamEndStatus endStatus = confirmStreamEnded(recording, channel);
+
+        if (endStatus == StreamEndStatus.UNKNOWN) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "yt-dlp exited, stream status unknown. Waiting 2 minutes before recheck.",
+                "videoId=" + recording.getVideoId()
+            );
+            sleepForStreamEndRecheck();
+            endStatus = confirmStreamEnded(recording, channel);
+        }
+
+        if (endStatus == StreamEndStatus.CONFIRMED_ENDED || endStatus == StreamEndStatus.UNKNOWN) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Skipping resolver chain — stream confirmed ended before first attempt.",
+                "videoId=" + recording.getVideoId()
+            );
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "yt-dlp exited and stream confirmed ended. Finalizing recording.",
+                "videoId=" + recording.getVideoId() + ", status=" + endStatus
+            );
+            finalizeCompletedRecording(recording, channel);
+            return true;
+        }
+
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "yt-dlp exited but stream confirmed still live. Trying fallback resolver for alternate recorder input.",
+            "videoId=" + recording.getVideoId()
+        );
+
         if (shouldAbortRecorderRestartForTerminalState(
             channelId,
             channel,
@@ -3129,7 +3315,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "FFmpeg fallback skipped because resolver confirmed the live event ended.",
                 normalizeErrorMessage(ended)
             );
-            onRecordingFinished(channelId, recording.getId(), 0);
+            finalizeCompletedRecording(recording, channel);
             return true;
         } catch (Exception fallbackError) {
             if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
@@ -3162,6 +3348,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "yt-dlp primary recorder and FFmpeg fallback failed.",
                 combinedError
             );
+
+            if (isVideoDeletedOrUnavailableError(combinedError)) {
+                savePartialRecordingAfterVideoDeletionIfLargeEnough(recording, channel);
+            }
 
             broadcastRecordingUpdated("Recording is recoverable; fallback failed.");
             return true;
@@ -3257,6 +3447,24 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || lower.contains("sign in to confirm you’re not a bot")
             || lower.contains("login_required")
             || lower.contains("please sign in");
+    }
+
+    private boolean isVideoRemovedByUploaderError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        return message.toLowerCase(java.util.Locale.US).contains("this video has been removed by the uploader");
+    }
+
+    private boolean isVideoDeletedOrUnavailableError(String message) {
+        if (isBlank(message)) {
+            return false;
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+        return lower.contains("this video has been removed by the uploader")
+            || lower.contains("video unavailable");
     }
 
     private boolean isLiveEventEndedError(String message) {
@@ -3357,11 +3565,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LiveInfo liveInfo = resolvedChannelId == null ? null : checkLive(resolvedChannelId, channel);
 
             if (recorderProcessRunning && liveInfo != null && stalledRecording.matchesVideo(liveInfo.videoId)) {
-                finalizeLikelyEndedRecording(
-                    recordingId,
-                    "No recorder file growth for the stall threshold even though /live still reports the same video."
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Recording stalled while live is still active; restarting recorder instead of finalizing.",
+                    "recordingId="
+                        + recordingId
+                        + ", videoId="
+                        + liveInfo.videoId
+                        + ", currentBytes="
+                        + stalledRecording.getBytesRecorded()
                 );
-                return;
+                cancelRequested = cancelActiveRecording(stalledRecording, "recoverStalledRecording same live still active");
+                waitForRecordingFileAfterCancellation(stalledRecording);
             }
 
             if (liveInfo == null) {
@@ -4024,121 +4241,38 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return CleanExitAction.FINALIZE;
         }
 
-        LiveInfo liveInfo;
+        StreamEndStatus endStatus = confirmStreamEnded(recording, channel);
 
-        try {
-            liveInfo = resolveCurrentLiveInfo(channel);
-        } catch (Exception e) {
-            String errorMessage = normalizeErrorMessage(e);
-
-            restartingRecordings.remove(recording.getId());
-            activeRecordings.remove(channelId);
-            activeRecordings.remove(recording.getId());
-            progressTracker.untrack(recording);
-
-            recording.markRecoverable("Recorder exited cleanly, but live status re-check failed. " + errorMessage);
-            storage.upsertRecording(recording);
-
-            if (channel != null) {
-                channel.markWaitingForLive();
-                storage.upsertChannel(channel);
-                notificationHelper.showChannelMonitoringNotification(channel);
-            }
-
+        if (endStatus == StreamEndStatus.UNKNOWN) {
             log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Recorder clean exit is not being finalized because live status could not be confirmed.",
-                errorMessage
+                "yt-dlp exited, stream status unknown. Waiting 2 minutes before recheck.",
+                "videoId=" + recording.getVideoId()
             );
-
-            broadcastRecordingUpdated("Recording is recoverable; live status check failed.");
-            return CleanExitAction.DEFERRED;
+            sleepForStreamEndRecheck();
+            endStatus = confirmStreamEnded(recording, channel);
         }
 
-        if (liveInfo != null && recording.matchesVideo(liveInfo.videoId)) {
-            recording.markRecording();
-            recording.showInDownloading();
-            recording.setDiagnosticMessage("FFmpeg exited cleanly while the same live video is still active; restarting recorder.");
-            storage.upsertRecording(recording);
-
-            String activeChannelId = isBlank(channelId) ? channel.getId() : channelId;
-            activeRecordings.put(activeChannelId, recording);
-            progressTracker.track(recording);
-
-            channel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
-            storage.upsertChannel(channel);
-            notificationHelper.showChannelMonitoringNotification(channel);
-
+        if (endStatus == StreamEndStatus.STILL_LIVE) {
             log(
-                LogItem.LEVEL_WARNING,
+                LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "FFmpeg exited with code 0 while the live stream is still active; restarting recorder after transient HLS EOF.",
-                "recordingId=" + recording.getId() + ", videoId=" + liveInfo.videoId
+                "yt-dlp exited but stream confirmed still live. Restarting recorder.",
+                "videoId=" + recording.getVideoId()
             );
-
-            if (youtubedlAndroidReady && currentRecordingSegmentHasData(recording)) {
-                recording.addTempChunkPath(createResumeChunkPath(recording));
-                storage.upsertRecording(recording);
-            }
-
-            broadcastRecordingUpdated("Recorder restarted after transient HLS EOF.");
-            String restartChannelId = isBlank(channelId) ? channel.getId() : channelId;
-            executor.execute(() -> runRecording(restartChannelId, recording, liveInfo));
+            restartPrimaryRecorder(recording, channel);
             return CleanExitAction.RESTARTED;
         }
-
-        LiveInfo confirmedLiveInfo = confirmCleanExitStillLooksFinished(channel, recording, liveInfo);
-        if (confirmedLiveInfo != null && recording.matchesVideo(confirmedLiveInfo.videoId)) {
-            recording.markRecording();
-            recording.showInDownloading();
-            recording.setDiagnosticMessage("Live re-check flickered negative after clean recorder exit; restarting recorder.");
-            storage.upsertRecording(recording);
-
-            String activeChannelId = isBlank(channelId) ? channel.getId() : channelId;
-            activeRecordings.put(activeChannelId, recording);
-            progressTracker.track(recording);
-
-            channel.markRecording(confirmedLiveInfo.videoId, confirmedLiveInfo.videoUrl);
-            storage.upsertChannel(channel);
-            notificationHelper.showChannelMonitoringNotification(channel);
-            executor.execute(() -> runRecording(activeChannelId, recording, confirmedLiveInfo));
-            return CleanExitAction.RESTARTED;
-        }
-
-        long ageMillis = recording.getStartedAt() <= 0L
-            ? Long.MAX_VALUE
-            : System.currentTimeMillis() - recording.getStartedAt();
-        if (ageMillis < 5L * 60L * 1_000L) {
-            restartingRecordings.remove(recording.getId());
-            activeRecordings.remove(channelId);
-            activeRecordings.remove(recording.getId());
-            progressTracker.untrack(recording);
-            recording.markRecoverable("Recorder exited within the startup grace period; refusing to mark complete after transient negative live checks.");
-            storage.upsertRecording(recording);
-            log(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_RECORDER,
-                channel,
-                "Clean recorder exit deferred during startup grace period.",
-                "recordingId=" + recording.getId()
-            );
-            broadcastRecordingUpdated("Recording is recoverable; startup live status was unstable.");
-            return CleanExitAction.DEFERRED;
-        }
-
-        String completionReason = liveInfo == null
-            ? "confirmed no active stream after repeated live checks"
-            : "confirmed live video changed to " + liveInfo.videoId;
 
         log(
-            LogItem.LEVEL_SUCCESS,
+            LogItem.LEVEL_INFO,
             LogItem.SOURCE_RECORDER,
             channel,
-            "Recording completed; live re-check confirmed final completion.",
-            "recordingId=" + recording.getId() + ", reason=" + completionReason
+            "yt-dlp exited and stream confirmed ended. Finalizing recording.",
+            "videoId=" + recording.getVideoId() + ", status=" + endStatus
         );
 
         return CleanExitAction.FINALIZE;
@@ -4538,8 +4672,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             String status = playabilityStatus == null
                 ? ""
                 : playabilityStatus.optString("status", "");
+            boolean activeLivePage = isActiveLivePageResponse(playerResponse, status, streamingData);
 
-            if (isBlank(hlsManifestUrl)) {
+            if (!activeLivePage) {
                 String responseSummary = summarizeInnertubeResponseForLog(playerResponse);
                 if (shouldLogLiveFallbackState(channelId, "inactive:" + videoId + ":" + status)) {
                     log(
@@ -4564,7 +4699,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.SOURCE_SERVICE,
                     null,
                     "Channel /live fallback found an active live video.",
-                    "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
+                    "channelId="
+                        + channelId
+                        + ", videoId="
+                        + videoId
+                        + ", status="
+                        + status
+                        + ", hlsManifest="
+                        + !isBlank(hlsManifestUrl)
+                        + ", streamingDataKeys="
+                        + describeJsonKeys(streamingData)
                 );
             }
 
@@ -4572,6 +4716,142 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (Exception e) {
             Log.w(TAG, "channel /live fallback failed", e);
             return null;
+        }
+    }
+
+    private boolean isActiveLivePageResponse(JSONObject playerResponse, String status, JSONObject streamingData) {
+        if (streamingData == null || !"OK".equalsIgnoreCase(nullToEmpty(status).trim())) {
+            return false;
+        }
+
+        JSONObject videoDetails = playerResponse == null ? null : playerResponse.optJSONObject("videoDetails");
+        boolean isLiveContent = videoDetails != null && videoDetails.optBoolean("isLiveContent", false);
+        boolean hasPlayableFormat = !isBlank(streamingData.optString("hlsManifestUrl", ""))
+            || hasJsonArrayEntries(streamingData.optJSONArray("formats"))
+            || hasJsonArrayEntries(streamingData.optJSONArray("adaptiveFormats"));
+
+        return isLiveContent && hasPlayableFormat;
+    }
+
+    private boolean hasJsonArrayEntries(JSONArray array) {
+        return array != null && array.length() > 0;
+    }
+
+    private String describeJsonKeys(JSONObject json) {
+        if (json == null || json.names() == null) {
+            return "[]";
+        }
+
+        return json.names().toString();
+    }
+
+    private StreamEndStatus confirmStreamEnded(String videoId, String channelId) {
+        String safeVideoId = normalizeVideoIdForLookup(videoId);
+
+        if (!isBlank(channelId)) {
+            try {
+                LiveInfo liveInfo = checkLiveFromChannelLivePage(channelId);
+
+                if (liveInfo != null && safeVideoId.equals(normalizeVideoIdForLookup(liveInfo.videoId))) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: /live page confirms stream still active.",
+                        "videoId=" + safeVideoId
+                    );
+                    return StreamEndStatus.STILL_LIVE;
+                }
+
+                if (liveInfo != null && !safeVideoId.equals(normalizeVideoIdForLookup(liveInfo.videoId))) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: /live page shows different video — stream ended.",
+                        "videoId=" + safeVideoId + ", newVideoId=" + liveInfo.videoId
+                    );
+                    return StreamEndStatus.CONFIRMED_ENDED;
+                }
+            } catch (Exception e) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Stream end check: /live page check failed.",
+                    "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(e)
+                );
+            }
+        }
+
+        try {
+            String html = httpGet(YouTubeUrlUtils.buildWatchUrl(safeVideoId));
+
+            if (html != null) {
+                if (html.contains("\"isLive\":true")) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: watch page confirms isLive=true.",
+                        "videoId=" + safeVideoId
+                    );
+                    return StreamEndStatus.STILL_LIVE;
+                }
+
+                if (html.contains("LIVE_STREAM_OFFLINE")
+                    || html.contains("has been removed")
+                    || html.contains("\"isLive\":false")) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: watch page confirms stream ended.",
+                        "videoId=" + safeVideoId
+                    );
+                    return StreamEndStatus.CONFIRMED_ENDED;
+                }
+            }
+        } catch (Exception e) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Stream end check: watch page check failed.",
+                "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(e)
+            );
+        }
+
+        log(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            null,
+            "Stream end check: inconclusive — assuming still live.",
+            "videoId=" + safeVideoId
+        );
+        return StreamEndStatus.UNKNOWN;
+    }
+
+    private StreamEndStatus confirmStreamEnded(RecordingItem recording, ChannelItem channel) {
+        String videoId = recording == null ? "" : recording.getVideoId();
+        String channelId = "";
+
+        if (channel != null) {
+            channelId = resolveChannelId(channel.getUrl());
+        }
+
+        if (isBlank(channelId) && recording != null) {
+            channelId = recording.getChannelId();
+        }
+
+        return confirmStreamEnded(videoId, channelId);
+    }
+
+    private void sleepForStreamEndRecheck() {
+        try {
+            Thread.sleep(120_000L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -4652,7 +4932,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
-                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                } catch (BotDetectionActiveException | LiveStreamEndedException | VideoDeletedOrUnavailableException e) {
                     throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
@@ -4700,7 +4980,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             if (ytDlpExecutableReady) {
                 try {
                     return resolveWithYtDlp(videoUrl, safeVideoId, channel, recordingIdToSkipIfComplete);
-                } catch (BotDetectionActiveException | LiveStreamEndedException e) {
+                } catch (BotDetectionActiveException | LiveStreamEndedException | VideoDeletedOrUnavailableException e) {
                     throw e;
                 } catch (Exception e) {
                     ytDlpError = e;
@@ -4866,6 +5146,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         List<YtDlpResolveAttempt> attempts = buildYtDlpResolveAttempts(builder, videoUrl);
         Exception lastError = null;
         int consecutiveBotDetectionErrors = 0;
+        int consecutiveUnavailableErrors = 0;
+        int consecutiveEndedErrors = 0;
         int initialLiveEndedErrors = 0;
 
         for (int attemptIndex = 0; attemptIndex < attempts.size(); attemptIndex++) {
@@ -4960,26 +5242,47 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     consecutiveBotDetectionErrors = 0;
                 }
 
-                if (isLiveEventEndedError(errorMessage)) {
-                    if (attemptIndex < 2) {
+                if (isVideoDeletedOrUnavailableError(errorMessage) && !isVideoRemovedByUploaderError(errorMessage)) {
+                    consecutiveUnavailableErrors++;
+
+                    if (consecutiveUnavailableErrors >= 2) {
+                        int attemptsTried = attemptIndex + 1;
+                        String abortMessage = "Resolver chain aborted — video confirmed deleted/unavailable after "
+                            + attemptsTried
+                            + " attempts. Saving partial recording.";
+                        log(
+                            LogItem.LEVEL_WARNING,
+                            LogItem.SOURCE_RECORDER,
+                            channel,
+                            abortMessage,
+                            "videoId=" + videoId + ", lastError=" + errorMessage
+                        );
+                        throw new VideoDeletedOrUnavailableException(abortMessage + " " + errorMessage, e);
+                    }
+                } else {
+                    consecutiveUnavailableErrors = 0;
+                }
+
+                if (isLiveEventEndedError(errorMessage) || isVideoRemovedByUploaderError(errorMessage)) {
+                    consecutiveEndedErrors++;
+
+                    if (attemptIndex < 2 && isLiveEventEndedError(errorMessage)) {
                         initialLiveEndedErrors++;
                     }
 
-                    if (attemptIndex == 1 && initialLiveEndedErrors >= 2) {
-                        String endedMessage = "Resolver chain aborted early — first two clients reported the live event has ended. Tried "
-                            + (attemptIndex + 1)
-                            + "/"
-                            + attempts.size()
-                            + " clients.";
+                    if (consecutiveEndedErrors >= 2 || (attemptIndex == 1 && initialLiveEndedErrors >= 2)) {
+                        String endedMessage = "Resolver chain aborted — stream confirmed ended by multiple clients.";
                         log(
                             LogItem.LEVEL_INFO,
                             LogItem.SOURCE_RECORDER,
                             channel,
                             endedMessage,
-                            "videoId=" + videoId + ", lastError=" + errorMessage
+                            "videoId=" + videoId + ", attempt=" + (attemptIndex + 1) + ", lastError=" + errorMessage
                         );
                         throw new LiveStreamEndedException(endedMessage + " " + errorMessage, e);
                     }
+                } else {
+                    consecutiveEndedErrors = 0;
                 }
 
                 if (refreshYoutubedlAndroidAfterExtractorFailure(e, videoId, channel)) {
@@ -4987,6 +5290,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     attemptIndex = -1;
                     lastError = null;
                     consecutiveBotDetectionErrors = 0;
+                    consecutiveUnavailableErrors = 0;
+                    consecutiveEndedErrors = 0;
                     initialLiveEndedErrors = 0;
                     continue;
                 }
@@ -5564,6 +5869,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
 
         String lastFailure = "";
+        int consecutiveUnavailableErrors = 0;
 
         for (int clientIndex = 0; clientIndex < clients.size(); clientIndex++) {
             RemoteConfig.YoutubeClient client = clients.get(clientIndex);
@@ -5649,6 +5955,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                             lastFailure
                         );
 
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            reason
+                        );
+
                         continue;
                     }
 
@@ -5670,6 +5984,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                             channel,
                             "HLS manifest attempt failed.",
                             lastFailure
+                        );
+
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            reason
                         );
 
                         continue;
@@ -5695,6 +6017,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         lastFailure
                     );
 
+                    if (isVideoDeletedOrUnavailableError(normalizeErrorMessage(e))) {
+                        consecutiveUnavailableErrors = updateUnavailableManifestFailureCount(
+                            consecutiveUnavailableErrors,
+                            clientIndex + 1,
+                            videoId,
+                            channel,
+                            normalizeErrorMessage(e)
+                        );
+                    } else {
+                        consecutiveUnavailableErrors = 0;
+                    }
+
                     Log.w(TAG, "getHlsManifestUrl attempt failed: " + lastFailure, e);
                 }
             }
@@ -5707,6 +6041,36 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         throw new IllegalStateException("Could not get HLS manifest URL. " + lastFailure);
+    }
+
+    private int updateUnavailableManifestFailureCount(
+        int currentCount,
+        int attemptsTried,
+        String videoId,
+        ChannelItem channel,
+        String reason
+    ) {
+        if (!isVideoDeletedOrUnavailableError(reason)) {
+            return 0;
+        }
+
+        int updatedCount = currentCount + 1;
+
+        if (updatedCount >= 2) {
+            String abortMessage = "Resolver chain aborted — video confirmed deleted/unavailable after "
+                + attemptsTried
+                + " attempts. Saving partial recording.";
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                abortMessage,
+                "videoId=" + videoId + ", lastError=" + reason
+            );
+            throw new VideoDeletedOrUnavailableException(abortMessage + " " + reason, null);
+        }
+
+        return updatedCount;
     }
 
     private String getHlsManifestUrlFromWatchPage(
@@ -6920,6 +7284,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+    private enum StreamEndStatus {
+        STILL_LIVE,
+        CONFIRMED_ENDED,
+        UNKNOWN
+    }
+
     private static class BotDetectionActiveException extends Exception {
         BotDetectionActiveException(String message, Throwable cause) {
             super(message, cause);
@@ -6928,6 +7298,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private static class LiveStreamEndedException extends Exception {
         LiveStreamEndedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static class VideoDeletedOrUnavailableException extends RuntimeException {
+        VideoDeletedOrUnavailableException(String message, Throwable cause) {
             super(message, cause);
         }
     }
