@@ -3449,14 +3449,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             || lower.contains("please sign in");
     }
 
-    private boolean isVideoRemovedByUploaderError(String message) {
-        if (isBlank(message)) {
-            return false;
-        }
-
-        return message.toLowerCase(java.util.Locale.US).contains("this video has been removed by the uploader");
-    }
-
     private boolean isVideoDeletedOrUnavailableError(String message) {
         if (isBlank(message)) {
             return false;
@@ -5242,7 +5234,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     consecutiveBotDetectionErrors = 0;
                 }
 
-                if (isVideoDeletedOrUnavailableError(errorMessage) && !isVideoRemovedByUploaderError(errorMessage)) {
+                if (isVideoDeletedOrUnavailableError(errorMessage)) {
                     consecutiveUnavailableErrors++;
 
                     if (consecutiveUnavailableErrors >= 2) {
@@ -5267,6 +5259,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     consecutiveEndedErrors++;
 
                     if (attemptIndex < 2 && isLiveEventEndedError(errorMessage)) {
+                if (isLiveEventEndedError(errorMessage)) {
+                    if (attemptIndex < 2) {
                         initialLiveEndedErrors++;
                     }
 
