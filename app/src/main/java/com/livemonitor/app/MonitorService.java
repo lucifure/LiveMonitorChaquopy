@@ -4597,8 +4597,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             String status = playabilityStatus == null
                 ? ""
                 : playabilityStatus.optString("status", "");
+            boolean activeLivePage = isActiveLivePageResponse(playerResponse, status, streamingData);
 
-            if (isBlank(hlsManifestUrl)) {
+            if (!activeLivePage) {
                 String responseSummary = summarizeInnertubeResponseForLog(playerResponse);
                 if (shouldLogLiveFallbackState(channelId, "inactive:" + videoId + ":" + status)) {
                     log(
@@ -4623,7 +4624,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     LogItem.SOURCE_SERVICE,
                     null,
                     "Channel /live fallback found an active live video.",
-                    "channelId=" + channelId + ", videoId=" + videoId + ", status=" + status
+                    "channelId="
+                        + channelId
+                        + ", videoId="
+                        + videoId
+                        + ", status="
+                        + status
+                        + ", hlsManifest="
+                        + !isBlank(hlsManifestUrl)
+                        + ", streamingDataKeys="
+                        + describeJsonKeys(streamingData)
                 );
             }
 
@@ -4632,6 +4642,32 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             Log.w(TAG, "channel /live fallback failed", e);
             return null;
         }
+    }
+
+    private boolean isActiveLivePageResponse(JSONObject playerResponse, String status, JSONObject streamingData) {
+        if (streamingData == null || !"OK".equalsIgnoreCase(nullToEmpty(status).trim())) {
+            return false;
+        }
+
+        JSONObject videoDetails = playerResponse == null ? null : playerResponse.optJSONObject("videoDetails");
+        boolean isLiveContent = videoDetails != null && videoDetails.optBoolean("isLiveContent", false);
+        boolean hasPlayableFormat = !isBlank(streamingData.optString("hlsManifestUrl", ""))
+            || hasJsonArrayEntries(streamingData.optJSONArray("formats"))
+            || hasJsonArrayEntries(streamingData.optJSONArray("adaptiveFormats"));
+
+        return isLiveContent && hasPlayableFormat;
+    }
+
+    private boolean hasJsonArrayEntries(JSONArray array) {
+        return array != null && array.length() > 0;
+    }
+
+    private String describeJsonKeys(JSONObject json) {
+        if (json == null || json.names() == null) {
+            return "[]";
+        }
+
+        return json.names().toString();
     }
 
     private long fetchLiveStartTimestampMillis(String videoId) {
