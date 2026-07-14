@@ -5,11 +5,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 public class KeepAliveReceiver extends BroadcastReceiver {
 
     @Override
@@ -22,35 +17,5 @@ public class KeepAliveReceiver extends BroadcastReceiver {
         } else {
             context.startService(serviceIntent);
         }
-
-        ExecutorService pingExecutor = Executors.newSingleThreadExecutor();
-        pingExecutor.execute(() -> {
-            HttpURLConnection conn = null;
-            boolean pingSucceeded = false;
-
-            try {
-                URL url = new URL("https://www.youtube.com/generate_204");
-                conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(5_000);
-                conn.setReadTimeout(5_000);
-                conn.connect();
-                pingSucceeded = conn.getResponseCode() == HttpURLConnection.HTTP_NO_CONTENT;
-            } catch (Exception ignored) {
-                // Ping failure is expected during an outage.
-            } finally {
-                logPingResult(context, pingSucceeded);
-                if (conn != null) {
-                    conn.disconnect();
-                }
-                pingExecutor.shutdown();
-            }
-        });
-    }
-
-    private void logPingResult(Context context, boolean pingSucceeded) {
-        AppStorage storage = new AppStorage(context.getApplicationContext());
-        storage.appendLog(pingSucceeded
-            ? LogItem.debug(LogItem.SOURCE_NETWORK, "Keep-alive ping succeeded")
-            : LogItem.warning(LogItem.SOURCE_NETWORK, "Keep-alive ping failed — network may be suspended"));
     }
 }

@@ -63,6 +63,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     public static final String ACTION_KEEP_ALIVE_PING = "com.livemonitor.app.ACTION_KEEP_ALIVE_PING";
     private static final int KEEP_ALIVE_REQUEST_CODE = 1001;
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long RESOLVER_READY_LOG_SUPPRESSION_MS = 60L * 60L * 1000L;
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
@@ -111,6 +112,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        serviceRunning = true;
         prepareYoutubedlAndroid();
         prepareYtDlpExecutable();
         notificationHelper = new NotificationHelper(this);
@@ -142,7 +144,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         progressTracker.start();
         networkAvailable = networkMonitor.isConnectedNow();
         acquireWakeLock();
-        scheduleKeepAlivePing();
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
@@ -199,7 +200,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (ytDlpExecutableReady) {
             long now = System.currentTimeMillis();
-            if (now - lastResolverReadyLoggedAt > 30L * 60L * 1000L) {
+            if (now - lastResolverReadyLoggedAt > RESOLVER_READY_LOG_SUPPRESSION_MS) {
                 lastResolverReadyLoggedAt = now;
                 log(
                     LogItem.LEVEL_SUCCESS,
@@ -239,6 +240,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return START_STICKY;
         }
 
+        if (ACTION_KEEP_ALIVE_PING.equals(action)) {
+            handleKeepAlivePing();
+            return START_STICKY;
+        }
+
         refreshRecorderEnvironment();
 
         if (LiveMonitorActions.isStartAction(action)) {
@@ -260,8 +266,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             handlePauseRecording(intent);
         } else if (LiveMonitorActions.ACTION_RESUME_RECORDING.equals(action)) {
             handleResumeRecording(intent);
-        } else if (ACTION_KEEP_ALIVE_PING.equals(action)) {
-            scheduleKeepAlivePing();
         } else if (LiveMonitorActions.ACTION_STOP_ALL.equals(action)
             || LiveMonitorActions.LEGACY_ACTION_STOP.equals(action)) {
             executor.execute(this::stopAll);
@@ -292,6 +296,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private void refreshRecorderEnvironment() {
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
+        serviceRunning = true;
         prepareYoutubedlAndroid();
         prepareYtDlpExecutable();
     }
@@ -327,6 +332,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         channel.markPausedByUser();
         storage.upsertChannel(channel);
         activeLoops.remove(channel.getId());
+        cancelKeepAlivePingIfIdle();
         notificationHelper.showChannelMonitoringNotification(channel);
         broadcastChannelUpdated("Channel paused.");
     }
@@ -348,6 +354,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         activeLoops.remove(channel.getId());
         stopActiveRecordingForRemovedChannel(channel);
+        cancelKeepAlivePingIfIdle();
         notificationHelper.cancelChannelNotification(channel);
         storage.removeChannel(channel.getId());
         broadcastChannelUpdated("Channel removed.");
@@ -486,6 +493,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (channel == null) return;
 
         activeLoops.remove(channel.getId());
+        cancelKeepAlivePingIfIdle();
         channel.markStopped();
         storage.upsertChannel(channel);
         notificationHelper.cancelChannelNotification(channel);
@@ -1308,6 +1316,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         serviceRunning = true;
         activeLoops.put(channel.getId(), true);
+        scheduleKeepAlivePing();
         notificationHelper.showChannelMonitoringNotification(channel);
         executor.execute(() -> monitorChannel(channel.getId()));
         updateServiceNotification();
@@ -7005,7 +7014,75 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+    private void handleKeepAlivePing() {
+        if (!hasActiveKeepAliveWork() && hasStoredMonitoredChannels()) {
+            restoreSavedChannels();
+        }
+
+        if (!hasActiveKeepAliveWork()) {
+            cancelKeepAlivePing();
+            return;
+        }
+
+        executor.execute(() -> {
+            HttpURLConnection conn = null;
+            boolean pingSucceeded = false;
+
+            try {
+                URL url = new URL("https://www.youtube.com/generate_204");
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(5_000);
+                conn.setReadTimeout(5_000);
+                conn.connect();
+                pingSucceeded = conn.getResponseCode() == HttpURLConnection.HTTP_NO_CONTENT;
+            } catch (Exception ignored) {
+                // Ping failure is expected during an outage.
+            } finally {
+                log(
+                    pingSucceeded ? LogItem.LEVEL_DEBUG : LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_NETWORK,
+                    null,
+                    pingSucceeded
+                        ? "Keep-alive ping succeeded"
+                        : "Keep-alive ping failed — network may be suspended",
+                    ""
+                );
+
+                if (conn != null) {
+                    conn.disconnect();
+                }
+
+                scheduleKeepAlivePing();
+            }
+        });
+    }
+
+    private boolean hasActiveKeepAliveWork() {
+        return !activeLoops.isEmpty() || !activeRecordings.isEmpty();
+    }
+
+    private boolean hasStoredMonitoredChannels() {
+        for (ChannelItem channel : storage.loadChannels()) {
+            if (channel != null && channel.shouldMonitor()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void cancelKeepAlivePingIfIdle() {
+        if (!hasActiveKeepAliveWork()) {
+            cancelKeepAlivePing();
+        }
+    }
+
     private void scheduleKeepAlivePing() {
+        if (!hasActiveKeepAliveWork()) {
+            cancelKeepAlivePing();
+            return;
+        }
+
         AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
 
         if (alarmManager == null) {
