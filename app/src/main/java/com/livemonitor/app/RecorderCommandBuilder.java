@@ -225,6 +225,10 @@ public class RecorderCommandBuilder {
             remoteConfig = new RemoteConfig();
         }
 
+        if (settings == null) {
+            settings = new AppSettings();
+        }
+
         List<String> args = new ArrayList<>();
 
         args.add(remoteConfig.getYtDlpExecutable());
@@ -274,7 +278,7 @@ public class RecorderCommandBuilder {
         args.add("--force-ipv4");
         args.add("--no-check-certificates");
         args.add("-f");
-        args.add("bv*[height<=480]+ba/b");
+        args.add(settings.buildYtDlpFormatSelector());
         args.add("--merge-output-format");
         args.add("mp4");
 
