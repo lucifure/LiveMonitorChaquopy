@@ -498,18 +498,20 @@ public class AppSettings {
 
         /*
          * Priority order:
-         *   1. HLS combined at target height  (live-from-start, native downloader)
-         *   2. HLS combined at any height     (fallback without height cap)
-         *   3. Combined stream at target height (e.g. WebM muxed)
+         *   1. HLS combined at or below target height (live-from-start, native downloader)
+         *   2. Any combined stream at or below target height
+         *   3. Separate DASH at or below target height (last resort, requires ffmpeg mux)
          *   4. Any combined stream
-         *   5. Separate DASH at target height (last resort, requires ffmpeg mux)
-         *   6. Best separate DASH available
+         *   5. Best separate DASH available
+         *
+         * Do not put an uncapped HLS choice before the height-capped choices: some
+         * YouTube live manifests expose only a very high "best" HLS stream, and
+         * selecting it can burn much more mobile data than the final target file.
          */
         return "best[height<=" + height + "][protocol^=m3u8]"
-            + "/best[protocol^=m3u8]"
             + "/best[height<=" + height + "]"
-            + "/best"
             + "/bestvideo[height<=" + height + "]+bestaudio"
+            + "/best"
             + "/bestvideo+bestaudio";
     }
 

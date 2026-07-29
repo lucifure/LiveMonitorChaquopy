@@ -4,6 +4,7 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.net.TrafficStats;
 import android.net.Uri;
 import android.provider.DocumentsContract;
 import android.os.Build;
@@ -29,15 +30,15 @@ import kotlin.jvm.functions.Function3;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -65,6 +66,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long RESOLVER_READY_LOG_SUPPRESSION_MS = 60L * 60L * 1000L;
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
+    private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
@@ -87,6 +89,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Integer> ytDlpFragmentErrorCounts = new ConcurrentHashMap<>();
     private final Set<String> restartingRecordings = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> channelRateLimitCooldownUntil = new ConcurrentHashMap<>();
+    private final Map<String, Long> livePageFallbackLastCheckedAt = new ConcurrentHashMap<>();
     private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
     private final Set<String> stoppingRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> finalizingRecordingIds = ConcurrentHashMap.newKeySet();
@@ -1911,24 +1914,44 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     ? "yt-dlp recorder is running from DVR beginning."
                     : "yt-dlp recorder is running from live edge.");
 
-                int exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
-                    primaryRecorderDecision.getRecorderName()
-                )
-                    ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, attempt.args, channel)
-                    : YtDlpRunner.recordLiveStream(
-                        recording.getId(),
-                        attempt.args,
-                        recording.getCurrentTempSegmentPath(),
-                        message -> log(
-                            isReadOnlyFilesystemError(message) ? LogItem.LEVEL_ERROR : LogItem.LEVEL_DEBUG,
-                            LogItem.SOURCE_RECORDER,
-                            channel,
-                            isReadOnlyFilesystemError(message)
-                                ? "yt-dlp recorder filesystem write failure."
-                                : "yt-dlp recorder output.",
-                            shortenForLog(message, 500)
-                        )
+                DataUsageSnapshot recorderDataStart = takeDataUsageSnapshot();
+                int exitCode;
+                try {
+                    exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
+                        primaryRecorderDecision.getRecorderName()
+                    )
+                        ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, attempt.args, channel)
+                        : YtDlpRunner.recordLiveStream(
+                            recording.getId(),
+                            attempt.args,
+                            recording.getCurrentTempSegmentPath(),
+                            message -> log(
+                                isReadOnlyFilesystemError(message) ? LogItem.LEVEL_ERROR : LogItem.LEVEL_DEBUG,
+                                LogItem.SOURCE_RECORDER,
+                                channel,
+                                isReadOnlyFilesystemError(message)
+                                    ? "yt-dlp recorder filesystem write failure."
+                                    : "yt-dlp recorder output.",
+                                shortenForLog(message, 500)
+                            )
+                        );
+                } finally {
+                    logDataUsageDelta(
+                        channel,
+                        "yt-dlp primary recorder data usage.",
+                        "category=recorder, videoId="
+                            + recording.getVideoId()
+                            + ", recorder="
+                            + primaryRecorderDecision.getRecorderName()
+                            + ", attempt="
+                            + (attemptIndex + 1)
+                            + "/"
+                            + attempts.size()
+                            + ", fileBytes="
+                            + getRecordingOutputBytes(recording),
+                        recorderDataStart
                     );
+                }
 
                 RecordingItem latest = storage.findRecordingById(recording.getId());
 
@@ -2430,7 +2453,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 : mwebPoToken
                     ? "youtube:player_client=mweb, poTokenWithCookies=true, playerSkip=webpage,configs"
                     : "youtube:player_client=" + normalizedClient + ", noPoToken=true")
-            + ", format=bv*[height<=480]+ba/b DASH"
+            + ", format=" + (appSettings == null ? new AppSettings() : appSettings).buildYtDlpFormatSelector()
             + (appSettings != null && appSettings.isLiveFromStartEnabled()
                 ? ", liveFromStart=" + allowLiveFromStart
                 : "");
@@ -4615,7 +4638,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        return checkLiveFromChannelLivePage(channelId, channel);
+        if (!shouldRunLivePageFallbackNow(channelId)) {
+            return null;
+        }
+
+        LiveInfo fallbackLiveInfo = checkLiveFromChannelLivePage(channelId, channel);
+        if (fallbackLiveInfo != null) {
+            livePageFallbackLastCheckedAt.remove(channelId);
+        }
+        return fallbackLiveInfo;
+    }
+
+    private boolean shouldRunLivePageFallbackNow(String channelId) {
+        if (isBlank(channelId)) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        Long lastCheckedAt = livePageFallbackLastCheckedAt.get(channelId);
+        if (lastCheckedAt != null && now - lastCheckedAt < LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS) {
+            return false;
+        }
+
+        livePageFallbackLastCheckedAt.put(channelId, now);
+        return true;
     }
 
     private LiveInfo checkLiveFromChannelLivePage(String channelId, ChannelItem channel) {
@@ -6357,7 +6403,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.setReadTimeout(15_000);
         connection.setRequestMethod("GET");
         connection.setRequestProperty("User-Agent", remoteConfig.getUserAgent());
-        return readResponse(connection);
+        return readResponseWithDataLog(connection, "GET", urlString, 0L);
     }
 
     private String httpPostWithRetry(
@@ -6419,49 +6465,80 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
         connection.getOutputStream().write(bodyBytes);
 
-        return readResponse(connection);
+        return readResponseWithDataLog(connection, "POST", urlString, bodyBytes.length);
     }
 
     private String readResponse(HttpURLConnection connection) throws Exception {
+        HttpDataResponse response = readHttpResponse(connection);
+        if (response.responseCode < 200 || response.responseCode >= 300) {
+            throw new IllegalStateException(
+                "HTTP "
+                    + response.responseCode
+                    + ": "
+                    + shortenForLog(response.body, 700)
+            );
+        }
+        return response.body;
+    }
+
+    private String readResponseWithDataLog(
+        HttpURLConnection connection,
+        String method,
+        String urlString,
+        long requestBodyBytes
+    ) throws Exception {
+        DataUsageSnapshot snapshot = takeDataUsageSnapshot();
+        HttpDataResponse response = readHttpResponse(connection);
+        logHttpDataUsage(method, urlString, requestBodyBytes, response, snapshot);
+
+        if (response.responseCode < 200 || response.responseCode >= 300) {
+            throw new IllegalStateException(
+                "HTTP "
+                    + response.responseCode
+                    + ": "
+                    + shortenForLog(response.body, 700)
+            );
+        }
+
+        return response.body;
+    }
+
+    private HttpDataResponse readHttpResponse(HttpURLConnection connection) throws Exception {
         int responseCode = connection.getResponseCode();
 
         InputStream stream = responseCode >= 200 && responseCode < 300
             ? connection.getInputStream()
             : connection.getErrorStream();
 
-        BufferedReader reader = null;
-
         try {
-            StringBuilder builder = new StringBuilder();
-
-            if (stream != null) {
-                reader = new BufferedReader(new InputStreamReader(stream));
-                String line;
-
-                while ((line = reader.readLine()) != null) {
-                    builder.append(line);
-                }
-            }
-
-            String response = builder.toString();
-
-            if (responseCode < 200 || responseCode >= 300) {
-                throw new IllegalStateException(
-                    "HTTP "
-                        + responseCode
-                        + ": "
-                        + shortenForLog(response, 700)
-                );
-            }
-
-            return response;
+            byte[] bodyBytes = readAllBytes(stream);
+            return new HttpDataResponse(
+                responseCode,
+                bodyBytes,
+                new String(bodyBytes, StandardCharsets.UTF_8)
+            );
         } finally {
-            if (reader != null) {
-                reader.close();
+            if (stream != null) {
+                stream.close();
             }
-
             connection.disconnect();
         }
+    }
+
+    private byte[] readAllBytes(InputStream stream) throws Exception {
+        if (stream == null) {
+            return new byte[0];
+        }
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+
+        while ((read = stream.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+
+        return output.toByteArray();
     }
 
     private boolean isRetryableInnertubeError(Exception e) {
@@ -6486,6 +6563,140 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         return "returnCode=" + code.getValue();
+    }
+
+    private void logHttpDataUsage(
+        String method,
+        String urlString,
+        long requestBodyBytes,
+        HttpDataResponse response,
+        DataUsageSnapshot snapshot
+    ) {
+        if (response == null) {
+            return;
+        }
+
+        long requestBytes = Math.max(0L, requestBodyBytes) + estimateHttpRequestHeaderBytes(method, urlString);
+        String details = "category="
+            + classifyNetworkUsage(urlString)
+            + ", method="
+            + method
+            + ", status="
+            + response.responseCode
+            + ", requestBytes~="
+            + requestBytes
+            + ", responseBytes="
+            + response.responseBytes
+            + ", uidRxDelta="
+            + formatTrafficStatDelta(snapshot == null ? TrafficStats.UNSUPPORTED : snapshot.uidRxBytes, getUidRxBytes())
+            + ", uidTxDelta="
+            + formatTrafficStatDelta(snapshot == null ? TrafficStats.UNSUPPORTED : snapshot.uidTxBytes, getUidTxBytes())
+            + ", url="
+            + describeUrlForLog(urlString);
+
+        log(LogItem.LEVEL_INFO, LogItem.SOURCE_NETWORK, null, "HTTP data usage.", details);
+    }
+
+    private void logDataUsageDelta(
+        ChannelItem channel,
+        String message,
+        String detailsPrefix,
+        DataUsageSnapshot snapshot
+    ) {
+        if (snapshot == null) {
+            return;
+        }
+
+        String details = detailsPrefix
+            + ", uidRxDelta="
+            + formatTrafficStatDelta(snapshot.uidRxBytes, getUidRxBytes())
+            + ", uidTxDelta="
+            + formatTrafficStatDelta(snapshot.uidTxBytes, getUidTxBytes());
+
+        log(LogItem.LEVEL_INFO, LogItem.SOURCE_NETWORK, channel, message, details);
+    }
+
+    private DataUsageSnapshot takeDataUsageSnapshot() {
+        return new DataUsageSnapshot(getUidRxBytes(), getUidTxBytes());
+    }
+
+    private long getUidRxBytes() {
+        return TrafficStats.getUidRxBytes(android.os.Process.myUid());
+    }
+
+    private long getUidTxBytes() {
+        return TrafficStats.getUidTxBytes(android.os.Process.myUid());
+    }
+
+    private String formatTrafficStatDelta(long before, long after) {
+        if (before == TrafficStats.UNSUPPORTED || after == TrafficStats.UNSUPPORTED || after < before) {
+            return "unsupported";
+        }
+
+        return String.valueOf(after - before);
+    }
+
+    private long estimateHttpRequestHeaderBytes(String method, String urlString) {
+        if (isBlank(method) || isBlank(urlString)) {
+            return 0L;
+        }
+
+        return method.length() + urlString.length() + 256L;
+    }
+
+    private String classifyNetworkUsage(String urlString) {
+        if (isBlank(urlString)) {
+            return "unknown";
+        }
+
+        String lower = urlString.toLowerCase(java.util.Locale.US);
+
+        if (lower.contains("googleapis.com/youtube/v3/")) {
+            return "youtube_data_api";
+        }
+
+        if (lower.contains("/youtubei/v1/player")) {
+            return "youtube_innertube_player";
+        }
+
+        if (lower.contains("/watch")) {
+            return "youtube_watch_page";
+        }
+
+        if (lower.contains("/live")) {
+            return "youtube_live_page_fallback";
+        }
+
+        if (lower.contains(".m3u8") || lower.contains("manifest")) {
+            return "hls_manifest";
+        }
+
+        if (lower.contains("youtube.com") || lower.contains("youtu.be")) {
+            return "youtube_other";
+        }
+
+        return "other_http";
+    }
+
+    private long getRecordingOutputBytes(RecordingItem recording) {
+        if (recording == null) {
+            return 0L;
+        }
+
+        long total = 0L;
+        total += fileLength(recording.getCurrentTempSegmentPath());
+        total += fileLength(recording.getTempTsPath());
+        total += fileLength(recording.getFinalMp4Path());
+        return total;
+    }
+
+    private long fileLength(String path) {
+        if (isBlank(path)) {
+            return 0L;
+        }
+
+        File file = new File(path);
+        return file.isFile() ? file.length() : 0L;
     }
 
     private String getApiKey() {
@@ -7312,6 +7523,28 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         String getReason() {
             return reason;
+        }
+    }
+
+    private static class DataUsageSnapshot {
+        final long uidRxBytes;
+        final long uidTxBytes;
+
+        DataUsageSnapshot(long uidRxBytes, long uidTxBytes) {
+            this.uidRxBytes = uidRxBytes;
+            this.uidTxBytes = uidTxBytes;
+        }
+    }
+
+    private static class HttpDataResponse {
+        final int responseCode;
+        final long responseBytes;
+        final String body;
+
+        HttpDataResponse(int responseCode, byte[] bodyBytes, String body) {
+            this.responseCode = responseCode;
+            this.responseBytes = bodyBytes == null ? 0L : bodyBytes.length;
+            this.body = body == null ? "" : body;
         }
     }
 
