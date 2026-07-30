@@ -213,7 +213,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void addRecordingSection(LinearLayout root) {
-        pollIntervalInput = addEditText(root, "Poll interval seconds", "60");
+        pollIntervalInput = addEditText(root, "Poll interval seconds", "300");
         qualitySpinner = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
             new String[]{AppSettings.QUALITY_144P, AppSettings.QUALITY_360P, AppSettings.QUALITY_480P, AppSettings.QUALITY_720P, AppSettings.QUALITY_1080P});
@@ -299,7 +299,7 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void saveSettings() {
         if (SECTION_RECORDING.equals(currentSection)) {
-            settings.setPollIntervalSeconds(parseInt(pollIntervalInput.getText().toString(), 60));
+            settings.setPollIntervalSeconds(parseInt(pollIntervalInput.getText().toString(), 300));
             settings.setDownloadQuality(String.valueOf(qualitySpinner.getSelectedItem()));
             settings.setLiveFromStartEnabled(liveFromStartCheckBox.isChecked());
             settings.setSkipUnavailableFragmentsEnabled(skipUnavailableFragmentsCheckBox.isChecked());
