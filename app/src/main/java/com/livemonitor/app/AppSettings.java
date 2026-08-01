@@ -125,7 +125,7 @@ public class AppSettings {
     public AppSettings() {
         long now = System.currentTimeMillis();
 
-        this.pollIntervalSeconds = 60;
+        this.pollIntervalSeconds = 300;
         this.downloadQuality = QUALITY_480P;
         this.saveLocationUri = "";
         this.saveLocationDisplayName = "Default app recordings folder";
