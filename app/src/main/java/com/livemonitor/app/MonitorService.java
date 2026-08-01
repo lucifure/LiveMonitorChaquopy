@@ -39,7 +39,9 @@ import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -68,6 +70,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long RESOLVER_READY_LOG_SUPPRESSION_MS = 60L * 60L * 1000L;
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
     private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long YOUTUBE_API_QUOTA_BACKOFF_MS = 60L * 60L * 1000L;
     private static final long NETWORK_DATA_LOG_MIN_RESPONSE_BYTES = 64L * 1024L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
@@ -109,6 +112,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile long networkLostAtMillis = 0L;
     private volatile long lastOutageDiagnosticLogAtMillis = 0L;
     private volatile long lastResolverReadyLoggedAt = 0L;
+    private volatile long apiQuotaExhaustedUntil = 0L;
+    private volatile long lastApiQuotaBackoffWarningAt = 0L;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -4607,7 +4612,51 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LiveInfo checkLive(String channelId, ChannelItem channel) {
-        if (!shouldRunLivePageFallbackNow(channelId)) {
+        if (isYouTubeApiQuotaBackoffActive()) {
+            return null;
+        }
+
+        // Try YouTube Data API first if key is available
+        if (!isBlank(getApiKey())) {
+            try {
+                String apiUrl = "https://www.googleapis.com/youtube/v3/search"
+                    + "?part=snippet&channelId="
+                    + URLEncoder.encode(channelId, "UTF-8")
+                    + "&eventType=live&type=video&maxResults=1&key="
+                    + getApiKey();
+
+                JSONObject json = new JSONObject(httpGet(apiUrl));
+                JSONArray items = json.optJSONArray("items");
+
+                if (items != null && items.length() > 0) {
+                    JSONObject item = items.getJSONObject(0);
+                    String videoId = item.getJSONObject("id").getString("videoId");
+                    String title = item.getJSONObject("snippet").getString("title");
+                    return new LiveInfo(
+                        videoId, title,
+                        "https://youtube.com/watch?v=" + videoId,
+                        fetchLiveStartTimestampMillis(videoId)
+                    );
+                }
+
+                // A successful empty API response means the channel is not live.
+                // Avoid scraping the much larger /live page on every poll, which
+                // can burn hundreds of MB overnight when scheduled streams sit in
+                // LIVE_STREAM_OFFLINE/UNPLAYABLE states.
+                return null;
+            } catch (HttpStatusException e) {
+                if (e.getStatusCode() == 429) {
+                    enterYouTubeApiQuotaBackoff();
+                    return null;
+                }
+
+                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
+            } catch (Exception e) {
+                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
+            }
+        }
+
+        if (isYouTubeApiQuotaBackoffActive() || !shouldRunLivePageFallbackNow(channelId)) {
             return null;
         }
 
@@ -4616,6 +4665,46 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             livePageFallbackLastCheckedAt.remove(channelId);
         }
         return fallbackLiveInfo;
+    }
+
+
+    private boolean isYouTubeApiQuotaBackoffActive() {
+        long until = apiQuotaExhaustedUntil;
+        if (until <= 0L) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now < until) {
+            return true;
+        }
+
+        apiQuotaExhaustedUntil = 0L;
+        lastApiQuotaBackoffWarningAt = 0L;
+        return false;
+    }
+
+    private void enterYouTubeApiQuotaBackoff() {
+        long now = System.currentTimeMillis();
+        long until = now + YOUTUBE_API_QUOTA_BACKOFF_MS;
+        apiQuotaExhaustedUntil = until;
+
+        if (now - lastApiQuotaBackoffWarningAt < YOUTUBE_API_QUOTA_BACKOFF_MS) {
+            return;
+        }
+
+        lastApiQuotaBackoffWarningAt = now;
+        String untilLabel = new SimpleDateFormat("HH:mm", java.util.Locale.US).format(new Date(until));
+        String details = "All /live page fallback fetches suppressed for 60 minutes to prevent data waste."
+            + " apiQuotaBackoffUntil="
+            + untilLabel;
+        log(
+            LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_NETWORK,
+            null,
+            "YouTube Data API search quota exhausted (HTTP 429). Backing off for 60 minutes.",
+            details
+        );
     }
 
     private boolean shouldRunLivePageFallbackNow(String channelId) {
