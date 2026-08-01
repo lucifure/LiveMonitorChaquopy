@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+    private static final String INNERTUBE_PLAYER_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
     private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
     private static final long MIN_PARTIAL_RECORDING_SAVE_BYTES = 1L * 1024L * 1024L;
@@ -4726,20 +4727,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return null;
         }
 
-        LiveInfo liveInfo = checkLiveFromChannelLivePageUrl(
-            channelId,
-            remoteConfig.getWebPlayerBaseUrl() + "/channel/" + urlEncodeForQuery(channelId) + "/live"
-        );
-        if (liveInfo != null) {
-            return liveInfo;
-        }
-
         String channelLiveUrl = buildChannelLiveUrl(channel == null ? "" : channel.getUrl());
-        if (!isBlank(channelLiveUrl)) {
-            return checkLiveFromChannelLivePageUrl(channelId, channelLiveUrl);
+        if (isBlank(channelLiveUrl)) {
+            return null;
         }
 
-        return null;
+        return checkLiveFromChannelLivePageUrl(channelId, channelLiveUrl);
     }
 
     private LiveInfo checkLiveFromChannelLivePageUrl(String channelId, String liveUrl) {
@@ -4851,6 +4844,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private StreamEndStatus confirmStreamEnded(String videoId, String channelId, ChannelItem channel) {
         String safeVideoId = normalizeVideoIdForLookup(videoId);
+        if (isBlank(safeVideoId)) {
+            return StreamEndStatus.UNKNOWN;
+        }
+
+        StreamEndStatus innertubeStatus = confirmStreamEndedWithInnertube(safeVideoId);
+        if (innertubeStatus != StreamEndStatus.UNKNOWN) {
+            return innertubeStatus;
+        }
 
         if (!isBlank(channelId)) {
             try {
@@ -4888,44 +4889,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        try {
-            String html = httpGet(YouTubeUrlUtils.buildWatchUrl(safeVideoId));
-
-            if (html != null) {
-                if (html.contains("\"isLive\":true")) {
-                    log(
-                        LogItem.LEVEL_INFO,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Stream end check: watch page confirms isLive=true.",
-                        "videoId=" + safeVideoId
-                    );
-                    return StreamEndStatus.STILL_LIVE;
-                }
-
-                if (html.contains("LIVE_STREAM_OFFLINE")
-                    || html.contains("has been removed")
-                    || html.contains("\"isLive\":false")) {
-                    log(
-                        LogItem.LEVEL_INFO,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Stream end check: watch page confirms stream ended.",
-                        "videoId=" + safeVideoId
-                    );
-                    return StreamEndStatus.CONFIRMED_ENDED;
-                }
-            }
-        } catch (Exception e) {
-            log(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_RECORDER,
-                null,
-                "Stream end check: watch page check failed.",
-                "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(e)
-            );
-        }
-
         log(
             LogItem.LEVEL_WARNING,
             LogItem.SOURCE_RECORDER,
@@ -4933,6 +4896,103 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "Stream end check: inconclusive — assuming still live.",
             "videoId=" + safeVideoId
         );
+        return StreamEndStatus.UNKNOWN;
+    }
+
+    private StreamEndStatus confirmStreamEndedWithInnertube(String safeVideoId) {
+        RemoteConfig.YoutubeClient client = remoteConfig == null ? null : remoteConfig.getPrimaryClient();
+        if (client == null || !client.isValid()) {
+            client = new RemoteConfig.YoutubeClient(
+                "ANDROID",
+                "19.09.37",
+                "Android",
+                "11",
+                "com.google.android.youtube",
+                "30",
+                true
+            );
+        }
+
+        String innertubeBaseUrl = remoteConfig == null
+            ? "https://www.youtube.com/youtubei/v1"
+            : remoteConfig.getInnertubeBaseUrl();
+        Exception lastError = null;
+
+        try {
+            String apiUrl = innertubeBaseUrl + "/player?key=" + INNERTUBE_PLAYER_API_KEY + "&prettyPrint=false";
+            JSONObject context = new JSONObject()
+                .put("client", client.toInnertubeClientJson());
+            JSONObject body = new JSONObject()
+                .put("context", context)
+                .put("videoId", safeVideoId)
+                .put("contentCheckOk", true)
+                .put("racyCheckOk", true);
+
+            JSONObject json = new JSONObject(httpPostWithRetry(apiUrl, body.toString(), client));
+            JSONObject playability = json.optJSONObject("playabilityStatus");
+            JSONObject videoDetails = json.optJSONObject("videoDetails");
+
+            if (videoDetails != null && videoDetails.optBoolean("isLive", false)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Stream end check: Innertube confirms isLive=true.",
+                    "videoId=" + safeVideoId
+                );
+                return StreamEndStatus.STILL_LIVE;
+            }
+
+            if (videoDetails != null && !videoDetails.optBoolean("isLiveContent", true)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Stream end check: Innertube confirms isLiveContent=false.",
+                    "videoId=" + safeVideoId
+                );
+                return StreamEndStatus.CONFIRMED_ENDED;
+            }
+
+            if (playability != null) {
+                String status = playability.optString("status", "");
+                String reason = playability.optString("reason", "");
+                String lowerReason = reason.toLowerCase(java.util.Locale.US);
+
+                if ("OK".equalsIgnoreCase(status) && videoDetails != null) {
+                    return StreamEndStatus.UNKNOWN;
+                }
+
+                if ("LOGIN_REQUIRED".equalsIgnoreCase(status)
+                    || "ERROR".equalsIgnoreCase(status)
+                    || "UNPLAYABLE".equalsIgnoreCase(status)
+                    || lowerReason.contains("removed")
+                    || lowerReason.contains("unavailable")
+                    || lowerReason.contains("private")) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: Innertube confirms stream ended/unavailable.",
+                        "videoId=" + safeVideoId + ", status=" + status + ", reason=" + shortenForLog(reason, 160)
+                    );
+                    return StreamEndStatus.CONFIRMED_ENDED;
+                }
+            }
+        } catch (Exception e) {
+            lastError = e;
+        }
+
+        if (lastError != null) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Stream end check: Innertube player API failed.",
+                "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(lastError)
+            );
+        }
+
         return StreamEndStatus.UNKNOWN;
     }
 
