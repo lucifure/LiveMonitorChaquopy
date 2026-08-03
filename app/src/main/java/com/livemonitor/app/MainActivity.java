@@ -13,11 +13,7 @@ import android.os.Looper;
 import android.net.Uri;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
-import android.widget.ArrayAdapter;
-import android.widget.PopupMenu;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
@@ -167,7 +163,6 @@ public class MainActivity extends AppCompatActivity {
         binding.recordingListView.setEmptyView(binding.emptyDownloadsText);
     }
 
-
     private void setupMonitoringListHeader() {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
@@ -311,8 +306,6 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show();
     }
 
-
-
     private void downloadVideoFromInput() {
         String url = cleanUrl(binding.urlInput.getText().toString());
 
@@ -341,22 +334,6 @@ public class MainActivity extends AppCompatActivity {
         startDirectVideoDownload(url, videoId);
     }
 
-    private void confirmDownloadVideoUrl(String url) {
-        String videoId = YouTubeUrlUtils.extractVideoId(url);
-
-        if (videoId.isEmpty()) {
-            Toast.makeText(this, "Could not detect video ID.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        new AlertDialog.Builder(this)
-            .setTitle("Download video")
-            .setMessage("This looks like a YouTube video/live replay link. Download it now?")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Download", (dialog, which) -> startDirectVideoDownload(url, videoId))
-            .show();
-    }
-
     private void startDirectVideoDownload(String url, String videoId) {
         Intent intent = new Intent(this, MonitorService.class);
         intent.setAction(LiveMonitorActions.ACTION_DOWNLOAD_VIDEO);
@@ -367,57 +344,6 @@ public class MainActivity extends AppCompatActivity {
         binding.urlInput.setText("");
         refreshAll();
         Toast.makeText(this, "Video download started.", Toast.LENGTH_SHORT).show();
-    }
-
-    private void showManualDownloadDialog() {
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(18);
-        content.setPadding(padding, padding, padding, 0);
-
-        EditText urlInput = new EditText(this);
-        urlInput.setHint("Paste YouTube video URL");
-        urlInput.setSingleLine(true);
-        content.addView(urlInput);
-
-        Spinner qualitySpinner = new Spinner(this);
-        String[] qualities = {
-            AppSettings.QUALITY_360P,
-            AppSettings.QUALITY_480P,
-            AppSettings.QUALITY_720P,
-            AppSettings.QUALITY_1080P
-        };
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, qualities);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        qualitySpinner.setAdapter(adapter);
-        String currentQuality = storage.loadSettings().getDownloadQuality();
-        for (int i = 0; i < qualities.length; i++) {
-            if (qualities[i].equals(currentQuality)) {
-                qualitySpinner.setSelection(i);
-                break;
-            }
-        }
-        content.addView(qualitySpinner);
-
-        new AlertDialog.Builder(this)
-            .setTitle("Download Video")
-            .setView(content)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Download", (dialog, which) -> {
-                String url = cleanUrl(urlInput.getText().toString());
-                if (!url.contains("youtube.com") && !url.contains("youtu.be")) {
-                    Toast.makeText(this, "Paste a valid YouTube URL.", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                String videoId = YouTubeUrlUtils.extractVideoId(url);
-                if (videoId.isEmpty()) {
-                    Toast.makeText(this, "Could not detect video ID.", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "ManualDownload: video download requested."));
-                startDirectVideoDownload(url, videoId);
-            })
-            .show();
     }
 
     private void toggleChannelPaused(ChannelItem channel) {
@@ -471,7 +397,6 @@ public class MainActivity extends AppCompatActivity {
 
         refreshAll();
     }
-
 
     private void confirmDeleteChannel(ChannelItem channel) {
         if (channel == null) {
@@ -657,42 +582,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void showOverflowMenu() {
-        PopupMenu menu = new PopupMenu(this, binding.btnMenu);
-        menu.getMenu().add("Log");
-        menu.getMenu().add("Downloaded Files");
-        menu.getMenu().add("Settings");
-        menu.getMenu().add("Stop All");
-
-        menu.setOnMenuItemClickListener(item -> {
-            String title = String.valueOf(item.getTitle());
-
-            if ("Log".equals(title)) {
-                startActivity(new Intent(this, LogActivity.class));
-                return true;
-            }
-
-            if ("Downloaded Files".equals(title)) {
-                startActivity(new Intent(this, DownloadedFilesActivity.class));
-                return true;
-            }
-
-            if ("Settings".equals(title)) {
-                startActivity(new Intent(this, SettingsActivity.class));
-                return true;
-            }
-
-            if ("Stop All".equals(title)) {
-                stopAllMonitoring();
-                return true;
-            }
-
-            return false;
-        });
-
-        menu.show();
-    }
-
     private void stopAllMonitoring() {
         List<ChannelItem> channels = storage.loadChannels();
 
@@ -780,7 +669,6 @@ public class MainActivity extends AppCompatActivity {
             );
         }
     }
-
 
     private void reconcileStaleRecordingCards() {
         boolean changed = false;
@@ -954,10 +842,6 @@ public class MainActivity extends AppCompatActivity {
             .trim()
             .replaceAll("\\s+", "")
             .replaceAll("/+$", "");
-    }
-
-    private int getColorCompat(String color) {
-        return android.graphics.Color.parseColor(color);
     }
 
     private int dp(int value) {

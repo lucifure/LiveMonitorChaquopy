@@ -917,32 +917,6 @@ public class YouTubeSignInActivity extends AppCompatActivity {
         return "";
     }
 
-    private String normalizeClientForYtDlp(String clientName) {
-        String normalized = clientName == null ? "" : clientName.trim().toLowerCase(Locale.US);
-
-        if (normalized.contains("mweb")) {
-            return "mweb";
-        }
-
-        if (normalized.contains("embedded")) {
-            return "web_embedded";
-        }
-
-        if (normalized.contains("web")) {
-            return "web";
-        }
-
-        if (normalized.contains("android")) {
-            return "android";
-        }
-
-        if (normalized.contains("ios")) {
-            return "ios";
-        }
-
-        return "mweb";
-    }
-
     private String safeUrlForStatus(String url) {
         String videoId = extractVideoId(url);
         return isBlank(videoId) ? "non-player page" : "videoId=" + videoId;
