@@ -69,8 +69,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long RESOLVER_READY_LOG_SUPPRESSION_MS = 60L * 60L * 1000L;
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
-    private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 5L * 60L * 1000L;
-    private static final long YOUTUBE_API_QUOTA_BACKOFF_MS = 60L * 60L * 1000L;
+    private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long NETWORK_DATA_LOG_MIN_RESPONSE_BYTES = 64L * 1024L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
@@ -4612,51 +4611,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LiveInfo checkLive(String channelId, ChannelItem channel) {
-        if (isYouTubeApiQuotaBackoffActive()) {
-            return null;
-        }
-
-        // Try YouTube Data API first if key is available
-        if (!isBlank(getApiKey())) {
-            try {
-                String apiUrl = "https://www.googleapis.com/youtube/v3/search"
-                    + "?part=snippet&channelId="
-                    + URLEncoder.encode(channelId, "UTF-8")
-                    + "&eventType=live&type=video&maxResults=1&key="
-                    + getApiKey();
-
-                JSONObject json = new JSONObject(httpGet(apiUrl));
-                JSONArray items = json.optJSONArray("items");
-
-                if (items != null && items.length() > 0) {
-                    JSONObject item = items.getJSONObject(0);
-                    String videoId = item.getJSONObject("id").getString("videoId");
-                    String title = item.getJSONObject("snippet").getString("title");
-                    return new LiveInfo(
-                        videoId, title,
-                        "https://youtube.com/watch?v=" + videoId,
-                        fetchLiveStartTimestampMillis(videoId)
-                    );
-                }
-
-                // A successful empty API response means the channel is not live.
-                // Avoid scraping the much larger /live page on every poll, which
-                // can burn hundreds of MB overnight when scheduled streams sit in
-                // LIVE_STREAM_OFFLINE/UNPLAYABLE states.
-                return null;
-            } catch (HttpStatusException e) {
-                if (e.getStatusCode() == 429) {
-                    enterYouTubeApiQuotaBackoff();
-                    return null;
-                }
-
-                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
-            } catch (Exception e) {
-                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
-            }
-        }
-
-        if (isYouTubeApiQuotaBackoffActive() || !shouldRunLivePageFallbackNow(channelId)) {
+        if (!shouldRunLivePageFallbackNow(channelId)) {
             return null;
         }
 
