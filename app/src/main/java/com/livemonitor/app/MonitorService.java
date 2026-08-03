@@ -39,9 +39,7 @@ import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -111,8 +109,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile long networkLostAtMillis = 0L;
     private volatile long lastOutageDiagnosticLogAtMillis = 0L;
     private volatile long lastResolverReadyLoggedAt = 0L;
-    private volatile long apiQuotaExhaustedUntil = 0L;
-    private volatile long lastApiQuotaBackoffWarningAt = 0L;
     private volatile String ytDlpExecutableStatus = "yt-dlp executable has not been prepared yet.";
 
     @Override
@@ -4622,45 +4618,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return fallbackLiveInfo;
     }
 
-
-    private boolean isYouTubeApiQuotaBackoffActive() {
-        long until = apiQuotaExhaustedUntil;
-        if (until <= 0L) {
-            return false;
-        }
-
-        long now = System.currentTimeMillis();
-        if (now < until) {
-            return true;
-        }
-
-        apiQuotaExhaustedUntil = 0L;
-        lastApiQuotaBackoffWarningAt = 0L;
-        return false;
-    }
-
-    private void enterYouTubeApiQuotaBackoff() {
-        long now = System.currentTimeMillis();
-        long until = now + YOUTUBE_API_QUOTA_BACKOFF_MS;
-        apiQuotaExhaustedUntil = until;
-
-        if (now - lastApiQuotaBackoffWarningAt < YOUTUBE_API_QUOTA_BACKOFF_MS) {
-            return;
-        }
-
-        lastApiQuotaBackoffWarningAt = now;
-        String untilLabel = new SimpleDateFormat("HH:mm", java.util.Locale.US).format(new Date(until));
-        String details = "All /live page fallback fetches suppressed for 60 minutes to prevent data waste."
-            + " apiQuotaBackoffUntil="
-            + untilLabel;
-        log(
-            LogItem.LEVEL_WARNING,
-            LogItem.SOURCE_NETWORK,
-            null,
-            "YouTube Data API search quota exhausted (HTTP 429). Backing off for 60 minutes.",
-            details
-        );
-    }
 
     private boolean shouldRunLivePageFallbackNow(String channelId) {
         if (isBlank(channelId)) {
