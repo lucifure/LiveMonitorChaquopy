@@ -50,7 +50,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
@@ -58,7 +57,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
     private static final long MIN_PARTIAL_RECORDING_SAVE_BYTES = 1L * 1024L * 1024L;
-    private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
     private static final long MISSED_STREAM_OUTAGE_MIN_MILLIS = 2L * 60L * 1_000L;
@@ -155,7 +153,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         PoTokenRefreshWorker.scheduleIfNeeded(this);
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
-
 
     private void prepareYoutubedlAndroid() {
         if (youtubedlAndroidReady) {
@@ -558,7 +555,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         broadcastRecordingUpdated("Direct download started.");
     }
 
-
     private String resolveVideoTitleForDirectDownload(String watchUrl) {
         if (isBlank(watchUrl)) {
             return "";
@@ -955,7 +951,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         storage.upsertRecording(recording);
         return false;
     }
-
 
     private boolean savePartialRecordingAfterVideoDeletionIfLargeEnough(RecordingItem recording, ChannelItem channel) {
         long estimatedSize = estimateExistingTempRecordingBytes(recording);
@@ -1695,10 +1690,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         );
     }
 
-    private boolean shouldTryYtDlpPrimaryRecording(RecordingItem recording) {
-        return evaluateYtDlpPrimaryRecorder(recording).shouldTry();
-    }
-
     private void logYtDlpPrimaryRecorderDecision(
         ChannelItem channel,
         RecordingItem recording,
@@ -1735,7 +1726,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             details
         );
     }
-
 
     private String describeYtDlpRetryPolicy(List<String> args) {
         if (args == null || args.isEmpty()) {
@@ -3680,7 +3670,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-
     private void resumeRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
         ChannelItem channel = storage.findChannelById(channelId);
 
@@ -3897,7 +3886,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return Math.max(MIN_FREE_BYTES_BEFORE_CONVERSION, tempBytes + MIN_FREE_BYTES_BEFORE_CONVERSION);
     }
 
-
     private void runDirectVideoDownload(RecordingItem recording) {
         if (recording == null) return;
 
@@ -4101,7 +4089,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-
     private boolean shouldSkipDirectDownloadFallback(RecordingItem recording, Exception error) {
         return isCancellationException(error) || isDirectDownloadStopRequested(recording);
     }
@@ -4304,33 +4291,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return CleanExitAction.FINALIZE;
     }
 
-    private LiveInfo confirmCleanExitStillLooksFinished(ChannelItem channel, RecordingItem recording, LiveInfo firstLiveInfo) {
-        LiveInfo latestLiveInfo = firstLiveInfo;
-
-        for (int attempt = 2; attempt <= 3; attempt++) {
-            try {
-                Thread.sleep(15_000L);
-                latestLiveInfo = resolveCurrentLiveInfo(channel);
-                if (latestLiveInfo != null && recording != null && recording.matchesVideo(latestLiveInfo.videoId)) {
-                    return latestLiveInfo;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return latestLiveInfo;
-            } catch (Exception e) {
-                log(
-                    LogItem.LEVEL_WARNING,
-                    LogItem.SOURCE_RECORDER,
-                    channel,
-                    "Clean recorder exit confirmation check failed.",
-                    "attempt=" + attempt + ", reason=" + normalizeErrorMessage(e)
-                );
-            }
-        }
-
-        return latestLiveInfo;
-    }
-
     private boolean convertRecording(RecordingItem recording, ChannelItem channel) {
         if (recording == null) {
             return false;
@@ -4503,7 +4463,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             + ", folder=" + folderName;
     }
 
-
     private String buildConversionCommand(RecordingItem recording, List<String> tempSegments) {
         if (tempSegments == null || tempSegments.isEmpty()) {
             return "-y -i " + quote(recording.getTempTsPath())
@@ -4618,7 +4577,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return fallbackLiveInfo;
     }
 
-
     private boolean shouldRunLivePageFallbackNow(String channelId) {
         if (isBlank(channelId)) {
             return false;
@@ -4637,6 +4595,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private LiveInfo checkLiveFromChannelLivePage(String channelId, ChannelItem channel) {
         if (isBlank(channelId)) {
             return null;
+        }
+
+        LiveInfo liveInfo = checkLiveFromChannelLivePageUrl(
+            channelId,
+            remoteConfig.getWebPlayerBaseUrl() + "/channel/" + urlEncodeForQuery(channelId) + "/live"
+        );
+        if (liveInfo != null) {
+            return liveInfo;
         }
 
         String channelLiveUrl = buildChannelLiveUrl(channel == null ? "" : channel.getUrl());
@@ -4931,19 +4897,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-    private long fetchLiveStartTimestampMillis(String videoId) {
-        String safeVideoId = normalizeVideoIdForLookup(videoId);
-        if (isBlank(safeVideoId)) {
-            return 0L;
-        }
-        try {
-            String html = httpGet(YouTubeUrlUtils.buildWatchUrl(safeVideoId));
-            return extractLiveStartTimestampMillis(extractInitialPlayerResponse(html));
-        } catch (Exception ignored) {
-            return 0L;
-        }
-    }
-
     private long extractLiveStartTimestampMillis(JSONObject playerResponse) {
         if (playerResponse == null) {
             return 0L;
@@ -4979,7 +4932,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private boolean isVerboseDebugLoggingEnabled() {
         return settings != null && settings.isLogDebugEnabled();
     }
-
 
     private ResolvedInput resolveRecordingInputUrl(
         String videoId,
@@ -5497,7 +5449,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return normalizeErrorMessage(error).toLowerCase(java.util.Locale.US).contains("no video formats found");
     }
 
-
     private List<YtDlpResolveAttempt> buildYtDlpResolveAttempts(
         RecorderCommandBuilder builder,
         String videoUrl
@@ -5773,7 +5724,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private String buildYtDlpPlayerClientArg(String clientName) {
         return "youtube:player_client=" + clientName.trim().toLowerCase();
     }
-
 
     private String resolvePlayableUrlWithYoutubedlAndroid(
         String videoUrl,
@@ -6316,86 +6266,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-
-    private String getDirectDownloadInputUrl(String videoId, ChannelItem channel) {
-        String safeVideoId = normalizeVideoIdForLookup(videoId);
-        LiveInfo liveInfo = new LiveInfo(
-            safeVideoId,
-            "",
-            YouTubeUrlUtils.buildWatchUrl(safeVideoId),
-            0L
-        );
-
-        try {
-            return resolveRecordingInputUrl(safeVideoId, channel, liveInfo, false).url;
-        } catch (Exception e) {
-            log(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_RECORDER,
-                channel,
-                "Primary resolver unavailable for direct download; trying progressive fallback.",
-                normalizeErrorMessage(e)
-            );
-        }
-
-        return getProgressiveVideoUrl(safeVideoId, channel);
-    }
-
-    private String getProgressiveVideoUrl(String videoId, ChannelItem channel) {
-        List<RemoteConfig.YoutubeClient> clients = getManifestClientsForAttempts();
-        int apiKeyCount = Math.max(1, remoteConfig.getApiKeys().size());
-        String lastFailure = "";
-
-        for (int clientIndex = 0; clientIndex < clients.size(); clientIndex++) {
-            RemoteConfig.YoutubeClient client = clients.get(clientIndex);
-
-            if (client == null || !client.isValid()) continue;
-
-            for (int keyIndex = 0; keyIndex < apiKeyCount; keyIndex++) {
-                String apiKey = getApiKeyForAttempt(keyIndex);
-                String apiUrl = remoteConfig.getInnertubeBaseUrl() + "/player?key=" + apiKey;
-                String details = "videoId=" + videoId
-                    + ", clientIndex=" + clientIndex
-                    + ", client=" + describeClientForLog(client)
-                    + ", keyAttempt=" + keyIndex;
-
-                try {
-                    JSONObject context = new JSONObject()
-                        .put("client", client.toInnertubeClientJson());
-                    JSONObject body = new JSONObject()
-                        .put("context", context)
-                        .put("videoId", videoId)
-                        .put("contentCheckOk", true)
-                        .put("racyCheckOk", true);
-                    JSONObject json = new JSONObject(httpPostWithRetry(apiUrl, body.toString(), client));
-                    JSONObject streamingData = json.optJSONObject("streamingData");
-
-                    if (streamingData == null) {
-                        lastFailure = "No streamingData. " + details + ", response=" + summarizeInnertubeResponseForLog(json);
-                        continue;
-                    }
-
-                    String url = findBestFormatUrl(streamingData.optJSONArray("formats"));
-
-                    if (url == null || url.trim().isEmpty()) {
-                        url = findBestFormatUrl(streamingData.optJSONArray("adaptiveFormats"));
-                    }
-
-                    if (url != null && !url.trim().isEmpty()) {
-                        return url;
-                    }
-
-                    lastFailure = "No direct format URL. " + details;
-                } catch (Exception e) {
-                    lastFailure = details + ", error=" + normalizeErrorMessage(e);
-                    Log.w(TAG, "getProgressiveVideoUrl failed: " + lastFailure, e);
-                }
-            }
-        }
-
-        throw new IllegalStateException("Could not get ended-live/video download URL. " + lastFailure);
-    }
-
     private static String findBestFormatUrl(JSONArray formats) {
         if (formats == null) {
             return "";
@@ -6495,20 +6365,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         connection.getOutputStream().write(bodyBytes);
 
         return readResponseWithDataLog(connection, "POST", urlString, bodyBytes.length);
-    }
-
-    private String readResponse(HttpURLConnection connection) throws Exception {
-        HttpDataResponse response = readHttpResponse(connection);
-        if (response.responseCode < 200 || response.responseCode >= 300) {
-            throw new HttpStatusException(
-                response.responseCode,
-                "HTTP "
-                    + response.responseCode
-                    + ": "
-                    + shortenForLog(response.body, 700)
-            );
-        }
-        return response.body;
     }
 
     private String readResponseWithDataLog(
@@ -6627,7 +6483,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         log(LogItem.LEVEL_INFO, LogItem.SOURCE_NETWORK, null, "HTTP data usage.", details);
     }
-
 
     private boolean shouldSuppressHttpDataUsageLog(String urlString, HttpDataResponse response) {
         if (response == null || response.responseCode < 200 || response.responseCode >= 300) {
@@ -7527,13 +7382,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         super.onDestroy();
     }
 
-
     private enum CleanExitAction {
         FINALIZE,
         RESTARTED,
         DEFERRED
     }
-
 
     private static class YtDlpPrimaryRecorderDecision {
         static final String RECORDER_NONE = "none";
@@ -7580,7 +7433,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             this.uidTxBytes = uidTxBytes;
         }
     }
-
 
     private static class HttpStatusException extends Exception {
         private final int statusCode;
