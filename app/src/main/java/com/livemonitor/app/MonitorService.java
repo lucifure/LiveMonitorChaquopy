@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final String TAG = "MonitorService";
     private static final String FALLBACK_YT_API_KEY = "AIzaSyDnAsBrxe_aFkUSpqkrFDczUw-PpLoEhuY";
+    private static final String INNERTUBE_PLAYER_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
     private static final long MIN_FREE_BYTES_BEFORE_RECORDING = 512L * 1024L * 1024L;
     private static final long MIN_FREE_BYTES_BEFORE_CONVERSION = 256L * 1024L * 1024L;
     private static final long MIN_PARTIAL_RECORDING_SAVE_BYTES = 1L * 1024L * 1024L;
@@ -66,7 +67,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long RESOLVER_READY_LOG_SUPPRESSION_MS = 60L * 60L * 1000L;
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
-    private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 15L * 60L * 1000L;
+    private static final long NETWORK_DATA_LOG_MIN_RESPONSE_BYTES = 64L * 1024L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
@@ -4605,39 +4607,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private LiveInfo checkLive(String channelId, ChannelItem channel) {
-        // Try YouTube Data API first if key is available
-        if (!isBlank(getApiKey())) {
-            try {
-                String apiUrl = "https://www.googleapis.com/youtube/v3/search"
-                    + "?part=snippet&channelId="
-                    + URLEncoder.encode(channelId, "UTF-8")
-                    + "&eventType=live&type=video&maxResults=1&key="
-                    + getApiKey();
-
-                JSONObject json = new JSONObject(httpGet(apiUrl));
-                JSONArray items = json.optJSONArray("items");
-
-                if (items != null && items.length() > 0) {
-                    JSONObject item = items.getJSONObject(0);
-                    String videoId = item.getJSONObject("id").getString("videoId");
-                    String title = item.getJSONObject("snippet").getString("title");
-                    return new LiveInfo(
-                        videoId, title,
-                        "https://youtube.com/watch?v=" + videoId,
-                        fetchLiveStartTimestampMillis(videoId)
-                    );
-                }
-
-                // A successful empty API response means the channel is not live.
-                // Avoid scraping the much larger /live page on every poll, which
-                // can burn hundreds of MB overnight when scheduled streams sit in
-                // LIVE_STREAM_OFFLINE/UNPLAYABLE states.
-                return null;
-            } catch (Exception e) {
-                Log.w(TAG, "YouTube Data API live check failed; trying /live fallback", e);
-            }
-        }
-
         if (!shouldRunLivePageFallbackNow(channelId)) {
             return null;
         }
@@ -4669,20 +4638,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return null;
         }
 
-        LiveInfo liveInfo = checkLiveFromChannelLivePageUrl(
-            channelId,
-            remoteConfig.getWebPlayerBaseUrl() + "/channel/" + urlEncodeForQuery(channelId) + "/live"
-        );
-        if (liveInfo != null) {
-            return liveInfo;
-        }
-
         String channelLiveUrl = buildChannelLiveUrl(channel == null ? "" : channel.getUrl());
-        if (!isBlank(channelLiveUrl)) {
-            return checkLiveFromChannelLivePageUrl(channelId, channelLiveUrl);
+        if (isBlank(channelLiveUrl)) {
+            return null;
         }
 
-        return null;
+        return checkLiveFromChannelLivePageUrl(channelId, channelLiveUrl);
     }
 
     private LiveInfo checkLiveFromChannelLivePageUrl(String channelId, String liveUrl) {
@@ -4794,6 +4755,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
     private StreamEndStatus confirmStreamEnded(String videoId, String channelId, ChannelItem channel) {
         String safeVideoId = normalizeVideoIdForLookup(videoId);
+        if (isBlank(safeVideoId)) {
+            return StreamEndStatus.UNKNOWN;
+        }
+
+        StreamEndStatus innertubeStatus = confirmStreamEndedWithInnertube(safeVideoId);
+        if (innertubeStatus != StreamEndStatus.UNKNOWN) {
+            return innertubeStatus;
+        }
 
         if (!isBlank(channelId)) {
             try {
@@ -4831,44 +4800,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
         }
 
-        try {
-            String html = httpGet(YouTubeUrlUtils.buildWatchUrl(safeVideoId));
-
-            if (html != null) {
-                if (html.contains("\"isLive\":true")) {
-                    log(
-                        LogItem.LEVEL_INFO,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Stream end check: watch page confirms isLive=true.",
-                        "videoId=" + safeVideoId
-                    );
-                    return StreamEndStatus.STILL_LIVE;
-                }
-
-                if (html.contains("LIVE_STREAM_OFFLINE")
-                    || html.contains("has been removed")
-                    || html.contains("\"isLive\":false")) {
-                    log(
-                        LogItem.LEVEL_INFO,
-                        LogItem.SOURCE_RECORDER,
-                        null,
-                        "Stream end check: watch page confirms stream ended.",
-                        "videoId=" + safeVideoId
-                    );
-                    return StreamEndStatus.CONFIRMED_ENDED;
-                }
-            }
-        } catch (Exception e) {
-            log(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_RECORDER,
-                null,
-                "Stream end check: watch page check failed.",
-                "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(e)
-            );
-        }
-
         log(
             LogItem.LEVEL_WARNING,
             LogItem.SOURCE_RECORDER,
@@ -4876,6 +4807,103 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "Stream end check: inconclusive — assuming still live.",
             "videoId=" + safeVideoId
         );
+        return StreamEndStatus.UNKNOWN;
+    }
+
+    private StreamEndStatus confirmStreamEndedWithInnertube(String safeVideoId) {
+        RemoteConfig.YoutubeClient client = remoteConfig == null ? null : remoteConfig.getPrimaryClient();
+        if (client == null || !client.isValid()) {
+            client = new RemoteConfig.YoutubeClient(
+                "ANDROID",
+                "19.09.37",
+                "Android",
+                "11",
+                "com.google.android.youtube",
+                "30",
+                true
+            );
+        }
+
+        String innertubeBaseUrl = remoteConfig == null
+            ? "https://www.youtube.com/youtubei/v1"
+            : remoteConfig.getInnertubeBaseUrl();
+        Exception lastError = null;
+
+        try {
+            String apiUrl = innertubeBaseUrl + "/player?key=" + INNERTUBE_PLAYER_API_KEY + "&prettyPrint=false";
+            JSONObject context = new JSONObject()
+                .put("client", client.toInnertubeClientJson());
+            JSONObject body = new JSONObject()
+                .put("context", context)
+                .put("videoId", safeVideoId)
+                .put("contentCheckOk", true)
+                .put("racyCheckOk", true);
+
+            JSONObject json = new JSONObject(httpPostWithRetry(apiUrl, body.toString(), client));
+            JSONObject playability = json.optJSONObject("playabilityStatus");
+            JSONObject videoDetails = json.optJSONObject("videoDetails");
+
+            if (videoDetails != null && videoDetails.optBoolean("isLive", false)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Stream end check: Innertube confirms isLive=true.",
+                    "videoId=" + safeVideoId
+                );
+                return StreamEndStatus.STILL_LIVE;
+            }
+
+            if (videoDetails != null && !videoDetails.optBoolean("isLiveContent", true)) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Stream end check: Innertube confirms isLiveContent=false.",
+                    "videoId=" + safeVideoId
+                );
+                return StreamEndStatus.CONFIRMED_ENDED;
+            }
+
+            if (playability != null) {
+                String status = playability.optString("status", "");
+                String reason = playability.optString("reason", "");
+                String lowerReason = reason.toLowerCase(java.util.Locale.US);
+
+                if ("OK".equalsIgnoreCase(status) && videoDetails != null) {
+                    return StreamEndStatus.UNKNOWN;
+                }
+
+                if ("LOGIN_REQUIRED".equalsIgnoreCase(status)
+                    || "ERROR".equalsIgnoreCase(status)
+                    || "UNPLAYABLE".equalsIgnoreCase(status)
+                    || lowerReason.contains("removed")
+                    || lowerReason.contains("unavailable")
+                    || lowerReason.contains("private")) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        null,
+                        "Stream end check: Innertube confirms stream ended/unavailable.",
+                        "videoId=" + safeVideoId + ", status=" + status + ", reason=" + shortenForLog(reason, 160)
+                    );
+                    return StreamEndStatus.CONFIRMED_ENDED;
+                }
+            }
+        } catch (Exception e) {
+            lastError = e;
+        }
+
+        if (lastError != null) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Stream end check: Innertube player API failed.",
+                "videoId=" + safeVideoId + ", error=" + normalizeErrorMessage(lastError)
+            );
+        }
+
         return StreamEndStatus.UNKNOWN;
     }
 
@@ -6471,7 +6499,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private String readResponse(HttpURLConnection connection) throws Exception {
         HttpDataResponse response = readHttpResponse(connection);
         if (response.responseCode < 200 || response.responseCode >= 300) {
-            throw new IllegalStateException(
+            throw new HttpStatusException(
+                response.responseCode,
                 "HTTP "
                     + response.responseCode
                     + ": "
@@ -6492,7 +6521,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         logHttpDataUsage(method, urlString, requestBodyBytes, response, snapshot);
 
         if (response.responseCode < 200 || response.responseCode >= 300) {
-            throw new IllegalStateException(
+            throw new HttpStatusException(
+                response.responseCode,
                 "HTTP "
                     + response.responseCode
                     + ": "
@@ -6572,7 +6602,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         HttpDataResponse response,
         DataUsageSnapshot snapshot
     ) {
-        if (response == null) {
+        if (response == null || shouldSuppressHttpDataUsageLog(urlString, response)) {
             return;
         }
 
@@ -6595,6 +6625,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             + describeUrlForLog(urlString);
 
         log(LogItem.LEVEL_INFO, LogItem.SOURCE_NETWORK, null, "HTTP data usage.", details);
+    }
+
+
+    private boolean shouldSuppressHttpDataUsageLog(String urlString, HttpDataResponse response) {
+        if (response == null || response.responseCode < 200 || response.responseCode >= 300) {
+            return false;
+        }
+
+        if (response.responseBytes >= NETWORK_DATA_LOG_MIN_RESPONSE_BYTES) {
+            return false;
+        }
+
+        String category = classifyNetworkUsage(urlString);
+        return "youtube_data_api".equals(category) || "youtube_other".equals(category) || "other_http".equals(category);
     }
 
     private void logDataUsageDelta(
@@ -7533,6 +7577,20 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         DataUsageSnapshot(long uidRxBytes, long uidTxBytes) {
             this.uidRxBytes = uidRxBytes;
             this.uidTxBytes = uidTxBytes;
+        }
+    }
+
+
+    private static class HttpStatusException extends Exception {
+        private final int statusCode;
+
+        HttpStatusException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        int getStatusCode() {
+            return statusCode;
         }
     }
 
