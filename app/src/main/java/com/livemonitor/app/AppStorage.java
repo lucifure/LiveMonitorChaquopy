@@ -40,7 +40,6 @@ public class AppStorage {
     private static final String KEY_LAST_MISSED_STREAM_CHECKED_OUTAGE = "last_missed_stream_checked_outage";
     private static final String KEY_MISSED_STREAM_RECORDS = "missed_stream_records_json";
 
-    private static final int DEFAULT_MAX_LOGS = 2_000;
     private static final int DEFAULT_MAX_RECORDINGS = 500;
 
     private final Context appContext;

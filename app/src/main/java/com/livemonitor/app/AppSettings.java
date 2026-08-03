@@ -727,12 +727,6 @@ public class AppSettings {
         return normalized;
     }
 
-    private static String buildPoTokenSpec(String client, String token) {
-        String normalizedClient = normalizePoTokenClient(client);
-        String normalizedToken = normalizePoTokenValue(token);
-        return normalizedClient + ".gvs+" + normalizedToken;
-    }
-
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
     }

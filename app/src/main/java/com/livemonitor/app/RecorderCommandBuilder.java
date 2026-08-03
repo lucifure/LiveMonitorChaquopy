@@ -204,7 +204,6 @@ public class RecorderCommandBuilder {
         return Collections.unmodifiableList(args);
     }
 
-
     /**
      * Builds the primary DASH recorder path from the proven Termux android_vr
      * command. When both saved cookies and a captured GVS PO token exist, switch
@@ -645,32 +644,6 @@ public class RecorderCommandBuilder {
         }
     }
 
-
-    private void replaceOptionValue(List<String> args, String option, String value) {
-        if (args == null || isBlank(option)) {
-            return;
-        }
-
-        for (int index = 0; index < args.size() - 1; index++) {
-            if (option.equals(args.get(index))) {
-                args.set(index + 1, value == null ? "" : value);
-                return;
-            }
-        }
-
-        addOptionAndValueBeforeInput(args, option, value);
-    }
-
-    private void addOptionAndValueBeforeInput(List<String> args, String option, String value) {
-        if (args == null || isBlank(option)) {
-            return;
-        }
-
-        int insertIndex = Math.max(1, args.size() - 1);
-        args.add(insertIndex, option);
-        args.add(insertIndex + 1, value == null ? "" : value);
-    }
-
     private void removeOptionAndValue(List<String> args, String option) {
         if (args == null || isBlank(option)) {
             return;
@@ -690,7 +663,6 @@ public class RecorderCommandBuilder {
             index--;
         }
     }
-
 
     private static String quoteForLog(String value) {
         if (value == null) {

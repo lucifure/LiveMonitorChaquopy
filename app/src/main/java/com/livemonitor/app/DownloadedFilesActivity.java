@@ -251,15 +251,6 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         return params;
     }
 
-    private void styleCyberButton(Button button) {
-        button.setTextColor(getResources().getColor(R.color.lm_text_secondary));
-        button.setTextSize(16);
-        button.setBackgroundResource(R.drawable.lm_glass_button_background);
-        button.setStateListAnimator(null);
-        button.setMinHeight(0);
-        button.setMinWidth(0);
-    }
-
     private void styleIconButton(Button button) {
         button.setTextColor(getResources().getColor(R.color.lm_text_primary));
         button.setTextSize(28);
@@ -342,22 +333,6 @@ public class DownloadedFilesActivity extends AppCompatActivity {
             }
         }
         summaryView.setText(count + " past recordings · " + RecordingProgressTracker.formatBytes(totalBytes) + " used");
-    }
-
-    private void openSelectedFolder() {
-        AppSettings settings = storage.loadSettings();
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            if (!settings.getSaveLocationUri().trim().isEmpty()) {
-                intent.setData(Uri.parse(settings.getSaveLocationUri()));
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(intent);
-            } else {
-                Toast.makeText(this, "Using app storage. Select a folder in Settings to open it here.", Toast.LENGTH_LONG).show();
-            }
-        } catch (Exception e) {
-            Toast.makeText(this, "Unable to open folder: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
     }
 
     private void updateSelectionBar(int selectedCount) {

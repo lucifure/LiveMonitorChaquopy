@@ -193,17 +193,6 @@ public class ChannelLogActivity extends AppCompatActivity {
         }
     }
 
-    private void viewSelectFullLog() {
-        String text = storage.buildCopyTextForChannel(channelId);
-
-        if (text.trim().isEmpty()) {
-            Toast.makeText(this, "Channel log is empty.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        showSelectableText(channelTitle, text, "LiveMonitor Channel Log - " + channelTitle);
-    }
-
     private void showSelectableText(String title, String text, String clipboardLabel) {
         TextView logTextView = new TextView(this);
         logTextView.setText(text);

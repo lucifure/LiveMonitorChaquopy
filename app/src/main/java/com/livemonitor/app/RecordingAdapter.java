@@ -278,7 +278,6 @@ public class RecordingAdapter extends BaseAdapter {
             )
         );
 
-
         TextView statusBadge = new TextView(context);
         statusBadge.setTextColor(Color.WHITE);
         statusBadge.setTextSize(12);
@@ -872,7 +871,6 @@ public class RecordingAdapter extends BaseAdapter {
         }
     }
 
-
     private boolean isReadableVideoSource(String path) {
         if (path == null || path.trim().isEmpty()) {
             return false;
@@ -894,13 +892,6 @@ public class RecordingAdapter extends BaseAdapter {
         } else {
             retriever.setDataSource(path);
         }
-    }
-
-    private String buildDownloadedSubtitle(RecordingItem recording) {
-        if (recording == null) return "";
-        String duration = RecordingProgressTracker.formatDuration(getPlayableFileDurationSeconds(recording));
-        String size = RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
-        return duration + " • " + size + " • " + recording.getQuality();
     }
 
     private String formatStatus(String status) {
@@ -951,34 +942,6 @@ public class RecordingAdapter extends BaseAdapter {
         return "Unknown";
     }
 
-    private int statusColor(String status) {
-        if (RecordingItem.STATUS_RECORDING.equals(status)) {
-            return Color.rgb(220, 0, 0);
-        }
-
-        if (RecordingItem.STATUS_CONVERTING.equals(status) || RecordingItem.STATUS_COPYING.equals(status)) {
-            return Color.rgb(255, 184, 77);
-        }
-
-        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(status)) {
-            return Color.rgb(80, 120, 220);
-        }
-
-        if (RecordingItem.STATUS_COMPLETED.equals(status)) {
-            return Color.rgb(22, 199, 132);
-        }
-
-        if (RecordingItem.STATUS_RECOVERABLE.equals(status)) {
-            return Color.rgb(80, 120, 220);
-        }
-
-        if (RecordingItem.STATUS_FAILED.equals(status)) {
-            return Color.rgb(180, 0, 0);
-        }
-
-        return Color.rgb(100, 100, 100);
-    }
-
     private void applyStatusBadge(TextView badge, String status) {
         if (RecordingItem.STATUS_RECORDING.equals(status)) {
             badge.setBackgroundResource(R.drawable.lm_status_recording_background);
@@ -1024,7 +987,6 @@ public class RecordingAdapter extends BaseAdapter {
             : "📡 Behind: " + RecordingProgressTracker.formatDuration(behindMs / 1_000L);
         holder.progressLabel.setText(behindLabel);
     }
-
 
     private long estimateBehindLiveMs(RecordingItem recording, long now, long streamAgeMs) {
         if (recording == null || streamAgeMs <= 0L) {
