@@ -67,6 +67,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final long ACTIVE_RECORDING_POLL_INTERVAL_MS = 10L * 60L * 1000L;
     private static final long LIVE_PAGE_FALLBACK_MIN_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long NETWORK_DATA_LOG_MIN_RESPONSE_BYTES = 64L * 1024L;
+    private static final long NETWORK_DATA_LOG_THROTTLE_INTERVAL_MS = 10L * 60L * 1000L;
+    private static final long RECORDER_RAPID_RESTART_WINDOW_MS = 30L * 1000L;
+    private static final int RECORDER_RAPID_RESTART_BACKOFF_THRESHOLD = 3;
+    private static final long RECORDER_UNCHANGED_FILE_BACKOFF_MS = 60L * 1000L;
+    private static final long RECORDER_MAX_RAPID_RESTART_BACKOFF_MS = 10L * 60L * 1000L;
     private static final long NETWORK_OUTAGE_DIAGNOSTIC_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long DIRECT_DOWNLOAD_PROGRESS_INTERVAL_MS = 2_000L;
 
@@ -97,6 +102,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Set<String> discardDirectDownloadPartialIds = ConcurrentHashMap.newKeySet();
     private final Set<String> finalizedRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> selectedFolderCopyIds = ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> recorderRapidRestartCounts = new ConcurrentHashMap<>();
+    private final Map<String, Long> recorderLastRestartStartedAt = new ConcurrentHashMap<>();
+    private final Map<String, Long> recorderLastOutputBytes = new ConcurrentHashMap<>();
+    private final Map<String, Long> httpDataUsageLogLastAt = new ConcurrentHashMap<>();
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
@@ -2764,6 +2773,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        if (!prepareRecorderRestartOrFinalize(recording, channel)) {
+            return;
+        }
+
         String channelId = recording.getChannelId();
         LiveInfo checkedLiveInfo = null;
 
@@ -2793,12 +2806,120 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         executor.execute(() -> runRecording(channelId, recording, liveInfo));
     }
 
+    private boolean prepareRecorderRestartOrFinalize(RecordingItem recording, ChannelItem channel) {
+        String recordingId = recording.getId();
+        long now = System.currentTimeMillis();
+        long currentOutputBytes = getRecordingOutputBytes(recording);
+        Long previousOutputBytes = recorderLastOutputBytes.get(recordingId);
+        long lastRestartStartedAt = recorderLastRestartStartedAt.getOrDefault(recordingId, 0L);
+        boolean rapidRestart = lastRestartStartedAt > 0L && now - lastRestartStartedAt < RECORDER_RAPID_RESTART_WINDOW_MS;
+
+        if (rapidRestart) {
+            int restartCount = recorderRapidRestartCounts.getOrDefault(recordingId, 0) + 1;
+            recorderRapidRestartCounts.put(recordingId, restartCount);
+
+            if (restartCount >= RECORDER_RAPID_RESTART_BACKOFF_THRESHOLD) {
+                long backoffMs = Math.min(restartCount * 60_000L, RECORDER_MAX_RAPID_RESTART_BACKOFF_MS);
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Rapid recorder restart detected; backing off before trusting live status.",
+                    "recordingId="
+                        + recordingId
+                        + ", videoId="
+                        + recording.getVideoId()
+                        + ", restartCount="
+                        + restartCount
+                        + ", backoffMs="
+                        + backoffMs
+                );
+
+                if (!sleepBeforeRecorderRestart(backoffMs)) {
+                    return false;
+                }
+
+                StreamEndStatus recheckStatus = confirmStreamEnded(recording, channel);
+                if (recheckStatus != StreamEndStatus.STILL_LIVE) {
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_RECORDER,
+                        channel,
+                        "Rapid restart backoff recheck says stream is not live. Finalizing recording.",
+                        "videoId=" + recording.getVideoId() + ", status=" + recheckStatus
+                    );
+                    finalizeCompletedRecording(recording, channel);
+                    return false;
+                }
+            }
+        } else {
+            recorderRapidRestartCounts.put(recordingId, 0);
+        }
+
+        if (previousOutputBytes != null && currentOutputBytes > 0L && currentOutputBytes == previousOutputBytes) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recorder output size is unchanged after exit; delaying restart to avoid replay loop.",
+                "recordingId="
+                    + recordingId
+                    + ", videoId="
+                    + recording.getVideoId()
+                    + ", fileBytes="
+                    + currentOutputBytes
+            );
+
+            if (!sleepBeforeRecorderRestart(RECORDER_UNCHANGED_FILE_BACKOFF_MS)) {
+                return false;
+            }
+
+            StreamEndStatus recheckStatus = confirmStreamEnded(recording, channel);
+            if (recheckStatus != StreamEndStatus.STILL_LIVE) {
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Unchanged output recheck says stream is not live. Finalizing recording.",
+                    "videoId=" + recording.getVideoId() + ", status=" + recheckStatus
+                );
+                finalizeCompletedRecording(recording, channel);
+                return false;
+            }
+        }
+
+        recorderLastOutputBytes.put(recordingId, currentOutputBytes);
+        recorderLastRestartStartedAt.put(recordingId, System.currentTimeMillis());
+        return true;
+    }
+
+    private boolean sleepBeforeRecorderRestart(long backoffMs) {
+        try {
+            Thread.sleep(backoffMs);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private void clearRecorderRestartState(String recordingId) {
+        if (isBlank(recordingId)) {
+            return;
+        }
+
+        recorderRapidRestartCounts.remove(recordingId);
+        recorderLastRestartStartedAt.remove(recordingId);
+        recorderLastOutputBytes.remove(recordingId);
+    }
+
     private void finalizeCompletedRecording(RecordingItem recording, ChannelItem channel) {
         if (recording == null) {
             return;
         }
 
         String channelId = recording.getChannelId();
+        clearRecorderRestartState(recording.getId());
         detachRecordingFromActiveState(recording, channelId);
         saveStoppedRecordingForDownloads(recording, channel);
 
@@ -6489,12 +6610,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return false;
         }
 
+        String category = classifyNetworkUsage(urlString);
+
         if (response.responseBytes >= NETWORK_DATA_LOG_MIN_RESPONSE_BYTES) {
+            return shouldThrottleHttpDataUsageLog(category);
+        }
+
+        return "youtube_data_api".equals(category) || "youtube_other".equals(category) || "other_http".equals(category);
+    }
+
+    private boolean shouldThrottleHttpDataUsageLog(String category) {
+        if (isBlank(category)) {
             return false;
         }
 
-        String category = classifyNetworkUsage(urlString);
-        return "youtube_data_api".equals(category) || "youtube_other".equals(category) || "other_http".equals(category);
+        long now = System.currentTimeMillis();
+        Long lastLoggedAt = httpDataUsageLogLastAt.get(category);
+
+        if (lastLoggedAt != null && now - lastLoggedAt < NETWORK_DATA_LOG_THROTTLE_INTERVAL_MS) {
+            return true;
+        }
+
+        httpDataUsageLogLastAt.put(category, now);
+        return false;
     }
 
     private void logDataUsageDelta(
