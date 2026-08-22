@@ -1624,6 +1624,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 startHttp429Cooldown(latest, errorMessage);
             }
 
+            if (salvageRecordingOutputAfterRecorderFailure(channelId, latest, recording, errorMessage)) {
+                return;
+            }
+
             recording.markFailed(errorMessage);
             storage.upsertRecording(recording);
 
@@ -1643,6 +1647,66 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
             broadcastRecordingUpdated("Recording failed.");
         }
+    }
+
+    private boolean salvageRecordingOutputAfterRecorderFailure(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String errorMessage
+    ) {
+        if (recording == null || !recordingHasAnyOutputData(recording)) {
+            return false;
+        }
+
+        restartingRecordings.remove(recording.getId());
+        activeRecordings.remove(channelId);
+        activeRecordings.remove(recording.getChannelId());
+        activeRecordings.remove(recording.getId());
+        progressTracker.untrack(recording);
+
+        String recoverableReason = "Recorder failed after writing data. "
+            + "Partial recording was kept for recovery. "
+            + errorMessage;
+
+        recording.markRecoverable(recoverableReason);
+        storage.upsertRecording(recording);
+
+        long outputBytes = estimateExistingTempRecordingBytes(recording);
+        boolean savedPlayableFile = saveStoppedRecordingForDownloads(recording, channel);
+
+        if (channel != null) {
+            if (savedPlayableFile) {
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+            } else {
+                channel.markFailed(recoverableReason);
+            }
+            storage.upsertChannel(channel);
+            notificationHelper.showChannelMonitoringNotification(channel);
+        }
+
+        log(
+            savedPlayableFile ? LogItem.LEVEL_SUCCESS : LogItem.LEVEL_WARNING,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            savedPlayableFile
+                ? "Recording failed after writing data; partial output was saved."
+                : "Recording failed after writing data; partial output is recoverable.",
+            "recordingId="
+                + recording.getId()
+                + ", bytes="
+                + outputBytes
+                + ", reason="
+                + shortenForLog(errorMessage, 300)
+        );
+
+        broadcastRecordingUpdated(
+            savedPlayableFile
+                ? "Partial recording was saved after recorder failure."
+                : "Recording is recoverable after recorder failure."
+        );
+        return true;
     }
 
     private String prepareFreshFfmpegOutputPath(RecordingItem recording) {
