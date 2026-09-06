@@ -4112,20 +4112,26 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 null
             );
 
-            executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath, true);
+            // Do not pin a YouTube player client here. yt-dlp maintains its own
+            // supported client defaults, while an explicit client can be removed
+            // by a later yt-dlp update and leave completed downloads formatless.
+            executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath);
 
             File outputFile = finalizeDirectDownloadTempFile(tempOutputPath, outputPath);
             if (!outputFile.exists() || outputFile.length() <= 0L) {
                 throw new IllegalStateException("yt-dlp finished without creating an output file.");
             }
 
-            recording.updateProgress(outputFile.length(), recording.getDurationSeconds());
+            // The selected-folder copy may delete the internal source file, so
+            // capture its size before copying for accurate progress and logging.
+            long completedBytes = outputFile.length();
+            recording.updateProgress(completedBytes, recording.getDurationSeconds());
             recording.markCompleted(outputPath);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             copyCompletedRecordingToSelectedFolder(recording, null);
             storage.upsertRecording(recording);
-            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + completedBytes);
         } catch (Exception e) {
             if (isCancellationException(e) || isDirectDownloadStopRequested(recording)) {
                 handleCanceledDirectDownload(recording);
@@ -4146,12 +4152,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private void executeDirectVideoDownloadAttempt(
         RecordingItem recording,
         String watchUrl,
-        String tempOutputPath,
-        boolean useTvEmbeddedClient
+        String tempOutputPath
     ) throws Exception {
-        List<String> args = buildDirectVideoDownloadArgs(watchUrl, tempOutputPath, useTvEmbeddedClient);
+        List<String> args = buildDirectVideoDownloadArgs(watchUrl, tempOutputPath);
         YoutubeDLRequest request = buildYoutubedlAndroidRequest(watchUrl, args);
-        String processId = recording.getId() + (useTvEmbeddedClient ? "-direct-tv" : "-direct-default");
+        String processId = recording.getId() + "-direct-default";
         Function3<Float, Long, String, Unit> callback = new Function3<Float, Long, String, Unit>() {
             @Override
             public Unit invoke(Float progress, Long etaSeconds, String line) {
@@ -4169,24 +4174,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         activeYoutubedlAndroidRecordings.add(processId);
         try {
             executeYoutubedlAndroidRequest(request, processId, callback);
-        } catch (Exception e) {
-            if (!useTvEmbeddedClient || shouldSkipDirectDownloadFallback(recording, e)) {
-                throw e;
-            }
-            log(
-                LogItem.LEVEL_WARNING,
-                LogItem.SOURCE_RECORDER,
-                null,
-                "yt-dlp direct download retrying with default YouTube client.",
-                normalizeErrorMessage(e)
-            );
-            executeDirectVideoDownloadAttempt(recording, watchUrl, tempOutputPath, false);
         } finally {
             activeYoutubedlAndroidRecordings.remove(processId);
         }
     }
 
-    private List<String> buildDirectVideoDownloadArgs(String watchUrl, String outputPath, boolean useTvEmbeddedClient) {
+    private List<String> buildDirectVideoDownloadArgs(String watchUrl, String outputPath) {
         List<String> args = new ArrayList<>();
         args.add(watchUrl);
         args.add("--js-runtime");
@@ -4202,11 +4195,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         args.add("--no-check-certificates");
         args.add("--no-update");
         args.add("-f");
-        args.add("best[height<=480][protocol^=m3u8]/best[protocol^=m3u8]/best[height<=480]/best");
-        if (useTvEmbeddedClient) {
-            args.add("--extractor-args");
-            args.add("youtube:player_client=tv_embedded;skip=dash");
-        }
+        // Keep completed-video downloads aligned with the recorder selector,
+        // including the DASH video+audio fallback for videos without muxed formats.
+        AppSettings downloadSettings = settings == null ? new AppSettings() : settings;
+        args.add(downloadSettings.buildYtDlpFormatSelector());
         args.add("--merge-output-format");
         args.add("mp4");
         args.add("-o");
@@ -4274,10 +4266,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-    private boolean shouldSkipDirectDownloadFallback(RecordingItem recording, Exception error) {
-        return isCancellationException(error) || isDirectDownloadStopRequested(recording);
-    }
-
     private boolean isDirectDownloadStopRequested(RecordingItem recording) {
         if (recording == null || isBlank(recording.getId())) {
             return false;
@@ -4340,12 +4328,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String partialPath = dot > 0 ? finalPath.substring(0, dot) + "_partial" + finalPath.substring(dot) : finalPath + "_partial";
         File partialFile = finalizeDirectDownloadTempFile(tempPath, partialPath);
         if (!partialFile.exists() || partialFile.length() <= 0L) return false;
-        recording.updateProgress(partialFile.length(), recording.getDurationSeconds());
+        // The selected-folder copy may remove this internal file after copying it.
+        long partialBytes = partialFile.length();
+        recording.updateProgress(partialBytes, recording.getDurationSeconds());
         recording.markCompleted(partialPath);
         recording.setErrorMessage("Saved partial download.");
         storage.upsertRecording(recording);
         copyCompletedRecordingToSelectedFolder(recording, null);
-        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Partial direct download saved.", "videoId=" + recording.getVideoId() + ", bytes=" + partialFile.length());
+        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Partial direct download saved.", "videoId=" + recording.getVideoId() + ", bytes=" + partialBytes);
         return true;
     }
 
@@ -5698,21 +5688,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean hasCookies = settings != null && settings.hasYtDlpCookies();
 
         /*
-         * Keep the without-PO-token branch behavior stable even when the user
-         * has a cached PO token from setup. The HLS clients below are the fast
-         * live-from-start path and should always be attempted before token-bound
-         * GVS/DASH clients, because stale or video-specific tokens can return no
-         * formats or stall before bytes are written.
-         *
-         * tv_embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER) is the most lenient
-         * YouTube client regarding po_token enforcement on live streams. Adding
-         * skip=dash forces HLS-only output, which is required for
-         * --live-from-start to walk the DVR fragment index from the beginning.
-         *
-         * web;skip=dash is the next best option when cookies are present because
-         * an authenticated web session avoids most bot-check blocks.
+         * Start with yt-dlp's maintained client selection. Explicit clients can
+         * become unsupported between bundled yt-dlp updates. When cookies are
+         * available, also try authenticated web HLS for live-from-start.
          */
-        extractorArgs.add("youtube:player_client=tv_embedded;skip=dash");
+        extractorArgs.add(RecorderCommandBuilder.EXTRACTOR_ARGS_NONE);
 
         if (hasCookies) {
             extractorArgs.add("youtube:player_client=web;skip=dash");
@@ -5729,8 +5709,8 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     ? "No PO token cached. Trying live-stream fallback clients first."
                     : "PO-token extractor attempts disabled for this without-PO-token chain.",
                 hasCookies
-                    ? "Cookies are saved — tv_embedded (HLS) and web (HLS) will be tried first."
-                    : "tv_embedded (HLS) fallback attempts will be tried first."
+                    ? "Cookies are saved — yt-dlp defaults and authenticated web HLS will be tried first."
+                    : "yt-dlp defaults will be tried first."
             );
         }
 
@@ -5761,16 +5741,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         /*
-         * TV_EMBEDDED is listed first because it has historically been the most
-         * lenient YouTube client about po_token enforcement for live streams and
-         * always returns HLS manifests compatible with --live-from-start.
-         *
-         * The remaining clients are tried in approximate order of how reliably
-         * they return playable formats without a po_token, with web-based clients
-         * before native app clients because native clients (android, ios) now
-         * require GVS po_token for DASH and frequently have no HLS fallback.
+         * The remaining explicit clients are fallbacks after yt-dlp's defaults,
+         * ordered with web-based clients before native app clients because native
+         * clients (android, ios) now require GVS po_token for DASH and frequently
+         * have no HLS fallback.
          */
-        addPreferredYtDlpClient(extractorArgs, "TV_EMBEDDED", includePoToken);
         addPreferredYtDlpClient(extractorArgs, "WEB_EMBEDDED_PLAYER", includePoToken);
         addPreferredYtDlpClient(extractorArgs, "WEB_SAFARI", includePoToken);
         addPreferredYtDlpClient(extractorArgs, "MWEB", includePoToken);

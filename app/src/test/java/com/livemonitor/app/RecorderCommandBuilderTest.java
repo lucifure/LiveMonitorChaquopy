@@ -14,6 +14,8 @@ public class RecorderCommandBuilderTest {
 
         assertEquals(AppSettings.QUALITY_480P, settings.getDownloadQuality());
         assertTrue(settings.buildYtDlpFormatSelector().contains("height<=480"));
+        assertTrue(settings.buildYtDlpFormatSelector().contains("bestvideo[height<=480]+bestaudio"));
+        assertTrue(settings.buildYtDlpFormatSelector().endsWith("/bestvideo+bestaudio"));
         assertFalse(settings.buildYtDlpFormatSelector().contains("/best[protocol^=m3u8]"));
     }
 
