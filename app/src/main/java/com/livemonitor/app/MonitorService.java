@@ -4122,13 +4122,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException("yt-dlp finished without creating an output file.");
             }
 
-            recording.updateProgress(outputFile.length(), recording.getDurationSeconds());
+            // The selected-folder copy may delete the internal source file, so
+            // capture its size before copying for accurate progress and logging.
+            long completedBytes = outputFile.length();
+            recording.updateProgress(completedBytes, recording.getDurationSeconds());
             recording.markCompleted(outputPath);
             recording.hideFromDownloading();
             storage.upsertRecording(recording);
             copyCompletedRecordingToSelectedFolder(recording, null);
             storage.upsertRecording(recording);
-            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + outputFile.length());
+            log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Direct video download completed.", "videoId=" + videoId + ", bytes=" + completedBytes);
         } catch (Exception e) {
             if (isCancellationException(e) || isDirectDownloadStopRequested(recording)) {
                 handleCanceledDirectDownload(recording);
@@ -4325,12 +4328,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         String partialPath = dot > 0 ? finalPath.substring(0, dot) + "_partial" + finalPath.substring(dot) : finalPath + "_partial";
         File partialFile = finalizeDirectDownloadTempFile(tempPath, partialPath);
         if (!partialFile.exists() || partialFile.length() <= 0L) return false;
-        recording.updateProgress(partialFile.length(), recording.getDurationSeconds());
+        // The selected-folder copy may remove this internal file after copying it.
+        long partialBytes = partialFile.length();
+        recording.updateProgress(partialBytes, recording.getDurationSeconds());
         recording.markCompleted(partialPath);
         recording.setErrorMessage("Saved partial download.");
         storage.upsertRecording(recording);
         copyCompletedRecordingToSelectedFolder(recording, null);
-        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Partial direct download saved.", "videoId=" + recording.getVideoId() + ", bytes=" + partialFile.length());
+        log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_RECORDER, null, "Partial direct download saved.", "videoId=" + recording.getVideoId() + ", bytes=" + partialBytes);
         return true;
     }
 
