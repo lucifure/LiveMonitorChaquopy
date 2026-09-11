@@ -594,7 +594,6 @@ public class RemoteConfig {
         clients.add("web");
         clients.add("mweb");
         clients.add("ios");
-        clients.add("tv_embedded");
         return clients;
     }
 
@@ -607,7 +606,9 @@ public class RemoteConfig {
         for (String value : source) {
             String normalized = nullToEmpty(value).trim().toLowerCase(Locale.US);
 
-            if (normalized.isEmpty() || clients.contains(normalized)) {
+            // yt-dlp 2026.08.19 no longer supports this client. Ignore it even
+            // when it remains in a cached or remotely supplied configuration.
+            if (normalized.isEmpty() || "tv_embedded".equals(normalized) || clients.contains(normalized)) {
                 continue;
             }
 
