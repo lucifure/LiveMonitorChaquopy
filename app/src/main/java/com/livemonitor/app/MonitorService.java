@@ -1382,13 +1382,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 storage.upsertChannel(channel);
 
                 String resolvedChannelId = resolveChannelId(channel.getUrl());
+                LiveInfo liveInfo;
 
-                if (resolvedChannelId == null) {
-                    handleRetry(channel, "Could not resolve channel ID.");
-                    continue;
+                if (isBlank(resolvedChannelId)) {
+                    /*
+                     * Handle URLs do not need a YouTube Data API key to be
+                     * checked. The default remote configuration may not include
+                     * one, so falling back to the channel's /live page prevents
+                     * an already-live channel from being skipped indefinitely.
+                     */
+                    String channelLiveUrl = buildChannelLiveUrl(channel.getUrl());
+                    log(
+                        LogItem.LEVEL_INFO,
+                        LogItem.SOURCE_SERVICE,
+                        channel,
+                        "Channel ID lookup unavailable; checking the channel /live page directly.",
+                        "url=" + channelLiveUrl
+                    );
+                    liveInfo = checkLiveFromChannelLivePageUrl(channel.getId(), channelLiveUrl);
+                } else {
+                    liveInfo = checkLive(resolvedChannelId, channel);
                 }
-
-                LiveInfo liveInfo = checkLive(resolvedChannelId, channel);
 
                 if (liveInfo == null) {
                     channel.markWaitingForLive();
