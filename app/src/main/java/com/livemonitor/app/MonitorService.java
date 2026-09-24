@@ -2073,11 +2073,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         + ")"
                 );
 
-                if (isClientLevelFailure(lastFailureReason)
-                    && attemptIndex + 1 < attempts.size()
-                    && !recordingHasAnyOutputData(recording)) {
+                if (shouldRetryYtDlpPrimaryRecorderAttempt(lastFailureReason, recording)
+                    && attemptIndex + 1 < attempts.size()) {
                     logClientLevelFailure(channel, recording, attempt, lastFailureReason);
-                    safeDelete(recording.getCurrentTempSegmentPath());
+                    if (!recordingHasAnyOutputData(recording)) {
+                        safeDelete(recording.getCurrentTempSegmentPath());
+                    }
                     attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
                     continue;
                 }
@@ -2098,11 +2099,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
                 lastFailureReason = addYtDlpAccessGuidance(errorMessage + " (" + attempt.describe() + ")");
 
-                if (isClientLevelFailure(lastFailureReason)
-                    && attemptIndex + 1 < attempts.size()
-                    && !recordingHasAnyOutputData(recording)) {
+                if (shouldRetryYtDlpPrimaryRecorderAttempt(lastFailureReason, recording)
+                    && attemptIndex + 1 < attempts.size()) {
                     logClientLevelFailure(channel, recording, attempt, lastFailureReason);
-                    safeDelete(recording.getCurrentTempSegmentPath());
+                    if (!recordingHasAnyOutputData(recording)) {
+                        safeDelete(recording.getCurrentTempSegmentPath());
+                    }
                     attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
                     continue;
                 }
@@ -2200,7 +2202,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             LogItem.LEVEL_WARNING,
             LogItem.SOURCE_RECORDER,
             channel,
-            "yt-dlp player client failed before writing data; trying next player client.",
+            recordingHasAnyOutputData(recording)
+                ? "yt-dlp player client lost fragment access; trying next player client."
+                : "yt-dlp player client failed before writing data; trying next player client.",
             "recordingId="
                 + (recording == null ? "" : recording.getId())
                 + ", playerClient="
@@ -2317,7 +2321,27 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return normalized.contains("no video formats found")
             || normalized.contains("http error 429")
             || normalized.contains("sign in to confirm you")
-            || normalized.contains("skipping client");
+            || normalized.contains("skipping client")
+            || normalized.contains("did not get any data blocks");
+    }
+
+    private boolean shouldRetryYtDlpPrimaryRecorderAttempt(String failureReason, RecordingItem recording) {
+        if (!isClientLevelFailure(failureReason)) {
+            return false;
+        }
+
+        /*
+         * Fragment access can be rejected after yt-dlp has already written a
+         * partial recording. Unlike format-resolution failures, retry this case
+         * with the next player client rather than immediately entering the
+         * FFmpeg resolver chain.
+         */
+        return !recordingHasAnyOutputData(recording) || isYtDlpDataBlockFailure(failureReason);
+    }
+
+    private boolean isYtDlpDataBlockFailure(String message) {
+        return !isBlank(message)
+            && message.toLowerCase(java.util.Locale.US).contains("did not get any data blocks");
     }
 
     private boolean shouldStopRecorderAfterUserRequest(
@@ -2474,6 +2498,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
          * default request identity/headers instead of our explicit extractor arg.
          */
         addUniquePlayerClient(clients, "auto");
+        // Retry the auto client directly with android_vr before the configurable
+        // resolver clients. android_vr is more reliable for live fragments and
+        // avoids authentication for this primary recorder path.
+        addUniquePlayerClient(clients, "android_vr");
         addUniquePlayerClient(clients, storage == null ? "" : storage.getLastWorkingPlayerClient());
 
         List<String> configuredClients = config == null

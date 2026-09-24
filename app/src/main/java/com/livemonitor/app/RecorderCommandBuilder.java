@@ -284,18 +284,21 @@ public class RecorderCommandBuilder {
         File outputFile = isBlank(outputMp4Path) ? null : new File(outputMp4Path);
 
         /*
-         * Keep the final output path absolute. If youtubedl-android or yt-dlp
-         * drops/collapses --paths during a resume, a filename-only template can
-         * resolve as /<filename> and fail with Errno 30 against the filesystem
-         * root instead of writing under the app recordings directory.
+         * yt-dlp ignores --paths when the output template is absolute. Supplying
+         * both emitted a warning for every recording and made the intended temp
+         * fragment location ambiguous. The primary recorder intentionally uses
+         * an absolute app-owned output path, so let that template control output
+         * placement; retain --paths only for callers using a relative template.
          */
-        if (!isBlank(tempDirectoryPath)) {
+        if (!isBlank(tempDirectoryPath) && (outputFile == null || !outputFile.isAbsolute())) {
             args.add("--paths");
             args.add("temp:" + tempDirectoryPath.trim());
         }
 
         args.add("-o");
-        args.add(outputFile == null ? outputMp4Path : outputFile.getAbsolutePath());
+        args.add(outputFile == null || !outputFile.isAbsolute()
+            ? outputMp4Path
+            : outputFile.getAbsolutePath());
 
         // Only mweb supports the cookies/PO-token path. Other player clients can
         // reject cookies and be skipped by yt-dlp, so keep them cookie-free.
