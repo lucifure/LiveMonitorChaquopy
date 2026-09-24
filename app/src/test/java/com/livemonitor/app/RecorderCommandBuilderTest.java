@@ -41,4 +41,41 @@ public class RecorderCommandBuilderTest {
         assertEquals(settings.buildYtDlpFormatSelector(), args.get(formatIndex + 1));
         assertFalse(args.contains("bv*[height<=480]+ba/b"));
     }
+
+    @Test
+    public void dashPrimaryRecorderDoesNotCombineAbsoluteOutputWithTempPaths() {
+        RecorderCommandBuilder builder = new RecorderCommandBuilder();
+
+        List<String> args = builder.buildDashRecordArgs(
+            "auto",
+            "https://www.youtube.com/watch?v=abc123",
+            "/tmp/recordings/out.mp4",
+            "/tmp/cache",
+            new AppSettings(),
+            new RemoteConfig(),
+            true,
+            false
+        );
+
+        assertFalse(args.contains("--paths"));
+        assertEquals("/tmp/recordings/out.mp4", args.get(args.indexOf("-o") + 1));
+    }
+
+    @Test
+    public void dashPrimaryRecorderKeepsTempPathsForRelativeOutputTemplate() {
+        RecorderCommandBuilder builder = new RecorderCommandBuilder();
+
+        List<String> args = builder.buildDashRecordArgs(
+            "auto",
+            "https://www.youtube.com/watch?v=abc123",
+            "out.mp4",
+            "/tmp/cache",
+            new AppSettings(),
+            new RemoteConfig(),
+            true,
+            false
+        );
+
+        assertEquals("temp:/tmp/cache", args.get(args.indexOf("--paths") + 1));
+    }
 }
