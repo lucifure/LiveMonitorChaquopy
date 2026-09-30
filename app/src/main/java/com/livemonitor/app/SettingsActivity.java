@@ -31,6 +31,7 @@ public class SettingsActivity extends AppCompatActivity {
     private static final String SECTION_SCHEDULE = "Schedule";
     private static final String SECTION_AUTH = "Authentication";
     private static final String SECTION_APP = "App Behaviour";
+    private static final String SECTION_ORACLE_SERVER = "Oracle Server";
     private static final String SECTION_DEBUG = "Developer / Debug";
 
     private AppStorage storage;
@@ -40,7 +41,7 @@ public class SettingsActivity extends AppCompatActivity {
 
     private EditText pollIntervalInput, scheduleStartInput, scheduleEndInput, ytDlpCookieHeaderInput,
         ytDlpCookiesPathInput, ytDlpExtractorArgsInput, ytDlpPoTokenClientInput, ytDlpPoTokenValueInput,
-        remoteConfigUrlInput;
+        remoteConfigUrlInput, oracleServerUrlInput, oracleDeviceTokenInput;
     private Spinner qualitySpinner;
     private TextView saveLocationText, remoteConfigUrlLabel;
     private CheckBox scheduledCheckBox, allowCurrentRecordingCheckBox, waitForVideoCheckBox,
@@ -104,6 +105,8 @@ public class SettingsActivity extends AppCompatActivity {
         addDivider(root);
         addSectionRow(root, SECTION_APP, "Reboot, battery, remote config", R.drawable.ic_settings_24);
         addDivider(root);
+        addSectionRow(root, SECTION_ORACLE_SERVER, "Secure remote recorder connection", R.drawable.ic_lock_24);
+        addDivider(root);
         addSectionRow(root, SECTION_DEBUG, "Logging and diagnostics", R.drawable.ic_code_24);
         return wrap(root);
     }
@@ -116,6 +119,7 @@ public class SettingsActivity extends AppCompatActivity {
         else if (SECTION_SCHEDULE.equals(section)) addScheduleSection(root);
         else if (SECTION_AUTH.equals(section)) addAuthenticationSection(root);
         else if (SECTION_APP.equals(section)) addAppBehaviourSection(root);
+        else if (SECTION_ORACLE_SERVER.equals(section)) addOracleServerSection(root);
         else if (SECTION_DEBUG.equals(section)) addDebugSection(root);
         Button saveButton = new Button(this);
         saveButton.setAllCaps(false);
@@ -257,6 +261,23 @@ public class SettingsActivity extends AppCompatActivity {
         remoteConfigUrlInput = addEditText(root, "Remote config URL", "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json");
     }
 
+    private void addOracleServerSection(LinearLayout root) {
+        addLabel(root, "Server URL");
+        oracleServerUrlInput = addEditText(root, "", "http://100.87.137.48:8787");
+        addLabel(root, "Device pairing token");
+        oracleDeviceTokenInput = addEditText(root, "", "Paste token (leave blank to keep saved token)");
+        oracleDeviceTokenInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+            | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        TextView help = new TextView(this);
+        help.setText("Use your HTTPS server URL, or the private HTTP 100.x Tailscale URL. The token stays in private app storage and is sent only as a Bearer authorization header.");
+        help.setTextColor(Color.rgb(190, 190, 190));
+        help.setTextSize(13);
+        help.setPadding(0, dp(8), 0, 0);
+        root.addView(help);
+        Button test = addButton(root, "Test Server Connection");
+        test.setOnClickListener(v -> testOracleServerConnection());
+    }
+
     private void addDebugSection(LinearLayout root) {
         verboseDebugLoggingCheckBox = addCheckBox(root, "Verbose/Debug logging");
         Button logs = addButton(root, "Log Settings"); logs.setOnClickListener(v -> startActivity(new Intent(this, LogSettingsActivity.class)));
@@ -294,7 +315,26 @@ public class SettingsActivity extends AppCompatActivity {
         if (remoteConfigCheckBox != null) remoteConfigCheckBox.setChecked(settings.isRemoteConfigEnabled());
         if (verboseDebugLoggingCheckBox != null) verboseDebugLoggingCheckBox.setChecked(settings.isLogDebugEnabled());
         if (remoteConfigUrlInput != null) remoteConfigUrlInput.setText(settings.getRemoteConfigUrl().trim().isEmpty() ? "https://raw.githubusercontent.com/lucifure/LiveMonitorChaquopy/main/config.json" : settings.getRemoteConfigUrl());
+        if (oracleServerUrlInput != null) oracleServerUrlInput.setText(OracleServerSettings.getBaseUrl(this));
+        // Never reveal an already paired token when returning to this screen.
+        if (oracleDeviceTokenInput != null) oracleDeviceTokenInput.setText("");
         updateScheduleFieldsEnabled(); updateRemoteConfigVisibility();
+    }
+
+    private void testOracleServerConnection() {
+        try {
+            OracleServerSettings.save(this, oracleServerUrlInput.getText().toString(), oracleDeviceTokenInput.getText().toString());
+        } catch (IllegalArgumentException error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); return;
+        }
+        new Thread(() -> {
+            try {
+                new OracleControlClient(this).get("/status");
+                runOnUiThread(() -> Toast.makeText(this, "Oracle server connected.", Toast.LENGTH_SHORT).show());
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(this, "Server unavailable: " + error.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
     }
 
     private void saveSettings() {
@@ -324,6 +364,13 @@ public class SettingsActivity extends AppCompatActivity {
             settings.setRequestBatteryOptimizationExemption(batteryOptimizationCheckBox.isChecked());
             settings.setRemoteConfigEnabled(remoteConfigCheckBox.isChecked());
             settings.setRemoteConfigUrl(remoteConfigUrlInput.getText().toString().trim());
+        } else if (SECTION_ORACLE_SERVER.equals(currentSection)) {
+            try {
+                OracleServerSettings.save(this, oracleServerUrlInput.getText().toString(), oracleDeviceTokenInput.getText().toString());
+            } catch (IllegalArgumentException error) {
+                Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
         } else if (SECTION_DEBUG.equals(currentSection)) {
             settings.setLogDebugEnabled(verboseDebugLoggingCheckBox.isChecked());
         }
