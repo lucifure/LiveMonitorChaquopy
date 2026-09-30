@@ -19,6 +19,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The legacy `tools` SDK package is no longer published. Supplying the
+          # packages required by this project prevents setup-android from trying
+          # to install that obsolete default package.
+          packages: platform-tools platforms;android-34 build-tools;34.0.0
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
