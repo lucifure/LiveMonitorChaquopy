@@ -209,7 +209,7 @@ public class MainActivity extends AppCompatActivity {
             }
 
             if (itemId == R.id.nav_settings) {
-                startActivity(new Intent(this, LogActivity.class));
+                startActivity(new Intent(this, ServerRecordingsActivity.class));
                 return true;
             }
 
