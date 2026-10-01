@@ -11,6 +11,7 @@ import android.view.Gravity;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -44,7 +45,7 @@ public class SettingsActivity extends AppCompatActivity {
         remoteConfigUrlInput, oracleServerUrlInput, oracleDeviceTokenInput;
     private Button oracleServerConnectionTestButton;
     private Spinner qualitySpinner;
-    private TextView saveLocationText, remoteConfigUrlLabel;
+    private TextView saveLocationText, remoteConfigUrlLabel, oracleConnectionDiagnosticsText;
     private CheckBox scheduledCheckBox, allowCurrentRecordingCheckBox, waitForVideoCheckBox,
         liveFromStartCheckBox, skipUnavailableFragmentsCheckBox, convertTsToMp4CheckBox,
         restoreBootCheckBox, batteryOptimizationCheckBox, remoteConfigCheckBox, verboseDebugLoggingCheckBox;
@@ -277,6 +278,17 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(help);
         oracleServerConnectionTestButton = addButton(root, "Test Server Connection");
         oracleServerConnectionTestButton.setOnClickListener(v -> testOracleServerConnection());
+        addLabel(root, "Connection diagnostics");
+        oracleConnectionDiagnosticsText = new TextView(this);
+        oracleConnectionDiagnosticsText.setText("No connection test has run yet. Results will appear here and in View/Select & Copy Log.");
+        oracleConnectionDiagnosticsText.setTextColor(Color.rgb(190, 210, 210));
+        oracleConnectionDiagnosticsText.setTextSize(13);
+        oracleConnectionDiagnosticsText.setTypeface(Typeface.MONOSPACE);
+        oracleConnectionDiagnosticsText.setTextIsSelectable(true);
+        oracleConnectionDiagnosticsText.setPadding(dp(12), dp(10), dp(12), dp(10));
+        oracleConnectionDiagnosticsText.setBackgroundResource(R.drawable.log_bg);
+        root.addView(oracleConnectionDiagnosticsText, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private void addDebugSection(LinearLayout root) {
@@ -323,14 +335,20 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void testOracleServerConnection() {
+        hideKeyboard();
         try {
             OracleServerSettings.save(this, oracleServerUrlInput.getText().toString(), oracleDeviceTokenInput.getText().toString());
         } catch (IllegalArgumentException error) {
             logOracleConnection(LogItem.LEVEL_ERROR, "Oracle server connection test could not start.", error.getMessage());
+            updateOracleConnectionDiagnostics("Connection test did not start.\nValidation error: " + safeErrorMessage(error));
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); return;
         }
         final String endpoint = OracleServerSettings.getBaseUrl(this) + "/status";
         final long startedAt = System.currentTimeMillis();
+        updateOracleConnectionDiagnostics(
+            "Starting connection test…\nGET " + endpoint
+                + "\nAuthorization: Bearer <redacted>\nWaiting for server response…"
+        );
         logOracleConnection(
             LogItem.LEVEL_INFO,
             "Oracle server connection test started.",
@@ -347,7 +365,15 @@ public class SettingsActivity extends AppCompatActivity {
                     "endpoint=" + endpoint + "\nelapsedMs=" + (System.currentTimeMillis() - startedAt)
                         + "\nresponseKeys=" + status.names()
                 );
-                runOnUiThread(() -> showOracleConnectionResult("Oracle server connected."));
+                runOnUiThread(() -> {
+                    updateOracleConnectionDiagnostics(
+                        "Connection succeeded.\nGET " + endpoint
+                            + "\nHTTP response: successful JSON response"
+                            + "\nElapsed: " + (System.currentTimeMillis() - startedAt) + " ms"
+                            + "\nResponse fields: " + status.names()
+                    );
+                    showOracleConnectionResult("Oracle server connected.");
+                });
             } catch (Exception error) {
                 logOracleConnection(
                     LogItem.LEVEL_ERROR,
@@ -355,8 +381,18 @@ public class SettingsActivity extends AppCompatActivity {
                     "endpoint=" + endpoint + "\nelapsedMs=" + (System.currentTimeMillis() - startedAt)
                         + "\nerrorType=" + error.getClass().getName()
                         + "\nerror=" + safeErrorMessage(error)
+                        + "\ncause=" + safeCauseMessage(error)
                 );
-                runOnUiThread(() -> showOracleConnectionResult(oracleConnectionError(error)));
+                runOnUiThread(() -> {
+                    updateOracleConnectionDiagnostics(
+                        "Connection failed.\nGET " + endpoint
+                            + "\nElapsed: " + (System.currentTimeMillis() - startedAt) + " ms"
+                            + "\nException: " + error.getClass().getName()
+                            + "\nMessage: " + safeErrorMessage(error)
+                            + "\nCause: " + safeCauseMessage(error)
+                    );
+                    showOracleConnectionResult(oracleConnectionError(error));
+                });
             }
         }).start();
     }
@@ -365,9 +401,31 @@ public class SettingsActivity extends AppCompatActivity {
         storage.appendLog(new LogItem(level, LogItem.SOURCE_NETWORK, "", "", "", "", message, details));
     }
 
+    private void updateOracleConnectionDiagnostics(String details) {
+        if (oracleConnectionDiagnosticsText != null) oracleConnectionDiagnosticsText.setText(details);
+    }
+
+    private void hideKeyboard() {
+        View focusedView = getCurrentFocus();
+        if (focusedView == null) return;
+        InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null) {
+            inputMethodManager.hideSoftInputFromWindow(focusedView.getWindowToken(), 0);
+        }
+        focusedView.clearFocus();
+    }
+
     private String safeErrorMessage(Exception error) {
         String message = error == null ? "" : error.getMessage();
         return message == null || message.trim().isEmpty() ? "No error message supplied." : message;
+    }
+
+    private String safeCauseMessage(Exception error) {
+        Throwable cause = error == null ? null : error.getCause();
+        if (cause == null) return "None.";
+        String message = cause.getMessage();
+        return cause.getClass().getName() + ": "
+            + (message == null || message.trim().isEmpty() ? "No error message supplied." : message);
     }
 
     private void showOracleConnectionResult(String message) {

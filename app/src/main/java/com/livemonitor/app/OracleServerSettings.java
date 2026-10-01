@@ -2,7 +2,9 @@ package com.livemonitor.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.net.Uri;
+
+import java.net.URI;
+import java.net.URISyntaxException;
 
 /**
  * Connection details for the Oracle recorder. These are deliberately separate from
@@ -31,7 +33,7 @@ public final class OracleServerSettings {
             .getString(KEY_DEVICE_TOKEN, "");
     }
 
-    /** Saves only a normalized HTTPS base URL and a non-empty pairing token. */
+    /** Saves a normalized HTTPS URL or an HTTP URL on the Tailscale 100.x range. */
     public static void save(Context context, String baseUrl, String deviceToken) {
         String normalizedUrl = normalizeHttpsBaseUrl(baseUrl);
         String normalizedToken = deviceToken == null ? "" : deviceToken.trim();
@@ -49,16 +51,37 @@ public final class OracleServerSettings {
 
     public static String normalizeHttpsBaseUrl(String value) {
         String raw = value == null ? "" : value.trim();
-        Uri uri = Uri.parse(raw);
+        final URI uri;
+        try {
+            uri = new URI(raw);
+        } catch (URISyntaxException error) {
+            throw new IllegalArgumentException("Server URL is malformed.");
+        }
+        String host = uri.getHost();
         boolean isHttps = "https".equalsIgnoreCase(uri.getScheme());
-        boolean isTailscaleHttp = "http".equalsIgnoreCase(uri.getScheme())
-            && uri.getHost() != null && uri.getHost().startsWith("100.");
-        if ((!isHttps && !isTailscaleHttp) || uri.getHost() == null
-            || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
+        boolean isTailscaleHttp = "http".equalsIgnoreCase(uri.getScheme()) && isTailscale100Address(host);
+        if ((!isHttps && !isTailscaleHttp) || host == null || host.isEmpty()
+            || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
+            || (uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))) {
             throw new IllegalArgumentException("Use HTTPS, or an HTTP 100.x Tailscale server URL without credentials.");
         }
-        String normalized = uri.buildUpon().clearQuery().fragment(null).build().toString();
+        String normalized = uri.toString();
         while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
         return normalized;
+    }
+
+    private static boolean isTailscale100Address(String host) {
+        if (host == null) return false;
+        String[] octets = host.split("\\.", -1);
+        if (octets.length != 4 || !"100".equals(octets[0])) return false;
+        for (String octet : octets) {
+            try {
+                int value = Integer.parseInt(octet);
+                if (value < 0 || value > 255) return false;
+            } catch (NumberFormatException error) {
+                return false;
+            }
+        }
+        return true;
     }
 }
