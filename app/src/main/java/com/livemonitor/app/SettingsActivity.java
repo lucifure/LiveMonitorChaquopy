@@ -42,6 +42,7 @@ public class SettingsActivity extends AppCompatActivity {
     private EditText pollIntervalInput, scheduleStartInput, scheduleEndInput, ytDlpCookieHeaderInput,
         ytDlpCookiesPathInput, ytDlpExtractorArgsInput, ytDlpPoTokenClientInput, ytDlpPoTokenValueInput,
         remoteConfigUrlInput, oracleServerUrlInput, oracleDeviceTokenInput;
+    private Button oracleServerConnectionTestButton;
     private Spinner qualitySpinner;
     private TextView saveLocationText, remoteConfigUrlLabel;
     private CheckBox scheduledCheckBox, allowCurrentRecordingCheckBox, waitForVideoCheckBox,
@@ -274,8 +275,8 @@ public class SettingsActivity extends AppCompatActivity {
         help.setTextSize(13);
         help.setPadding(0, dp(8), 0, 0);
         root.addView(help);
-        Button test = addButton(root, "Test Server Connection");
-        test.setOnClickListener(v -> testOracleServerConnection());
+        oracleServerConnectionTestButton = addButton(root, "Test Server Connection");
+        oracleServerConnectionTestButton.setOnClickListener(v -> testOracleServerConnection());
     }
 
     private void addDebugSection(LinearLayout root) {
@@ -325,16 +326,74 @@ public class SettingsActivity extends AppCompatActivity {
         try {
             OracleServerSettings.save(this, oracleServerUrlInput.getText().toString(), oracleDeviceTokenInput.getText().toString());
         } catch (IllegalArgumentException error) {
+            logOracleConnection(LogItem.LEVEL_ERROR, "Oracle server connection test could not start.", error.getMessage());
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); return;
         }
+        final String endpoint = OracleServerSettings.getBaseUrl(this) + "/status";
+        final long startedAt = System.currentTimeMillis();
+        logOracleConnection(
+            LogItem.LEVEL_INFO,
+            "Oracle server connection test started.",
+            "endpoint=" + endpoint + "\nauthorization=Bearer <redacted>"
+        );
+        oracleServerConnectionTestButton.setEnabled(false);
+        oracleServerConnectionTestButton.setText("Testing server connection…");
         new Thread(() -> {
             try {
-                new OracleControlClient(this).get("/status");
-                runOnUiThread(() -> Toast.makeText(this, "Oracle server connected.", Toast.LENGTH_SHORT).show());
+                org.json.JSONObject status = new OracleControlClient(this).get("/status");
+                logOracleConnection(
+                    LogItem.LEVEL_SUCCESS,
+                    "Oracle server connection test succeeded.",
+                    "endpoint=" + endpoint + "\nelapsedMs=" + (System.currentTimeMillis() - startedAt)
+                        + "\nresponseKeys=" + status.names()
+                );
+                runOnUiThread(() -> showOracleConnectionResult("Oracle server connected."));
             } catch (Exception error) {
-                runOnUiThread(() -> Toast.makeText(this, "Server unavailable: " + error.getMessage(), Toast.LENGTH_LONG).show());
+                logOracleConnection(
+                    LogItem.LEVEL_ERROR,
+                    "Oracle server connection test failed.",
+                    "endpoint=" + endpoint + "\nelapsedMs=" + (System.currentTimeMillis() - startedAt)
+                        + "\nerrorType=" + error.getClass().getName()
+                        + "\nerror=" + safeErrorMessage(error)
+                );
+                runOnUiThread(() -> showOracleConnectionResult(oracleConnectionError(error)));
             }
         }).start();
+    }
+
+    private void logOracleConnection(String level, String message, String details) {
+        storage.appendLog(new LogItem(level, LogItem.SOURCE_NETWORK, "", "", "", "", message, details));
+    }
+
+    private String safeErrorMessage(Exception error) {
+        String message = error == null ? "" : error.getMessage();
+        return message == null || message.trim().isEmpty() ? "No error message supplied." : message;
+    }
+
+    private void showOracleConnectionResult(String message) {
+        oracleServerConnectionTestButton.setEnabled(true);
+        oracleServerConnectionTestButton.setText("Test Server Connection");
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    }
+
+    private String oracleConnectionError(Exception error) {
+        if (error instanceof OracleControlClient.ApiException) {
+            int statusCode = ((OracleControlClient.ApiException) error).getStatusCode();
+            if (statusCode == 401 || statusCode == 403) {
+                return "Server rejected the API token (HTTP " + statusCode + ").";
+            }
+            return "Server returned HTTP " + statusCode + ".";
+        }
+        if (error instanceof java.net.UnknownHostException) {
+            return "Cannot find the server. Check the Tailscale address and connection.";
+        }
+        if (error instanceof java.net.SocketTimeoutException) {
+            return "Timed out connecting to the server. Check Tailscale and server status.";
+        }
+        String detail = error.getMessage();
+        return detail == null || detail.trim().isEmpty()
+            ? "Could not connect to the server. Check Tailscale and server status."
+            : "Could not connect to the server: " + detail;
     }
 
     private void saveSettings() {
