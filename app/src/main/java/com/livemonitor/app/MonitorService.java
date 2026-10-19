@@ -94,15 +94,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private final Map<String, Long> livePageFallbackLastCheckedAt = new ConcurrentHashMap<>();
     private final Map<String, String> liveFallbackLogState = new ConcurrentHashMap<>();
     private final Set<String> stoppingRecordingIds = ConcurrentHashMap.newKeySet();
-    private final Set<String> finalizingRecordingIds = ConcurrentHashMap.newKeySet();
+    private static final Set<String> finalizingRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> directDownloadVideoIds = ConcurrentHashMap.newKeySet();
     private final Set<String> discardDirectDownloadPartialIds = ConcurrentHashMap.newKeySet();
     private final Set<String> finalizedRecordingIds = ConcurrentHashMap.newKeySet();
     private final Set<String> selectedFolderCopyIds = ConcurrentHashMap.newKeySet();
+    private static final RecordingOperationLocks recordingOperationLocks = new RecordingOperationLocks();
+    private static final RecorderLaunchCoordinator recorderLaunchCoordinator =
+        new RecorderLaunchCoordinator(recordingOperationLocks);
 
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
     private volatile boolean shuttingDown = false;
+    private volatile long serviceGeneration = -1L;
     private volatile boolean ytDlpExecutableReady = false;
     private volatile boolean youtubedlAndroidReady = false;
     private volatile boolean youtubedlAndroidUpdateAttempted = false;
@@ -114,6 +118,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     @Override
     public void onCreate() {
         super.onCreate();
+        serviceGeneration = recorderLaunchCoordinator.beginServiceGeneration();
         storage = new AppStorage(this);
         settings = storage.loadSettings();
         remoteConfig = new RemoteConfigFetcher(this).loadBestAvailableConfig();
@@ -441,6 +446,185 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
+    private boolean preserveRecordingAfterUnknownStreamStatus(
+        RecordingItem recording,
+        String channelId,
+        ChannelItem channel,
+        String reason
+    ) {
+        if (recording == null || isBlank(recording.getId())) {
+            return false;
+        }
+
+        String recordingId = recording.getId();
+        java.util.concurrent.atomic.AtomicReference<RecorderLaunchCoordinator.Handle> handleToCancel =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        boolean preserved = recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            RecordingItem latest = storage.findRecordingById(recordingId);
+            if (latest == null || !RecordingRecoveryPolicy.mayPreserveUnknownStatus(
+                latest.getStatus(),
+                userHaltedRecordingIds.contains(recordingId),
+                finalizingRecordingIds.contains(recordingId),
+                finalizedRecordingIds.contains(recordingId)
+            )) {
+                return false;
+            }
+
+            RecordingItem preserved = storage.updateRecordingIfStatus(
+                recordingId,
+                RecordingItem.STATUS_RECORDING,
+                item -> item.markRecoverable(reason)
+            );
+            if (preserved == null) {
+                return false;
+            }
+            handleToCancel.set(recorderLaunchCoordinator.removeHandleWhileLocked(recordingId));
+
+            detachRecordingFromActiveState(preserved, channelId);
+
+            ChannelItem latestChannel;
+            boolean channelUpdated = false;
+            synchronized (storage) {
+                latestChannel = isBlank(channelId) ? channel : storage.findChannelById(channelId);
+                if (latestChannel != null
+                    && latestChannel.shouldMonitor()
+                    && !userHaltedRecordingIds.contains(recordingId)
+                    && !finalizingRecordingIds.contains(recordingId)
+                    && !finalizedRecordingIds.contains(recordingId)) {
+                    // markWaitingForLive clears the stale recording badge but keeps
+                    // currentVideoId so monitorChannel can recover this exact item.
+                    latestChannel.markWaitingForLive();
+                    storage.upsertChannel(latestChannel);
+                    channelUpdated = true;
+                }
+            }
+            if (channelUpdated) {
+                notificationHelper.showChannelMonitoringNotification(latestChannel);
+            }
+
+            broadcastRecordingUpdated("Recording preserved for recovery; stream status is unknown.");
+            return true;
+        });
+        if (handleToCancel.get() != null) {
+            recorderLaunchCoordinator.cancelOutsideGate(handleToCancel.get());
+        }
+        return preserved;
+    }
+
+    private void preserveCleanExitStartupFailure(String recordingId, String channelId, String reason) {
+        preserveCleanExitStartupFailure(recordingId, channelId, reason, "", false, false, false);
+    }
+
+    private boolean preserveCleanExitStartupFailure(
+        String recordingId,
+        String channelId,
+        String reason,
+        String candidatePath,
+        boolean newlySelectedChunk,
+        boolean mayRollbackIfEmpty,
+        boolean rollbackAfterCancellation
+    ) {
+        if (isBlank(recordingId)) {
+            return false;
+        }
+        java.util.concurrent.atomic.AtomicReference<RecorderLaunchCoordinator.Handle> handleToCancel =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        boolean preserved = recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            return preserveCleanExitStartupFailureLocked(
+                recordingId, channelId, reason, candidatePath, newlySelectedChunk,
+                mayRollbackIfEmpty, handleToCancel
+            );
+        });
+        boolean processExitConfirmed = false;
+        RecorderLaunchCoordinator.Handle capturedHandle = handleToCancel.get();
+        if (capturedHandle instanceof YtDlpRunner.RecordingProcessHandle) {
+            processExitConfirmed = ((YtDlpRunner.RecordingProcessHandle) capturedHandle).cancelAndConfirmExit();
+        } else if (capturedHandle != null) {
+            recorderLaunchCoordinator.cancelOutsideGate(capturedHandle);
+        }
+        if (preserved && rollbackAfterCancellation && processExitConfirmed) {
+            rollbackEmptyRecoverableChunk(recordingId, candidatePath, newlySelectedChunk);
+        }
+        if (preserved) {
+            broadcastRecordingUpdated("Recording preserved after recorder startup failed.");
+        }
+        return preserved;
+    }
+
+    /** Caller must hold this recording's lifecycle gate. */
+    private boolean preserveCleanExitStartupFailureLocked(
+        String recordingId,
+        String channelId,
+        String reason,
+        String candidatePath,
+        boolean newlySelectedChunk,
+        boolean mayRollbackIfEmpty,
+        java.util.concurrent.atomic.AtomicReference<RecorderLaunchCoordinator.Handle> handleToCancel
+    ) {
+        RecordingItem latest = storage.findRecordingById(recordingId);
+        if (latest == null || !RecordingRecoveryPolicy.mayPreserveUnknownStatus(
+            latest.getStatus(),
+            userHaltedRecordingIds.contains(recordingId),
+            finalizingRecordingIds.contains(recordingId),
+            finalizedRecordingIds.contains(recordingId)
+        )) {
+            return false;
+        }
+
+        boolean removeEmptyChunk = mayRollbackIfEmpty
+            && RecordingRecoveryPolicy.shouldRollbackFailedStartupChunk(
+                latest.getStatus(),
+                newlySelectedChunk,
+                !isBlank(candidatePath) && candidatePath.equals(latest.getCurrentTempSegmentPath()),
+                currentRecordingSegmentHasData(latest),
+                false
+            );
+        RecordingItem updated = storage.updateRecordingIfStatus(
+            recordingId,
+            RecordingItem.STATUS_RECORDING,
+            item -> {
+                if (removeEmptyChunk) {
+                    item.removeTempChunkPath(candidatePath);
+                }
+                item.markRecoverable("Clean-exit recorder startup failed: " + reason);
+            }
+        );
+        if (updated == null) {
+            return false;
+        }
+        handleToCancel.set(recorderLaunchCoordinator.removeHandleWhileLocked(recordingId));
+        detachRecordingFromActiveState(updated, channelId);
+        synchronized (storage) {
+            ChannelItem latestChannel = storage.findChannelById(channelId);
+            if (latestChannel != null && latestChannel.shouldMonitor()) {
+                latestChannel.markWaitingForLive();
+                storage.upsertChannel(latestChannel);
+            }
+        }
+        return true;
+    }
+
+    private void rollbackEmptyRecoverableChunk(String recordingId, String candidatePath, boolean newlySelectedChunk) {
+        if (!newlySelectedChunk || isBlank(candidatePath)) {
+            return;
+        }
+        recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            RecordingItem latest = storage.findRecordingById(recordingId);
+            if (latest == null
+                || !RecordingItem.STATUS_RECOVERABLE.equals(latest.getStatus())
+                || !candidatePath.equals(latest.getCurrentTempSegmentPath())
+                || currentRecordingSegmentHasData(latest)) {
+                return null;
+            }
+            storage.updateRecordingIfStatus(
+                recordingId,
+                RecordingItem.STATUS_RECOVERABLE,
+                item -> item.removeTempChunkPath(candidatePath)
+            );
+            return null;
+        });
+    }
+
     private boolean shouldAbortRecorderRestartForTerminalState(
         String channelId,
         ChannelItem channel,
@@ -574,27 +758,57 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
     }
 
-    private boolean skipDuplicateFinalizationRequest(String recordingId, ChannelItem channel) {
+    private RecordingItem claimUserHaltedRecording(String recordingId, boolean pause) {
         if (isBlank(recordingId)) {
-            return false;
-        }
-        if (finalizingRecordingIds.add(recordingId)) {
-            return false;
+            return null;
         }
 
-        RecordingItem recording = storage.findRecordingById(recordingId);
-        if (recording != null) {
-            detachRecordingFromActiveState(recording, recording.getChannelId());
-        }
+        java.util.concurrent.atomic.AtomicReference<RecorderLaunchCoordinator.Handle> handleToCancel =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        RecordingItem claimed = recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            if (!finalizingRecordingIds.add(recordingId)) {
+                RecordingItem current = storage.findRecordingById(recordingId);
+                if (current != null) {
+                    detachRecordingFromActiveState(current, current.getChannelId());
+                }
+                log(
+                    LogItem.LEVEL_INFO,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Skipping duplicate finalization",
+                    "recordingId=" + recordingId
+                );
+                return null;
+            }
 
-        log(
-            LogItem.LEVEL_INFO,
-            LogItem.SOURCE_RECORDER,
-            channel,
-            "Skipping duplicate finalization",
-            "recordingId=" + recordingId
-        );
-        return true;
+            boolean keepFinalizationClaim = false;
+            try {
+                RecordingItem recording = storage.findRecordingById(recordingId);
+                if (recording == null) {
+                    return null;
+                }
+
+                userHaltedRecordingIds.add(recordingId);
+                if (pause) {
+                    recording.markPausedByUser();
+                } else {
+                    recording.markStoppedByUser();
+                }
+                recording.showInDownloading();
+                storage.upsertRecording(recording);
+                handleToCancel.set(recorderLaunchCoordinator.removeHandleWhileLocked(recordingId));
+                keepFinalizationClaim = true;
+                return recording;
+            } finally {
+                if (!keepFinalizationClaim) {
+                    finalizingRecordingIds.remove(recordingId);
+                }
+            }
+        });
+        if (handleToCancel.get() != null) {
+            recorderLaunchCoordinator.cancelOutsideGate(handleToCancel.get());
+        }
+        return claimed;
     }
 
     private ChannelItem pauseMonitoringForUserStoppedRecording(String channelId, RecordingItem recording, String logMessage) {
@@ -639,21 +853,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        boolean ownsFinalization = false;
         try {
             String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
-            if (skipDuplicateFinalizationRequest(recordingId, null)) {
-                return;
-            }
-            RecordingItem recording = storage.findRecordingById(recordingId);
+            RecordingItem recording = claimUserHaltedRecording(recordingId, true);
+            ownsFinalization = recording != null;
 
             if (recording == null) {
                 return;
             }
 
-            userHaltedRecordingIds.add(recording.getId());
-            recording.markPausedByUser();
-            recording.showInDownloading();
-            storage.upsertRecording(recording);
             activeRecordings.remove(recording.getId());
             activeRecordings.remove(recording.getChannelId());
             progressTracker.untrack(recording);
@@ -667,7 +876,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             cancelActiveRecording(recording, "handlePauseRecording user action");
             broadcastRecordingUpdated("Recording paused.");
         } finally {
-            if (!isBlank(recordingId)) {
+            if (ownsFinalization) {
                 finalizingRecordingIds.remove(recordingId);
             }
             finishProcessingRecordingAction(recordingId);
@@ -797,9 +1006,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
+        boolean ownsFinalization = false;
         try {
             String channelId = intent.getStringExtra(LiveMonitorActions.EXTRA_CHANNEL_ID);
-            RecordingItem recording = storage.findRecordingById(recordingId);
+            RecordingItem recording = claimUserHaltedRecording(recordingId, false);
+            ownsFinalization = recording != null;
             boolean savePartial = intent.getBooleanExtra(LiveMonitorActions.EXTRA_SAVE_PARTIAL, true);
 
             if (recording != null) {
@@ -815,10 +1026,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     channelId = recording.getChannelId();
                 }
 
-                userHaltedRecordingIds.add(recording.getId());
-                recording.markStoppedByUser();
-                recording.showInDownloading();
-                storage.upsertRecording(recording);
             }
 
             ChannelItem stoppedChannel = pauseMonitoringForUserStoppedRecording(
@@ -827,8 +1034,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "Recording stopped by user; channel monitoring paused until manually resumed."
             );
 
-            if (skipDuplicateFinalizationRequest(recordingId, stoppedChannel)) {
-                cancelActiveRecording(recording, "handleStopRecording duplicate user action");
+            if (recording == null && !isBlank(recordingId) && finalizingRecordingIds.contains(recordingId)) {
+                RecordingItem current = storage.findRecordingById(recordingId);
+                cancelActiveRecording(current, "handleStopRecording duplicate user action");
                 broadcastRecordingUpdated("Recording stop is already in progress; monitoring is paused.");
                 return;
             }
@@ -871,7 +1079,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 }
             }
         } finally {
-            if (!isBlank(recordingId)) {
+            if (ownsFinalization) {
                 finalizingRecordingIds.remove(recordingId);
             }
             finishProcessingRecordingAction(recordingId);
@@ -1396,23 +1604,39 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     continue;
                 }
 
-                if (channel.isSameCurrentVideo(liveInfo.videoId) && channel.isRecording()) {
-                    sleep(ACTIVE_RECORDING_POLL_INTERVAL_MS);
-                    continue;
-                }
+                boolean keepMonitoring = recordingOperationLocks.withVideoLock(liveInfo.videoId, () -> {
+                    ChannelItem latestChannel = storage.findChannelById(channelId);
+                    if (latestChannel == null || !latestChannel.shouldMonitor() || !activeLoops.containsKey(channelId)) {
+                        activeLoops.remove(channelId);
+                        return false;
+                    }
 
-                ChannelItem latestBeforeRecording = storage.findChannelById(channelId);
-                if (latestBeforeRecording == null || !latestBeforeRecording.shouldMonitor() || !activeLoops.containsKey(channelId)) {
-                    activeLoops.remove(channelId);
+                    if (resumeRecoverableRecordingForLive(latestChannel, liveInfo)) {
+                        return true;
+                    }
+
+                    // A competing channel loop may have created the item after
+                    // this loop last checked. Reuse that fact to suppress a
+                    // second item for the same live video.
+                    if (storage.findActiveRecordingForVideo(liveInfo.videoId) != null) {
+                        return true;
+                    }
+
+                    if (latestChannel.isSameCurrentVideo(liveInfo.videoId) && latestChannel.isRecording()) {
+                        return true;
+                    }
+
+                    latestChannel.markLiveDetected(liveInfo.videoId, liveInfo.videoUrl);
+                    storage.upsertChannel(latestChannel);
+                    notificationHelper.showLiveDetectedNotification(latestChannel);
+                    notificationHelper.showChannelMonitoringNotification(latestChannel);
+                    broadcastChannelUpdated("Live detected.");
+                    startRecording(latestChannel, liveInfo);
+                    return true;
+                });
+                if (!keepMonitoring) {
                     break;
                 }
-
-                latestBeforeRecording.markLiveDetected(liveInfo.videoId, liveInfo.videoUrl);
-                storage.upsertChannel(latestBeforeRecording);
-                notificationHelper.showLiveDetectedNotification(latestBeforeRecording);
-                notificationHelper.showChannelMonitoringNotification(latestBeforeRecording);
-                broadcastChannelUpdated("Live detected.");
-                startRecording(latestBeforeRecording, liveInfo);
                 sleep(settings.getPollIntervalMillis());
             } catch (Exception e) {
                 if (isNetworkResolutionError(e)) {
@@ -1479,10 +1703,145 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         executor.execute(() -> runRecording(recordingChannelId, recording, liveInfo));
     }
 
+    private boolean resumeRecoverableRecordingForLive(ChannelItem channel, LiveInfo liveInfo) {
+        if (channel == null || liveInfo == null || isBlank(liveInfo.videoId)) {
+            return false;
+        }
+
+        RecordingItem recoverable = storage.findRecoverableRecordingForVideo(liveInfo.videoId);
+        if (!RecordingRecoveryPolicy.shouldDeferNewRecording(recoverable != null)) {
+            return false;
+        }
+
+        String recordingId = recoverable.getId();
+        String channelId = channel.getId();
+        if (YtDlpRunner.isRecording(recordingId)) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Recoverable recording resume deferred while its prior yt-dlp process is still running.",
+                "recordingId=" + recordingId
+            );
+            return true;
+        }
+        if (!channelId.equals(recoverable.getChannelId())
+            || !channel.shouldMonitor()
+            || userHaltedRecordingIds.contains(recordingId)
+            || finalizingRecordingIds.contains(recordingId)
+            || finalizedRecordingIds.contains(recordingId)) {
+            return true;
+        }
+
+        // Keep the recoverable item visible and do not create a second item if
+        // its original TS data is unavailable or its lifecycle changed.
+        if (!RecordingRecoveryPolicy.shouldResumeRecoverable(
+            recoverable.getStatus(),
+            recoverable.matchesVideo(liveInfo.videoId),
+            !isBlank(recoverable.getTempTsPath())
+        )) {
+            log(
+                LogItem.LEVEL_WARNING,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Matching recoverable recording has no TS path; leaving it recoverable.",
+                "recordingId=" + recordingId + ", videoId=" + liveInfo.videoId
+            );
+            return true;
+        }
+
+        if (activeRecordings.putIfAbsent(channelId, recoverable) != null) {
+            return true;
+        }
+
+        RecordingItem resumed = storage.updateRecordingIfStatus(
+            recordingId,
+            RecordingItem.STATUS_RECOVERABLE,
+            item -> {
+                item.markRecording();
+                item.showInDownloading();
+                item.setDiagnosticMessage("Resuming recoverable recording with a new TS segment.");
+            }
+        );
+        if (resumed == null) {
+            activeRecordings.remove(channelId, recoverable);
+            return true;
+        }
+
+        activeRecordings.put(recordingId, resumed);
+        activeRecordings.put(channelId, resumed);
+        progressTracker.track(resumed);
+        ChannelItem latestChannel;
+        boolean mayStartResume;
+        synchronized (storage) {
+            latestChannel = storage.findChannelById(channelId);
+            mayStartResume = latestChannel != null
+                && latestChannel.shouldMonitor()
+                && !userHaltedRecordingIds.contains(recordingId)
+                && !finalizingRecordingIds.contains(recordingId)
+                && !finalizedRecordingIds.contains(recordingId);
+            if (mayStartResume) {
+                latestChannel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
+                storage.upsertChannel(latestChannel);
+            }
+        }
+        if (!mayStartResume) {
+            if (!finalizingRecordingIds.contains(recordingId) && !finalizedRecordingIds.contains(recordingId)) {
+                storage.updateRecordingIfStatus(
+                    recordingId,
+                    RecordingItem.STATUS_RECORDING,
+                    item -> item.markRecoverable("Recovery deferred because recording or channel state changed.")
+                );
+            }
+            activeRecordings.remove(recordingId, resumed);
+            activeRecordings.remove(channelId, resumed);
+            progressTracker.untrack(resumed);
+            return true;
+        }
+        channel = latestChannel;
+        notificationHelper.showChannelMonitoringNotification(channel);
+        broadcastRecordingUpdated("Resuming recoverable recording.");
+        executor.execute(() -> resumeRecoverableRecording(channelId, resumed, liveInfo));
+        return true;
+    }
+
     private void runRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
+        runRecording(channelId, recording, liveInfo, false, serviceGeneration);
+    }
+
+    private void runRecording(
+        String channelId,
+        RecordingItem recording,
+        LiveInfo liveInfo,
+        boolean requireRecordingStatusAtStart
+    ) {
+        runRecording(channelId, recording, liveInfo, requireRecordingStatusAtStart, serviceGeneration);
+    }
+
+    private void runRecording(
+        String channelId,
+        RecordingItem recording,
+        LiveInfo liveInfo,
+        boolean requireRecordingStatusAtStart,
+        long expectedGeneration
+    ) {
         ChannelItem channel = storage.findChannelById(channelId);
 
         try {
+            if (requireRecordingStatusAtStart) {
+                if (!recorderLaunchCoordinator.isGenerationActive(expectedGeneration)) {
+                    return;
+                }
+                RecordingItem latest = storage.findRecordingById(recording.getId());
+                if (latest == null || !RecordingItem.STATUS_RECORDING.equals(latest.getStatus())) {
+                    return;
+                }
+            }
+
+            if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                return;
+            }
+
             String videoId = liveInfo == null ? "" : liveInfo.videoId;
 
             YtDlpPrimaryRecorderDecision primaryRecorderDecision = evaluateYtDlpPrimaryRecorder(recording);
@@ -1494,7 +1853,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     channel,
                     recording,
                     liveInfo,
-                    primaryRecorderDecision
+                    primaryRecorderDecision,
+                    requireRecordingStatusAtStart,
+                    expectedGeneration
                 );
 
                 if (ytDlpHandledRecording) {
@@ -1535,14 +1896,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             if (!isBlank(resolvedInput.videoId) && !resolvedInput.videoId.equals(videoId)) {
+                if (requireRecordingStatusAtStart) {
+                    preserveCleanExitStartupFailure(
+                        recording.getId(), channelId, "Resolver returned a different live video ID."
+                    );
+                    return;
+                }
                 videoId = resolvedInput.videoId;
                 recording.setVideoId(videoId);
                 recording.setVideoUrl(YouTubeUrlUtils.buildWatchUrl(videoId));
                 storage.upsertRecording(recording);
             }
 
-            recording.setDiagnosticMessage("Playable URL resolved by " + resolvedInput.source + "; starting recorder.");
-            storage.upsertRecording(recording);
+            if (!requireRecordingStatusAtStart) {
+                recording.setDiagnosticMessage("Playable URL resolved by " + resolvedInput.source + "; starting recorder.");
+                storage.upsertRecording(recording);
+            }
             broadcastRecordingUpdated("Playable URL resolved.");
 
             log(
@@ -1568,7 +1937,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     : "recorder=FFmpegKit"
             );
 
-            String ffmpegOutputPath = prepareFreshFfmpegOutputPath(recording);
+            String ffmpegOutputPath = requireRecordingStatusAtStart
+                ? suggestedFreshFfmpegOutputPath(recording)
+                : prepareFreshFfmpegOutputPath(recording);
 
             startFfmpegKitRecording(
                 channelId,
@@ -1577,10 +1948,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 manifestUrl,
                 ffmpegOutputPath,
                 false,
-                "Recording started."
+                "Recording started.",
+                requireRecordingStatusAtStart,
+                expectedGeneration
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
+
+            if (requireRecordingStatusAtStart) {
+                preserveCleanExitStartupFailure(recording.getId(), channelId, errorMessage);
+                return;
+            }
 
             if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
                 return;
@@ -1654,6 +2032,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         recording.addTempChunkPath(chunkPath);
         storage.upsertRecording(recording);
         return chunkPath;
+    }
+
+    private String suggestedFreshFfmpegOutputPath(RecordingItem recording) {
+        if (recording == null) {
+            return "";
+        }
+        return currentRecordingSegmentHasData(recording)
+            ? createResumeChunkPath(recording)
+            : recording.getCurrentTempSegmentPath();
     }
 
     private YtDlpPrimaryRecorderDecision evaluateYtDlpPrimaryRecorder(RecordingItem recording) {
@@ -1809,7 +2196,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel,
         RecordingItem recording,
         LiveInfo liveInfo,
-        YtDlpPrimaryRecorderDecision primaryRecorderDecision
+        YtDlpPrimaryRecorderDecision primaryRecorderDecision,
+        boolean cleanExitRestart,
+        long expectedGeneration
     ) {
         String resolvedVideoUrl = liveInfo != null && !isBlank(liveInfo.videoUrl)
             ? liveInfo.videoUrl
@@ -1820,6 +2209,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         String videoUrl = buildPrimaryRecorderInputUrl(channel, resolvedVideoUrl);
+        final String cleanExitRecordingId = recording.getId();
 
         if (isBlank(videoUrl)) {
             return false;
@@ -1828,6 +2218,16 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
             primaryRecorderDecision.getRecorderName()
         )) {
+            if (cleanExitRestart) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    channel,
+                    "Skipping bundled yt-dlp recorder for clean-exit restart because its start handle cannot be acknowledged.",
+                    "recordingId=" + recording.getId()
+                );
+                return false;
+            }
             updateYoutubedlAndroidRuntimeIfNeeded(
                 "before primary yt-dlp recording",
                 "Updating bundled yt-dlp before primary recorder starts.",
@@ -1836,10 +2236,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         RecorderCommandBuilder builder = new RecorderCommandBuilder();
+        String ytDlpOutputPath = cleanExitRestart
+            ? suggestedFreshFfmpegOutputPath(recording)
+            : recording.getCurrentTempSegmentPath();
         List<YtDlpResolveAttempt> attempts = buildYtDlpPrimaryRecordAttempts(
             builder,
             videoUrl,
-            recording.getCurrentTempSegmentPath(),
+            ytDlpOutputPath,
             recording.getFinalMp4Path(),
             fileManager.getTempDirectory().getAbsolutePath(),
             settings,
@@ -1864,7 +2267,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     "Refusing to start yt-dlp recorder with unsafe output path.",
                     lastFailureReason
                 );
-                return startFfmpegFallbackAfterYtDlpFailure(channelId, channel, recording, liveInfo, lastFailureReason);
+                return startFfmpegFallbackAfterYtDlpFailure(
+                    channelId, channel, recording, liveInfo, lastFailureReason, cleanExitRestart,
+                    expectedGeneration
+                );
             }
 
             String ytDlpRecorderMode = attempt.allowLiveFromStart
@@ -1881,10 +2287,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         + ")."
                     : "yt-dlp " + ytDlpRecorderMode + " recorder is starting."
             );
-            storage.upsertRecording(recording);
-            broadcastRecordingUpdated(attempt.allowLiveFromStart
-                ? "yt-dlp recorder starting from DVR beginning."
-                : "yt-dlp recorder starting from live edge.");
+            if (!cleanExitRestart) {
+                storage.upsertRecording(recording);
+                broadcastRecordingUpdated(attempt.allowLiveFromStart
+                    ? "yt-dlp recorder starting from DVR beginning."
+                    : "yt-dlp recorder starting from live edge.");
+            }
 
             log(
                 LogItem.LEVEL_INFO,
@@ -1909,24 +2317,28 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     + shortenForLog(builder.toLogString(attempt.args), 500)
             );
 
+            YtDlpRunner.RecordingProcessHandle cleanExitHandle = null;
+            java.util.concurrent.atomic.AtomicBoolean addedCleanExitChunk =
+                new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicBoolean startupFailurePreserved =
+                new java.util.concurrent.atomic.AtomicBoolean();
             try {
                 recording.setDiagnosticMessage("yt-dlp " + ytDlpRecorderMode + " recorder is running.");
-                storage.upsertRecording(recording);
-                broadcastRecordingUpdated(attempt.allowLiveFromStart
-                    ? "yt-dlp recorder is running from DVR beginning."
-                    : "yt-dlp recorder is running from live edge.");
+                if (!cleanExitRestart) {
+                    storage.upsertRecording(recording);
+                    broadcastRecordingUpdated(attempt.allowLiveFromStart
+                        ? "yt-dlp recorder is running from DVR beginning."
+                        : "yt-dlp recorder is running from live edge.");
+                }
 
                 DataUsageSnapshot recorderDataStart = takeDataUsageSnapshot();
                 int exitCode;
                 try {
-                    exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
-                        primaryRecorderDecision.getRecorderName()
-                    )
-                        ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, attempt.args, channel)
-                        : YtDlpRunner.recordLiveStream(
-                            recording.getId(),
+                    if (cleanExitRestart) {
+                        YtDlpRunner.PreparedRecording prepared = YtDlpRunner.prepareLiveStream(
+                            cleanExitRecordingId,
                             attempt.args,
-                            recording.getCurrentTempSegmentPath(),
+                            ytDlpOutputPath,
                             message -> log(
                                 isReadOnlyFilesystemError(message) ? LogItem.LEVEL_ERROR : LogItem.LEVEL_DEBUG,
                                 LogItem.SOURCE_RECORDER,
@@ -1937,6 +2349,97 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                                 shortenForLog(message, 500)
                             )
                         );
+                        java.util.concurrent.atomic.AtomicReference<RecordingItem> eligibleRecording =
+                            new java.util.concurrent.atomic.AtomicReference<>();
+                        cleanExitHandle = recorderLaunchCoordinator.startIfEligible(
+                            expectedGeneration,
+                            cleanExitRecordingId,
+                            () -> {
+                                synchronized (storage) {
+                                    RecordingItem latest = storage.findRecordingById(cleanExitRecordingId);
+                                    ChannelItem latestChannel = storage.findChannelById(channelId);
+                                    boolean eligible = latest != null
+                                        && latestChannel != null
+                                        && currentRecordingSegmentHasData(latest)
+                                            == !ytDlpOutputPath.equals(latest.getCurrentTempSegmentPath())
+                                        && (ytDlpOutputPath.equals(latest.getCurrentTempSegmentPath())
+                                            || (!latest.getTempSegmentPaths().contains(ytDlpOutputPath)
+                                                && !new File(ytDlpOutputPath).exists()))
+                                        && RecordingRecoveryPolicy.mayRestartAfterCleanExit(
+                                            latest.getStatus(),
+                                            latestChannel.shouldMonitor()
+                                                && latestChannel.isSameCurrentVideo(latest.getVideoId()),
+                                            userHaltedRecordingIds.contains(cleanExitRecordingId),
+                                            finalizingRecordingIds.contains(cleanExitRecordingId),
+                                            finalizedRecordingIds.contains(cleanExitRecordingId)
+                                        );
+                                    if (eligible) {
+                                        eligibleRecording.set(latest);
+                                    }
+                                    return eligible;
+                                }
+                            },
+                            () -> {
+                                RecordingItem latest = eligibleRecording.get();
+                                RecordingItem updated = storage.updateRecordingIfStatus(
+                                    cleanExitRecordingId,
+                                    RecordingItem.STATUS_RECORDING,
+                                    item -> {
+                                        boolean addChunk = !ytDlpOutputPath.equals(item.getCurrentTempSegmentPath());
+                                        if (addChunk) {
+                                            item.addTempChunkPath(ytDlpOutputPath);
+                                        }
+                                        addedCleanExitChunk.set(addChunk);
+                                        item.setDiagnosticMessage("yt-dlp recorder is running.");
+                                    }
+                                );
+                                if (latest == null || updated == null) {
+                                    throw new IllegalStateException("Recording changed before yt-dlp startup.");
+                                }
+                            },
+                            prepared::start,
+                            (failure, starterInvoked) -> startupFailurePreserved.set(
+                                preserveCleanExitStartupFailureLocked(
+                                    cleanExitRecordingId,
+                                    channelId,
+                                    normalizeErrorMessage(failure),
+                                    ytDlpOutputPath,
+                                    addedCleanExitChunk.get(),
+                                    // Without a returned Process handle, process creation
+                                    // cannot be disproved. Keep the candidate path.
+                                    !starterInvoked,
+                                    new java.util.concurrent.atomic.AtomicReference<>()
+                                )
+                            )
+                        );
+                        if (cleanExitHandle == null) {
+                            return true;
+                        }
+                        RecordingItem latestStarted = storage.findRecordingById(cleanExitRecordingId);
+                        if (latestStarted != null) {
+                            recording = latestStarted;
+                        }
+                        exitCode = recorderLaunchCoordinator.outsideGate(cleanExitHandle::awaitCompletion);
+                    } else {
+                        exitCode = YtDlpPrimaryRecorderDecision.RECORDER_YOUTUBEDL_ANDROID.equals(
+                            primaryRecorderDecision.getRecorderName()
+                        )
+                            ? recordLiveStreamWithYoutubedlAndroid(recording.getId(), videoUrl, attempt.args, channel)
+                            : YtDlpRunner.recordLiveStream(
+                                recording.getId(),
+                                attempt.args,
+                                recording.getCurrentTempSegmentPath(),
+                                message -> log(
+                                    isReadOnlyFilesystemError(message) ? LogItem.LEVEL_ERROR : LogItem.LEVEL_DEBUG,
+                                    LogItem.SOURCE_RECORDER,
+                                    channel,
+                                    isReadOnlyFilesystemError(message)
+                                        ? "yt-dlp recorder filesystem write failure."
+                                        : "yt-dlp recorder output.",
+                                    shortenForLog(message, 500)
+                                )
+                            );
+                    }
                 } finally {
                     logDataUsageDelta(
                         channel,
@@ -1961,15 +2464,29 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     recording = latest;
                 }
 
+                if (cleanExitRestart && (latest == null
+                    || !RecordingItem.STATUS_RECORDING.equals(recording.getStatus()))) {
+                    onRecordingFinished(channelId, recording.getId(), exitCode, cleanExitHandle);
+                    return true;
+                }
+
                 if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
-                    storage.upsertRecording(recording);
-                    broadcastRecordingUpdated("Recording paused.");
+                    if (cleanExitRestart) {
+                        onRecordingFinished(channelId, recording.getId(), exitCode, cleanExitHandle);
+                    } else {
+                        storage.upsertRecording(recording);
+                        broadcastRecordingUpdated("Recording paused.");
+                    }
                     return true;
                 }
 
                 if (RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus())) {
-                    storage.upsertRecording(recording);
-                    broadcastRecordingUpdated("Recording stopped.");
+                    if (cleanExitRestart) {
+                        onRecordingFinished(channelId, recording.getId(), exitCode, cleanExitHandle);
+                    } else {
+                        storage.upsertRecording(recording);
+                        broadcastRecordingUpdated("Recording stopped.");
+                    }
                     return true;
                 }
 
@@ -1984,8 +2501,13 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         "yt-dlp primary recorder completed.",
                         "recordingId=" + recording.getId() + ", " + attempt.describe()
                     );
-                    onRecordingFinished(channelId, recording.getId(), 0);
+                    onRecordingFinished(channelId, recording.getId(), 0, cleanExitHandle);
                     return true;
+                }
+
+                if (cleanExitHandle != null) {
+                    recorderLaunchCoordinator.removeHandleIfSame(recording.getId(), cleanExitHandle);
+                    cleanExitHandle = null;
                 }
 
                 lastFailureReason = addYtDlpAccessGuidance(
@@ -2000,7 +2522,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     && attemptIndex + 1 < attempts.size()
                     && !recordingHasAnyOutputData(recording)) {
                     logClientLevelFailure(channel, recording, attempt, lastFailureReason);
-                    safeDelete(recording.getCurrentTempSegmentPath());
+                    if (!cleanExitRestart) {
+                        safeDelete(recording.getCurrentTempSegmentPath());
+                    }
                     attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
                     continue;
                 }
@@ -2009,7 +2533,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
                 }
             } catch (Exception e) {
+                if (cleanExitHandle != null) {
+                    preserveCleanExitStartupFailure(
+                        recording.getId(),
+                        channelId,
+                        normalizeErrorMessage(e),
+                        ytDlpOutputPath,
+                        addedCleanExitChunk.get(),
+                        false,
+                        true
+                    );
+                    cleanExitHandle = null;
+                }
                 String errorMessage = normalizeErrorMessage(e);
+
+                if (cleanExitRestart) {
+                    if (!startupFailurePreserved.get()) {
+                        preserveCleanExitStartupFailure(
+                            recording.getId(), channelId, errorMessage,
+                            ytDlpOutputPath, addedCleanExitChunk.get(), true, false
+                        );
+                    } else {
+                        broadcastRecordingUpdated("Recording preserved after recorder startup failed.");
+                    }
+                    return true;
+                }
 
                 if (isReadOnlyFilesystemError(errorMessage)) {
                     return handleReadOnlyFilesystemRecordingFailure(channelId, channel, recording, errorMessage);
@@ -2025,7 +2573,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     && attemptIndex + 1 < attempts.size()
                     && !recordingHasAnyOutputData(recording)) {
                     logClientLevelFailure(channel, recording, attempt, lastFailureReason);
-                    safeDelete(recording.getCurrentTempSegmentPath());
+                    if (!cleanExitRestart) {
+                        safeDelete(recording.getCurrentTempSegmentPath());
+                    }
                     attemptIndex = skipRemainingAttemptsForPlayerClient(attempts, attemptIndex, attempt.playerClient);
                     continue;
                 }
@@ -2057,7 +2607,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                         + ", reason="
                         + shortenForLog(lastFailureReason, 300)
                 );
-                safeDelete(recording.getCurrentTempSegmentPath());
+                if (!cleanExitRestart) {
+                    safeDelete(recording.getCurrentTempSegmentPath());
+                }
                 continue;
             }
 
@@ -2066,7 +2618,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 channel,
                 recording,
                 liveInfo,
-                lastFailureReason
+                lastFailureReason,
+                cleanExitRestart,
+                expectedGeneration
             );
         }
 
@@ -2075,7 +2629,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             channel,
             recording,
             liveInfo,
-            lastFailureReason
+            lastFailureReason,
+            cleanExitRestart,
+            expectedGeneration
         );
     }
 
@@ -2694,30 +3250,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        RecordingItem recording = storage.findRecordingById(recordingId);
+        try {
+            RecordingItem recording = storage.findRecordingById(recordingId);
+            if (recording == null) {
+                return;
+            }
 
-        if (recording == null) {
+            ChannelItem channel = isBlank(recording.getChannelId())
+                ? null
+                : storage.findChannelById(recording.getChannelId());
+            handleRecordingStall(recording, channel, reason);
+        } finally {
             finalizingRecordingIds.remove(recordingId);
-            return;
         }
-
-        ChannelItem channel = isBlank(recording.getChannelId()) ? null : storage.findChannelById(recording.getChannelId());
-        handleRecordingStall(recording, channel, reason);
     }
 
     private void handleRecordingStall(RecordingItem recording, ChannelItem channel, String reason) {
         if (recording == null || !recording.isActive()) {
-            if (recording != null) {
-                finalizingRecordingIds.remove(recording.getId());
-            }
             return;
         }
 
         String recordingId = recording.getId();
         String channelId = recording.getChannelId();
 
-        try {
-            log(
+        log(
                 LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 channel,
@@ -2764,9 +3320,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             cancelActiveRecording(recording, "stall confirmed ended");
             waitForRecordingFileAfterCancellation(recording);
             finalizeCompletedRecording(recording, channel);
-        } finally {
-            finalizingRecordingIds.remove(recordingId);
-        }
     }
 
     private void restartPrimaryRecorder(RecordingItem recording, ChannelItem channel) {
@@ -2803,6 +3356,75 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         executor.execute(() -> runRecording(channelId, recording, liveInfo));
     }
 
+    private boolean restartPrimaryRecorderAfterCleanExit(RecordingItem callbackRecording, ChannelItem callbackChannel) {
+        if (callbackRecording == null || isBlank(callbackRecording.getId())) {
+            return false;
+        }
+
+        final long expectedGeneration = serviceGeneration;
+        String recordingId = callbackRecording.getId();
+        String channelId = callbackRecording.getChannelId();
+        LiveInfo checkedLiveInfo = null;
+        if (callbackChannel != null) {
+            String youtubeChannelId = resolveChannelId(callbackChannel.getUrl());
+            checkedLiveInfo = isBlank(youtubeChannelId)
+                ? null
+                : checkLiveFromChannelLivePage(youtubeChannelId, callbackChannel);
+        }
+
+        LiveInfo fallbackLiveInfo = new LiveInfo(
+            callbackRecording.getVideoId(),
+            callbackRecording.getTitle(),
+            callbackRecording.getVideoUrl(),
+            callbackRecording.getStartedAt()
+        );
+        LiveInfo liveInfo = checkedLiveInfo == null ? fallbackLiveInfo : checkedLiveInfo;
+
+        return recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            if (shuttingDown || !recorderLaunchCoordinator.isGenerationActive(expectedGeneration)) {
+                return false;
+            }
+            RecordingItem restarted;
+            ChannelItem latestChannel;
+            synchronized (storage) {
+                RecordingItem latest = storage.findRecordingById(recordingId);
+                latestChannel = storage.findChannelById(channelId);
+                if (latest == null || latestChannel == null || !RecordingRecoveryPolicy.mayRestartAfterCleanExit(
+                    latest.getStatus(),
+                    latestChannel.shouldMonitor() && latestChannel.isSameCurrentVideo(latest.getVideoId()),
+                    userHaltedRecordingIds.contains(recordingId),
+                    finalizingRecordingIds.contains(recordingId),
+                    finalizedRecordingIds.contains(recordingId)
+                )) {
+                    return false;
+                }
+
+                restarted = storage.updateRecordingIfStatus(
+                    recordingId,
+                    RecordingItem.STATUS_RECORDING,
+                    item -> {
+                        item.markRecording();
+                        item.showInDownloading();
+                        item.setDiagnosticMessage("Stream confirmed live; restarting recorder.");
+                    }
+                );
+                if (restarted == null) {
+                    return false;
+                }
+
+                latestChannel.markRecording(liveInfo.videoId, liveInfo.videoUrl);
+                storage.upsertChannel(latestChannel);
+            }
+
+            activeRecordings.put(channelId, restarted);
+            activeRecordings.put(recordingId, restarted);
+            progressTracker.track(restarted);
+            notificationHelper.showChannelMonitoringNotification(latestChannel);
+            executor.execute(() -> runRecording(channelId, restarted, liveInfo, true, expectedGeneration));
+            return true;
+        });
+    }
+
     private void finalizeCompletedRecording(RecordingItem recording, ChannelItem channel) {
         if (recording == null) {
             return;
@@ -2820,6 +3442,39 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         broadcastRecordingUpdated("Recording ended and was saved.");
+    }
+
+    private void finalizeConfirmedStreamEnd(RecordingItem recording, ChannelItem channel) {
+        if (recording == null || isBlank(recording.getId())) {
+            return;
+        }
+
+        String recordingId = recording.getId();
+        RecordingItem claimed = recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            RecordingItem latest = storage.findRecordingById(recordingId);
+            if (latest == null || !RecordingRecoveryPolicy.mayBeginFinalization(
+                latest.getStatus(),
+                userHaltedRecordingIds.contains(recordingId),
+                finalizingRecordingIds.contains(recordingId),
+                finalizedRecordingIds.contains(recordingId)
+            )) {
+                return null;
+            }
+            if (!finalizingRecordingIds.add(recordingId)) {
+                return null;
+            }
+            recorderLaunchCoordinator.removeHandleWhileLocked(recordingId);
+            return latest;
+        });
+        if (claimed == null) {
+            return;
+        }
+
+        try {
+            finalizeCompletedRecording(claimed, channel);
+        } finally {
+            finalizingRecordingIds.remove(recordingId);
+        }
     }
 
     private void executeYoutubedlAndroidRequest(
@@ -3189,7 +3844,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel,
         RecordingItem recording,
         LiveInfo liveInfo,
-        String failureReason
+        String failureReason,
+        boolean cleanExitRestart,
+        long expectedGeneration
     ) {
         RecordingItem latest = storage.findRecordingById(recording.getId());
 
@@ -3222,7 +3879,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             endStatus = confirmStreamEnded(recording, channel);
         }
 
-        if (endStatus == StreamEndStatus.CONFIRMED_ENDED || endStatus == StreamEndStatus.UNKNOWN) {
+        if (endStatus == StreamEndStatus.UNKNOWN) {
+            preserveRecordingAfterUnknownStreamStatus(
+                recording,
+                channelId,
+                channel,
+                "yt-dlp exited while stream status remained unknown."
+            );
+            return true;
+        }
+
+        if (RecordingRecoveryPolicy.shouldFinalizeAfterStreamStatus(endStatus.name())) {
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
@@ -3237,7 +3904,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "yt-dlp exited and stream confirmed ended. Finalizing recording.",
                 "videoId=" + recording.getVideoId() + ", status=" + endStatus
             );
-            finalizeCompletedRecording(recording, channel);
+            finalizeConfirmedStreamEnd(recording, channel);
             return true;
         }
 
@@ -3249,7 +3916,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "videoId=" + recording.getVideoId()
         );
 
-        if (shouldAbortRecorderRestartForTerminalState(
+        if (!cleanExitRestart && shouldAbortRecorderRestartForTerminalState(
             channelId,
             channel,
             recording,
@@ -3258,16 +3925,18 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return true;
         }
 
-        if (RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
+        if (!cleanExitRestart && RecordingItem.STATUS_PAUSED_BY_USER.equals(recording.getStatus())) {
             storage.upsertRecording(recording);
             broadcastRecordingUpdated("Recording paused.");
             return true;
         }
 
         try {
-            String fallbackOutputPath = recording.getCurrentTempSegmentPath();
+            String fallbackOutputPath = cleanExitRestart
+                ? suggestedFreshFfmpegOutputPath(recording)
+                : recording.getCurrentTempSegmentPath();
 
-            if (currentRecordingSegmentHasData(recording)) {
+            if (!cleanExitRestart && currentRecordingSegmentHasData(recording)) {
                 fallbackOutputPath = createResumeChunkPath(recording);
                 recording.addTempChunkPath(fallbackOutputPath);
             }
@@ -3278,10 +3947,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return true;
             }
 
-            recording.markRecording();
-            recording.showInDownloading();
-            recording.setDiagnosticMessage("yt-dlp live-from-start failed; falling back to FFmpeg live-edge recording.");
-            storage.upsertRecording(recording);
+            if (!cleanExitRestart) {
+                recording.markRecording();
+                recording.showInDownloading();
+                recording.setDiagnosticMessage("yt-dlp live-from-start failed; falling back to FFmpeg live-edge recording.");
+                storage.upsertRecording(recording);
+            }
 
             if (!isBlank(activeChannelId)) {
                 activeRecordings.put(activeChannelId, recording);
@@ -3307,12 +3978,12 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 throw new IllegalStateException("FFmpeg fallback could not resolve a playable stream URL.");
             }
 
-            if (shouldAbortRecorderRestartForTerminalState(
+            if (!cleanExitRestart && shouldAbortRecorderRestartForTerminalState(
                 activeChannelId,
                 channel,
                 recording,
                 "after FFmpeg fallback stream resolution"
-            ) || shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording)) {
+            ) || (!cleanExitRestart && shouldStopRecorderAfterUserRequest(activeChannelId, channel, recording))) {
                 return true;
             }
 
@@ -3336,7 +4007,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 manifestUrl,
                 fallbackOutputPath,
                 false,
-                "yt-dlp failed; FFmpeg fallback started."
+                "yt-dlp failed; FFmpeg fallback started.",
+                cleanExitRestart,
+                expectedGeneration
             );
 
             return true;
@@ -3349,9 +4022,15 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "FFmpeg fallback skipped because resolver confirmed the live event ended.",
                 normalizeErrorMessage(ended)
             );
-            finalizeCompletedRecording(recording, channel);
+            finalizeConfirmedStreamEnd(recording, channel);
             return true;
         } catch (Exception fallbackError) {
+            if (cleanExitRestart) {
+                preserveCleanExitStartupFailure(
+                    recording.getId(), channelId, normalizeErrorMessage(fallbackError)
+                );
+                return true;
+            }
             if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
                 return true;
             }
@@ -3682,6 +4361,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
 
     private void resumeRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
+        resumeRecording(channelId, recording, liveInfo, false);
+    }
+
+    private void resumeRecoverableRecording(String channelId, RecordingItem recording, LiveInfo liveInfo) {
+        resumeRecording(channelId, recording, liveInfo, true);
+    }
+
+    private void resumeRecording(String channelId, RecordingItem recording, LiveInfo liveInfo, boolean recoverableResume) {
         ChannelItem channel = storage.findChannelById(channelId);
 
         try {
@@ -3718,10 +4405,37 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             String chunkPath = createResumeChunkPath(recording);
-            recording.addTempChunkPath(chunkPath);
-            recording.setDiagnosticMessage("Recording stalled; resuming same recording.");
-            storage.upsertRecording(recording);
-            broadcastRecordingUpdated("Recording stalled; resuming same recording.");
+            if (recoverableResume) {
+                RecordingItem updated = storage.updateRecordingIfStatus(
+                    recording.getId(),
+                    RecordingItem.STATUS_RECORDING,
+                    item -> {
+                        item.addTempChunkPath(chunkPath);
+                        item.setDiagnosticMessage("Resuming recoverable recording with a new TS segment.");
+                    }
+                );
+                if (updated == null) {
+                    activeRecordings.remove(recording.getId());
+                    activeRecordings.remove(channelId);
+                    progressTracker.untrack(recording);
+                    return;
+                }
+                recording = updated;
+            } else {
+                recording.addTempChunkPath(chunkPath);
+                recording.setDiagnosticMessage("Recording stalled; resuming same recording.");
+                storage.upsertRecording(recording);
+            }
+
+            if (recoverableResume && shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                activeRecordings.remove(recording.getId());
+                activeRecordings.remove(channelId);
+                progressTracker.untrack(recording);
+                return;
+            }
+            broadcastRecordingUpdated(recoverableResume
+                ? "Resuming recoverable recording."
+                : "Recording stalled; resuming same recording.");
 
             log(
                 LogItem.LEVEL_SUCCESS,
@@ -3745,26 +4459,58 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 manifestUrl,
                 chunkPath,
                 false,
-                "Recording stalled; resume recorder started."
+                recoverableResume
+                    ? "Recoverable recording resumed with a new TS segment."
+                    : "Recording stalled; resume recorder started."
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
 
             restartingRecordings.remove(recording.getId());
-            recording.markRecoverable("Recorder stalled and resume failed. " + errorMessage);
-            storage.upsertRecording(recording);
+            if (recoverableResume) {
+                storage.updateRecordingIfStatus(
+                    recording.getId(),
+                    RecordingItem.STATUS_RECORDING,
+                    item -> item.markRecoverable("Recoverable recording resume failed. " + errorMessage)
+                );
+            } else {
+                recording.markRecoverable("Recorder stalled and resume failed. " + errorMessage);
+                storage.upsertRecording(recording);
+            }
             activeRecordings.remove(recording.getId());
             activeRecordings.remove(channelId);
             progressTracker.untrack(recording);
+
+            if (recoverableResume) {
+                ChannelItem latest;
+                boolean channelUpdated = false;
+                synchronized (storage) {
+                    latest = storage.findChannelById(channelId);
+                    if (latest != null
+                        && latest.shouldMonitor()
+                        && !userHaltedRecordingIds.contains(recording.getId())
+                        && !finalizingRecordingIds.contains(recording.getId())
+                        && !finalizedRecordingIds.contains(recording.getId())) {
+                        latest.markWaitingForLive();
+                        storage.upsertChannel(latest);
+                        channelUpdated = true;
+                    }
+                }
+                if (channelUpdated) {
+                    notificationHelper.showChannelMonitoringNotification(latest);
+                }
+            }
 
             log(
                 LogItem.LEVEL_ERROR,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Stalled recording resume failed.",
+                recoverableResume ? "Recoverable recording resume failed." : "Stalled recording resume failed.",
                 errorMessage
             );
-            broadcastRecordingUpdated("Recording is recoverable after a stall.");
+            broadcastRecordingUpdated(recoverableResume
+                ? "Recoverable recording resume failed."
+                : "Recording is recoverable after a stall.");
         }
     }
 
@@ -3808,7 +4554,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "recordingId=" + recording.getId() + ", trigger=" + trigger
         );
 
-        boolean cancelled = FFmpegRunner.cancel(recording.getId());
+        RecorderLaunchCoordinator.Handle coordinatedHandle =
+            recorderLaunchCoordinator.removeHandle(recording.getId());
+        if (coordinatedHandle != null) {
+            // This may wait for process termination; lifecycle and storage locks are released.
+            recorderLaunchCoordinator.cancelOutsideGate(coordinatedHandle);
+        }
+
+        boolean cancelled = coordinatedHandle != null || FFmpegRunner.cancel(recording.getId());
         cancelled = YtDlpRunner.cancelRecording(recording.getId()) || cancelled;
 
         cancelled = cancelYoutubedlAndroidRecording(recording.getId()) || cancelled;
@@ -4178,29 +4931,40 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void onRecordingFinished(String channelId, String recordingId, int returnCode) {
+        onRecordingFinished(channelId, recordingId, returnCode, null);
+    }
+
+    private void onRecordingFinished(
+        String channelId,
+        String recordingId,
+        int returnCode,
+        RecorderLaunchCoordinator.Handle sourceHandle
+    ) {
+        try {
+            onRecordingFinishedInternal(channelId, recordingId, returnCode);
+        } finally {
+            recorderLaunchCoordinator.removeHandleIfSame(recordingId, sourceHandle);
+        }
+    }
+
+    private void onRecordingFinishedInternal(String channelId, String recordingId, int returnCode) {
         RecordingItem recording = storage.findRecordingById(recordingId);
         ChannelItem channel = storage.findChannelById(channelId);
 
         if (recording == null) return;
 
-        boolean userHaltedRecording = userHaltedRecordingIds.contains(recordingId)
-            || recording.isPausedByUser()
-            || RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus());
-        if (userHaltedRecording) {
-            restartingRecordings.remove(recordingId);
-            activeRecordings.remove(channelId);
-            activeRecordings.remove(recordingId);
-            progressTracker.untrack(recording);
-            storage.upsertRecording(recording);
+        if (RecordingRecoveryPolicy.shouldIgnoreCompletionCallback(recording.getStatus())) {
+            log(
+                LogItem.LEVEL_INFO,
+                LogItem.SOURCE_RECORDER,
+                channel,
+                "Ignoring recorder callback for an already recoverable recording.",
+                "recordingId=" + recordingId
+            );
+            return;
+        }
 
-            if (channel != null) {
-                activeLoops.remove(channel.getId());
-                channel.markPausedByUser();
-                storage.upsertChannel(channel);
-                notificationHelper.showChannelMonitoringNotification(channel);
-            }
-
-            broadcastRecordingUpdated("Recording paused or stopped by user.");
+        if (finishUserHaltedRecordingCallback(channelId, recordingId, recording, channel)) {
             return;
         }
 
@@ -4221,34 +4985,133 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 || cleanExitAction == CleanExitAction.DEFERRED) {
                 return;
             }
+
         }
+
+        // The stream status check may have waited. Claim finalization only
+        // against the latest persisted item under the same gate used by
+        // UNKNOWN preservation, so a stale callback cannot win afterward.
+        recording = claimRecorderCompletionFinalization(channelId, recordingId);
+        if (recording == null) return;
+
+        try {
+            channel = storage.findChannelById(channelId);
+            restartingRecordings.remove(recordingId);
+            activeRecordings.remove(channelId);
+            activeRecordings.remove(recordingId);
+            progressTracker.untrack(recording);
+
+            if (recording.isPausedByUser()) {
+                storage.upsertRecording(recording);
+            } else if (returnCode == 0 && recording.isFinished()) {
+                storage.upsertRecording(recording);
+            } else if (returnCode == 0) {
+                convertRecording(recording, channel);
+            } else if (returnCode == 255 || returnCode == -1) {
+                saveStoppedRecordingForDownloads(recording);
+            } else {
+                recording.markRecoverable("Recorder exited with code " + returnCode);
+                storage.upsertRecording(recording);
+            }
+
+            if (channel != null && !recording.isPausedByUser()) {
+                channel.markRecordingFinished();
+                channel.markWaitingForLive();
+                storage.upsertChannel(channel);
+                notificationHelper.showChannelMonitoringNotification(channel);
+            }
+
+            broadcastRecordingUpdated("Recording updated.");
+        } finally {
+            finalizingRecordingIds.remove(recordingId);
+        }
+    }
+
+    private RecordingItem claimRecorderCompletionFinalization(String channelId, String recordingId) {
+        if (isBlank(recordingId)) {
+            return null;
+        }
+
+        return recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            RecordingItem latest = storage.findRecordingById(recordingId);
+            ChannelItem latestChannel = storage.findChannelById(channelId);
+            if (latest == null) {
+                return null;
+            }
+            if (finishUserHaltedRecordingCallbackLocked(channelId, recordingId, latest, latestChannel)) {
+                return null;
+            }
+            if (!RecordingRecoveryPolicy.mayBeginFinalization(
+                latest.getStatus(),
+                userHaltedRecordingIds.contains(recordingId),
+                finalizingRecordingIds.contains(recordingId),
+                finalizedRecordingIds.contains(recordingId)
+            )) {
+                return null;
+            }
+            if (!finalizingRecordingIds.add(recordingId)) {
+                return null;
+            }
+            recorderLaunchCoordinator.removeHandleWhileLocked(recordingId);
+            return latest;
+        });
+    }
+
+    private boolean finishUserHaltedRecordingCallback(
+        String channelId,
+        String recordingId,
+        RecordingItem recording,
+        ChannelItem channel
+    ) {
+        if (recording == null || isBlank(recordingId)) {
+            return false;
+        }
+
+        return recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+            RecordingItem latest = storage.findRecordingById(recordingId);
+            ChannelItem latestChannel = storage.findChannelById(channelId);
+            if (latest == null) {
+                return false;
+            }
+            return finishUserHaltedRecordingCallbackLocked(
+                channelId,
+                recordingId,
+                latest,
+                latestChannel == null ? channel : latestChannel
+            );
+        });
+    }
+
+    private boolean finishUserHaltedRecordingCallbackLocked(
+        String channelId,
+        String recordingId,
+        RecordingItem recording,
+        ChannelItem channel
+    ) {
+        boolean userHalted = userHaltedRecordingIds.contains(recordingId)
+            || recording.isPausedByUser()
+            || RecordingItem.STATUS_STOPPED_BY_USER.equals(recording.getStatus());
+        if (!userHalted) {
+            return false;
+        }
+
+        recorderLaunchCoordinator.removeHandleWhileLocked(recordingId);
 
         restartingRecordings.remove(recordingId);
         activeRecordings.remove(channelId);
         activeRecordings.remove(recordingId);
         progressTracker.untrack(recording);
+        storage.upsertRecording(recording);
 
-        if (recording.isPausedByUser()) {
-            storage.upsertRecording(recording);
-        } else if (returnCode == 0 && recording.isFinished()) {
-            storage.upsertRecording(recording);
-        } else if (returnCode == 0) {
-            convertRecording(recording, channel);
-        } else if (returnCode == 255 || returnCode == -1) {
-            saveStoppedRecordingForDownloads(recording);
-        } else {
-            recording.markRecoverable("Recorder exited with code " + returnCode);
-            storage.upsertRecording(recording);
-        }
-
-        if (channel != null && !recording.isPausedByUser()) {
-            channel.markRecordingFinished();
-            channel.markWaitingForLive();
+        if (channel != null) {
+            activeLoops.remove(channel.getId());
+            channel.markPausedByUser();
             storage.upsertChannel(channel);
             notificationHelper.showChannelMonitoringNotification(channel);
         }
 
-        broadcastRecordingUpdated("Recording updated.");
+        broadcastRecordingUpdated("Recording paused or stopped by user.");
+        return true;
     }
 
     private CleanExitAction handleCleanLiveRecordingExit(
@@ -4257,14 +5120,30 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         ChannelItem channel
     ) {
         if (channel == null || !channel.shouldMonitor()) {
+            StreamEndStatus inactiveChannelStatus = confirmStreamEnded(recording, channel);
+            if (inactiveChannelStatus == StreamEndStatus.UNKNOWN) {
+                sleepForStreamEndRecheck();
+                inactiveChannelStatus = confirmStreamEnded(recording, channel);
+            }
+
+            if (RecordingRecoveryPolicy.shouldFinalizeAfterStreamStatus(inactiveChannelStatus.name())) {
+                return CleanExitAction.FINALIZE;
+            }
+
+            preserveRecordingAfterUnknownStreamStatus(
+                recording,
+                channelId,
+                channel,
+                "Recorder exited without a confirmed stream end while channel monitoring was inactive."
+            );
             log(
-                LogItem.LEVEL_INFO,
+                LogItem.LEVEL_WARNING,
                 LogItem.SOURCE_RECORDER,
                 channel,
-                "Recording completed; monitoring is no longer active.",
-                "recordingId=" + recording.getId()
+                "Recording preserved because stream completion was not confirmed and channel monitoring is inactive.",
+                "recordingId=" + recording.getId() + ", status=" + inactiveChannelStatus
             );
-            return CleanExitAction.FINALIZE;
+            return CleanExitAction.DEFERRED;
         }
 
         StreamEndStatus endStatus = confirmStreamEnded(recording, channel);
@@ -4289,8 +5168,19 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 "yt-dlp exited but stream confirmed still live. Restarting recorder.",
                 "videoId=" + recording.getVideoId()
             );
-            restartPrimaryRecorder(recording, channel);
-            return CleanExitAction.RESTARTED;
+            return restartPrimaryRecorderAfterCleanExit(recording, channel)
+                ? CleanExitAction.RESTARTED
+                : CleanExitAction.DEFERRED;
+        }
+
+        if (endStatus == StreamEndStatus.UNKNOWN) {
+            preserveRecordingAfterUnknownStreamStatus(
+                recording,
+                channelId,
+                channel,
+                "Recorder exited while stream status remained unknown."
+            );
+            return CleanExitAction.DEFERRED;
         }
 
         log(
@@ -4301,7 +5191,9 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             "videoId=" + recording.getVideoId() + ", status=" + endStatus
         );
 
-        return CleanExitAction.FINALIZE;
+        return RecordingRecoveryPolicy.shouldFinalizeAfterStreamStatus(endStatus.name())
+            ? CleanExitAction.FINALIZE
+            : CleanExitAction.DEFERRED;
     }
 
     private LiveInfo confirmCleanExitStillLooksFinished(ChannelItem channel, RecordingItem recording, LiveInfo firstLiveInfo) {
@@ -5138,6 +6030,38 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         boolean appendOutput,
         String broadcastMessage
     ) {
+        startFfmpegKitRecording(
+            channelId, channel, recording, manifestUrl, outputPath, appendOutput, broadcastMessage, false
+        );
+    }
+
+    private void startFfmpegKitRecording(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String manifestUrl,
+        String outputPath,
+        boolean appendOutput,
+        String broadcastMessage,
+        boolean cleanExitRestart
+    ) {
+        startFfmpegKitRecording(
+            channelId, channel, recording, manifestUrl, outputPath, appendOutput, broadcastMessage,
+            cleanExitRestart, serviceGeneration
+        );
+    }
+
+    private void startFfmpegKitRecording(
+        String channelId,
+        ChannelItem channel,
+        RecordingItem recording,
+        String manifestUrl,
+        String outputPath,
+        boolean appendOutput,
+        String broadcastMessage,
+        boolean cleanExitRestart,
+        long expectedGeneration
+    ) {
         if (recording == null) {
             return;
         }
@@ -5147,6 +6071,165 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         final ChannelItem logChannel = channel;
+
+        if (cleanExitRestart) {
+            FFmpegRunner.PreparedRecording prepared = null;
+            try {
+                // Local proxy setup is outside the lifecycle gate. No recorder is launched here.
+                prepared = FFmpegRunner.prepareRecording(
+                    recording.getId(),
+                    manifestUrl,
+                    outputPath,
+                    appendOutput,
+                    message -> {
+                        if (message != null
+                            && !message.startsWith("frame=")
+                            && !message.startsWith("size=")) {
+                            log(LogItem.LEVEL_DEBUG, LogItem.SOURCE_FFMPEG, logChannel, message, "");
+                        }
+                    }
+                );
+                FFmpegRunner.PreparedRecording preparedFinal = prepared;
+                java.util.concurrent.atomic.AtomicReference<RecordingItem> latestRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.atomic.AtomicReference<FFmpegRunner.RecorderSession> handleRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.atomic.AtomicBoolean addedCleanExitChunk =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+                java.util.concurrent.atomic.AtomicBoolean startupFailurePreserved =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+                RecorderLaunchCoordinator.CompletionBarrier completionBarrier =
+                    new RecorderLaunchCoordinator.CompletionBarrier();
+
+                FFmpegRunner.RecorderSession handle = recorderLaunchCoordinator.startIfEligible(
+                    expectedGeneration,
+                    recording.getId(),
+                    () -> {
+                        synchronized (storage) {
+                            RecordingItem latest = storage.findRecordingById(recording.getId());
+                            ChannelItem latestChannel = storage.findChannelById(channelId);
+                            boolean eligible = latest != null
+                                && latestChannel != null
+                                && currentRecordingSegmentHasData(latest)
+                                    == !outputPath.equals(latest.getCurrentTempSegmentPath())
+                                && (outputPath.equals(latest.getCurrentTempSegmentPath())
+                                    || (!latest.getTempSegmentPaths().contains(outputPath)
+                                        && !new File(outputPath).exists()))
+                                && RecordingRecoveryPolicy.mayRestartAfterCleanExit(
+                                    latest.getStatus(),
+                                    latestChannel.shouldMonitor()
+                                        && latestChannel.isSameCurrentVideo(latest.getVideoId()),
+                                    userHaltedRecordingIds.contains(recording.getId()),
+                                    finalizingRecordingIds.contains(recording.getId()),
+                                    finalizedRecordingIds.contains(recording.getId())
+                                );
+                            if (eligible) {
+                                latestRef.set(latest);
+                            }
+                            return eligible;
+                        }
+                    },
+                    () -> {
+                        RecordingItem latest = latestRef.get();
+                        if (latest == null) {
+                            throw new IllegalStateException("Recording changed before FFmpeg startup.");
+                        }
+                        String selectedOutput = outputPath;
+                        boolean addChunk = currentRecordingSegmentHasData(latest);
+                        if (addChunk != !outputPath.equals(latest.getCurrentTempSegmentPath())) {
+                            throw new IllegalStateException("Recording segment paths changed before FFmpeg startup.");
+                        }
+                        if (addChunk && (latest.getTempSegmentPaths().contains(outputPath)
+                            || new File(outputPath).exists())) {
+                            throw new IllegalStateException("Prepared FFmpeg chunk path is no longer available.");
+                        }
+                        if (!addChunk && !isBlank(latest.getCurrentTempSegmentPath())) {
+                            selectedOutput = latest.getCurrentTempSegmentPath();
+                        }
+                        final String safeOutput = selectedOutput;
+                        RecordingItem updated = storage.updateRecordingIfStatus(
+                            latest.getId(),
+                            RecordingItem.STATUS_RECORDING,
+                            item -> {
+                                if (addChunk) {
+                                    item.addTempChunkPath(safeOutput);
+                                }
+                                addedCleanExitChunk.set(addChunk);
+                                item.setDiagnosticMessage("FFmpeg recorder is running.");
+                            }
+                        );
+                        if (updated == null) {
+                            throw new IllegalStateException("Recording changed before FFmpeg startup.");
+                        }
+                        latestRef.set(updated);
+                    },
+                    () -> preparedFinal.start(
+                        returnCode -> completionBarrier.dispatch(() -> executor.execute(() -> {
+                            FFmpegRunner.RecorderSession completedHandle = handleRef.get();
+                            onRecordingFinished(channelId, recording.getId(), returnCode, completedHandle);
+                        }))
+                    ),
+                    (failure, starterInvoked) -> {
+                        boolean startupDefinitelyDidNotLaunch = failure instanceof FFmpegRunner.StartupException
+                            && !((FFmpegRunner.StartupException) failure).isNativeStartOutcomeUnknown()
+                            && ((FFmpegRunner.StartupException) failure).getReturnedSession() == null;
+                        startupFailurePreserved.set(preserveCleanExitStartupFailureLocked(
+                            recording.getId(),
+                            channelId,
+                            normalizeErrorMessage(failure),
+                            outputPath,
+                            addedCleanExitChunk.get(),
+                            // Roll back only when FFmpegKit was not invoked; its
+                            // throw-without-session outcome remains unverified.
+                            startupDefinitelyDidNotLaunch,
+                            new java.util.concurrent.atomic.AtomicReference<>()
+                        ));
+                    }
+                );
+
+                if (handle == null) {
+                    prepared.close();
+                    return;
+                }
+                handleRef.set(handle);
+                completionBarrier.release();
+                if (!isBlank(broadcastMessage)) {
+                    broadcastRecordingUpdated(broadcastMessage);
+                }
+                return;
+            } catch (Exception e) {
+                if (e instanceof FFmpegRunner.StartupException) {
+                    try {
+                        ((FFmpegRunner.StartupException) e).cancelReturnedSession();
+                    } catch (RuntimeException cancelFailure) {
+                        log(
+                            LogItem.LEVEL_ERROR,
+                            LogItem.SOURCE_FFMPEG,
+                            logChannel,
+                            "Failed to cancel FFmpeg session after startup handoff failed.",
+                            normalizeErrorMessage(cancelFailure)
+                        );
+                    }
+                }
+                if (prepared != null) {
+                    prepared.close();
+                }
+                if (startupFailurePreserved.get()) {
+                    broadcastRecordingUpdated("Recording preserved after recorder startup failed.");
+                } else {
+                    preserveCleanExitStartupFailure(
+                        recording.getId(),
+                        channelId,
+                        normalizeErrorMessage(e),
+                        outputPath,
+                        addedCleanExitChunk.get(),
+                        false,
+                        false
+                    );
+                }
+                return;
+            }
+        }
 
         recording.setDiagnosticMessage("FFmpeg recorder is running.");
         storage.upsertRecording(recording);
@@ -7400,22 +8483,86 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         if (shuttingDown) return;
 
         shuttingDown = true;
+        // Wait for any clean-exit startup handoff to register its real handle,
+        // then keep the generation closed until all cancellation has finished.
+        if (!recorderLaunchCoordinator.beginShutdown(serviceGeneration)) {
+            // A newer service generation owns the shared runner registries now.
+            // This stale instance must not persist recording state or invoke
+            // global cancellation against that generation.
+            serviceRunning = false;
+            activeLoops.clear();
+            if (progressTracker != null) progressTracker.stop();
+            if (networkMonitor != null) networkMonitor.stop();
+            releaseWakeLock();
+            return;
+        }
+
+        try {
         serviceRunning = false;
         activeLoops.clear();
 
-        for (RecordingItem recording : activeRecordings.values()) {
-            if (recording != null) {
-                recording.markStoppedBySystem("MonitorService is shutting down; recording cancellation was not user initiated.");
-                storage.upsertRecording(recording);
+        java.util.Set<String> recordingIds = new java.util.HashSet<>(
+            recorderLaunchCoordinator.recordingIdsWithHandles()
+        );
+        for (RecordingItem active : activeRecordings.values()) {
+            if (active != null && !isBlank(active.getId())) {
+                recordingIds.add(active.getId());
+            }
+        }
+
+        java.util.List<RecorderLaunchCoordinator.Handle> handlesToCancel = new java.util.ArrayList<>();
+        java.util.List<String> stateUpdateFailures = new java.util.ArrayList<>();
+        for (String recordingId : recordingIds) {
+            java.util.concurrent.atomic.AtomicReference<RecorderLaunchCoordinator.Handle> handleRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+            try {
+                recorderLaunchCoordinator.withRecordingLock(recordingId, () -> {
+                    RecordingItem latest = storage.findRecordingById(recordingId);
+                    handleRef.set(recorderLaunchCoordinator.removeHandleWhileLocked(recordingId));
+                    if (latest != null
+                        && !finalizingRecordingIds.contains(recordingId)
+                        && !finalizedRecordingIds.contains(recordingId)) {
+                        storage.updateRecordingIfStatus(
+                            recordingId,
+                            RecordingItem.STATUS_RECORDING,
+                            item -> item.markStoppedBySystem(
+                                "MonitorService is shutting down; recording cancellation was not user initiated."
+                            )
+                        );
+                    }
+                    return null;
+                });
+            } catch (RuntimeException e) {
+                stateUpdateFailures.add(recordingId + ": " + normalizeErrorMessage(e));
+            }
+            if (handleRef.get() != null) {
+                handlesToCancel.add(handleRef.get());
+            }
+            cancelYoutubedlAndroidRecording(recordingId);
+        }
+
+        // The lifecycle gate is released before potentially blocking cancellation.
+        for (RecorderLaunchCoordinator.Handle handle : handlesToCancel) {
+            try {
+                recorderLaunchCoordinator.cancelOutsideGate(handle);
+            } catch (RuntimeException e) {
                 log(
-                    LogItem.LEVEL_WARNING,
+                    LogItem.LEVEL_ERROR,
                     LogItem.SOURCE_RECORDER,
                     null,
-                    "System-triggered recording stop during service shutdown.",
-                    "recordingId=" + recording.getId()
+                    "Failed to cancel recorder during service shutdown.",
+                    normalizeErrorMessage(e)
                 );
-                cancelYoutubedlAndroidRecording(recording.getId());
             }
+        }
+        for (String failure : stateUpdateFailures) {
+            log(
+                LogItem.LEVEL_ERROR,
+                LogItem.SOURCE_RECORDER,
+                null,
+                "Failed to update recording during service shutdown.",
+                failure
+            );
         }
 
         activeRecordings.clear();
@@ -7439,6 +8586,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         stopSelf();
+        } finally {
+            // beginServiceGeneration() cannot reopen shared recorder startup
+            // until all state mutation and process cancellation above is done.
+            recorderLaunchCoordinator.completeShutdown(serviceGeneration);
+        }
     }
 
     private void log(String level, String source, ChannelItem channel, String message, String details) {

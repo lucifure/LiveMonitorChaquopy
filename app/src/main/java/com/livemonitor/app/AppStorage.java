@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Central persistence helper for the app.
@@ -399,6 +400,48 @@ public class AppStorage {
 
         for (RecordingItem recording : recordings) {
             if (recording != null && recording.matchesVideo(videoId) && recording.isActive()) {
+                return recording;
+            }
+        }
+
+        return null;
+    }
+
+    public synchronized RecordingItem findRecoverableRecordingForVideo(String videoId) {
+        if (isBlank(videoId)) {
+            return null;
+        }
+
+        for (RecordingItem recording : loadRecordings()) {
+            if (recording != null
+                && RecordingItem.STATUS_RECOVERABLE.equals(recording.getStatus())
+                && recording.matchesVideo(videoId)) {
+                return recording;
+            }
+        }
+
+        return null;
+    }
+
+    /** Atomically applies a mutation only while the persisted status matches. */
+    public synchronized RecordingItem updateRecordingIfStatus(
+        String recordingId,
+        String expectedStatus,
+        Consumer<RecordingItem> update
+    ) {
+        if (isBlank(recordingId) || update == null) {
+            return null;
+        }
+
+        List<RecordingItem> recordings = loadRecordings();
+        for (int i = 0; i < recordings.size(); i++) {
+            RecordingItem recording = recordings.get(i);
+            if (recording != null
+                && recordingId.equals(recording.getId())
+                && expectedStatus.equals(recording.getStatus())) {
+                update.accept(recording);
+                recordings.set(i, recording);
+                saveRecordings(recordings);
                 return recording;
             }
         }

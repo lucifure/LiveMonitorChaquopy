@@ -231,7 +231,7 @@ public class RecordingFileManager {
                 continue;
             }
 
-            if (!isBlank(candidateTempPath) && candidateTempPath.equals(existing.getTempTsPath())) {
+            if (RecordingRecoveryPolicy.containsTempSegmentPath(existing, candidateTempPath)) {
                 return true;
             }
 
@@ -489,7 +489,10 @@ public class RecordingFileManager {
                 "",
                 "Recovered Recording",
                 "",
-                extractVideoIdFromFileName(name),
+                // RecordingFileManager names TS files with title + timestamp,
+                // not the YouTube video ID. Do not invent an ID from the final
+                // underscore-delimited timestamp field.
+                "",
                 "",
                 name,
                 settings.getDownloadQuality(),
@@ -510,26 +513,6 @@ public class RecordingFileManager {
         }
 
         return new File(getCompletedDirectory(), baseName + ".mp4").getAbsolutePath();
-    }
-
-    private static String extractVideoIdFromFileName(String fileName) {
-        if (isBlank(fileName)) {
-            return "";
-        }
-
-        String name = fileName;
-
-        if (name.toLowerCase(Locale.US).endsWith(".ts")) {
-            name = name.substring(0, name.length() - 3);
-        }
-
-        int lastUnderscore = name.lastIndexOf("_");
-
-        if (lastUnderscore < 0 || lastUnderscore >= name.length() - 1) {
-            return "";
-        }
-
-        return name.substring(lastUnderscore + 1);
     }
 
     private static boolean isSafeTemporaryLeftover(File file) {

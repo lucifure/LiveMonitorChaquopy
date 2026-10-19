@@ -29,6 +29,7 @@ public class FFmpegRunner {
     private static final String TAG = "FFmpegRunner";
 
     private static final Map<String, RecorderSession> sessions = new ConcurrentHashMap<>();
+    private static final Object sessionStartLock = new Object();
 
     public static boolean setup(Context context) {
         Log.d(TAG, "Using FFmpegKit dependency with per-recording local HLS proxies.");
@@ -53,76 +54,164 @@ public class FFmpegRunner {
         OnCompleteCallback callback,
         OnLogCallback logCallback
     ) {
-        String safeRecordingId = normalizeRecordingId(recordingId, outPath);
-
+        PreparedRecording prepared = null;
         try {
-            cancel(safeRecordingId);
-            ensureParentDirectory(outPath);
-
-            HlsProxyServer proxyServer = new HlsProxyServer(
-                logCallback,
-                HlsProxyServer.PlaylistRewriteMode.FULL_RECORDING_DVR
-            );
-            proxyServer.start();
-
-            RecorderSession recorderSession = new RecorderSession(safeRecordingId, proxyServer);
-            sessions.put(safeRecordingId, recorderSession);
-
-            String proxyManifestUrl = proxyServer.createProxyUrl(manifestUrl);
-
-            if (logCallback != null) {
-                logCallback.onLog("Local HLS proxy started for recording " + safeRecordingId + ".");
-                logCallback.onLog("Proxy input: " + stripQuery(proxyManifestUrl));
-                logCallback.onLog("Recording output: " + outPath);
-            }
-
-            String command = buildRecordTsCommand(proxyManifestUrl, outPath, appendOutput);
-
-            if (logCallback != null) {
-                logCallback.onLog(
-                    appendOutput
-                        ? "FFmpegKit TS recording command started in resume append mode."
-                        : "FFmpegKit TS recording command started."
-                );
-            }
-
-            FFmpegSession ffmpegSession = FFmpegKit.executeAsync(
-                command,
-                session -> finishSession(safeRecordingId, recorderSession, session, callback, logCallback),
-                log -> {
-                    if (logCallback == null || log == null || log.getMessage() == null) {
-                        return;
-                    }
-
-                    String message = normalizeFfmpegLog(log.getMessage());
-
-                    if (isImportantFfmpegLog(message)) {
-                        logCallback.onLog(message);
-                    }
-                },
-                statistics -> {
-                    /*
-                     * Progress is tracked by RecordingProgressTracker using
-                     * the growing .ts file size, not notification progress.
-                     */
-                }
-            );
-
-            recorderSession.setSession(ffmpegSession);
+            cancel(normalizeRecordingId(recordingId, outPath));
+            prepared = prepareRecording(recordingId, manifestUrl, outPath, appendOutput, logCallback);
+            prepared.start(callback);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start FFmpeg with local proxy", e);
-            RecorderSession removed = sessions.remove(safeRecordingId);
-
-            if (removed != null) {
-                removed.stopProxy();
+            if (prepared != null) {
+                prepared.close();
             }
-
             if (logCallback != null) {
                 logCallback.onLog("Local HLS proxy error: " + e.getMessage());
             }
 
             if (callback != null) {
                 callback.onComplete(-1);
+            }
+        }
+    }
+
+    /** Starts local proxy preparation before the recording lifecycle gate is acquired. */
+    public static PreparedRecording prepareRecording(
+        String recordingId,
+        String manifestUrl,
+        String outPath,
+        boolean appendOutput,
+        OnLogCallback logCallback
+    ) throws Exception {
+        String safeRecordingId = normalizeRecordingId(recordingId, "");
+        ensureParentDirectory(outPath);
+        HlsProxyServer proxyServer = new HlsProxyServer(
+            logCallback,
+            HlsProxyServer.PlaylistRewriteMode.FULL_RECORDING_DVR
+        );
+        try {
+            proxyServer.start();
+            String proxyManifestUrl = proxyServer.createProxyUrl(manifestUrl);
+            String command = buildRecordTsCommand(proxyManifestUrl, outPath, appendOutput);
+            return new PreparedRecording(safeRecordingId, proxyServer, proxyManifestUrl, command, logCallback);
+        } catch (Exception e) {
+            proxyServer.stop();
+            throw e;
+        }
+    }
+
+    public static final class PreparedRecording implements AutoCloseable {
+        private final String recordingId;
+        private final HlsProxyServer proxyServer;
+        private final String proxyManifestUrl;
+        private final String command;
+        private final OnLogCallback logCallback;
+        private boolean started;
+
+        private PreparedRecording(
+            String recordingId,
+            HlsProxyServer proxyServer,
+            String proxyManifestUrl,
+            String command,
+            OnLogCallback logCallback
+        ) {
+            this.recordingId = recordingId;
+            this.proxyServer = proxyServer;
+            this.proxyManifestUrl = proxyManifestUrl;
+            this.command = command;
+            this.logCallback = logCallback;
+        }
+
+        /** Returns after FFmpegKit has returned its cancellable session handle. */
+        public synchronized RecorderSession start(
+            OnCompleteCallback callback
+        ) throws Exception {
+            if (started) {
+                throw new IllegalStateException("Prepared FFmpeg recording was already started.");
+            }
+            synchronized (sessionStartLock) {
+                if (sessions.containsKey(recordingId)) {
+                    throw new IllegalStateException("FFmpeg recorder already has a session for this recording.");
+                }
+                RecorderSession recorderSession = new RecorderSession(recordingId, proxyServer);
+                sessions.put(recordingId, recorderSession);
+                boolean executeCallInvoked = false;
+                FFmpegSession returnedSession = null;
+                try {
+                    if (logCallback != null) {
+                        logCallback.onLog("Local HLS proxy started for recording " + recordingId + ".");
+                        logCallback.onLog("Proxy input: " + stripQuery(proxyManifestUrl));
+                        logCallback.onLog("FFmpeg recording output is prepared.");
+                    }
+                    executeCallInvoked = true;
+                    returnedSession = FFmpegKit.executeAsync(
+                        command,
+                        session -> finishSession(recordingId, recorderSession, session, callback, logCallback),
+                        log -> {
+                            if (logCallback == null || log == null || log.getMessage() == null) {
+                                return;
+                            }
+                            String message = normalizeFfmpegLog(log.getMessage());
+                            if (isImportantFfmpegLog(message)) {
+                                logCallback.onLog(message);
+                            }
+                        },
+                        statistics -> { }
+                    );
+                    if (returnedSession == null) {
+                        throw new IllegalStateException("FFmpegKit returned no cancellable session handle.");
+                    }
+                    recorderSession.setSession(returnedSession);
+                    started = true;
+                    return recorderSession;
+                } catch (Exception e) {
+                    sessions.remove(recordingId, recorderSession);
+                    boolean nativeStartOutcomeUnknown = executeCallInvoked && returnedSession == null;
+                    if (returnedSession != null) {
+                        // The caller receives this real session in the exception
+                        // and can cancel it after leaving the lifecycle gate.
+                    }
+                    // The caller closes the prepared proxy after leaving its lifecycle gate.
+                    throw new StartupException(e, nativeStartOutcomeUnknown, returnedSession);
+                }
+            }
+        }
+
+        @Override
+        public synchronized void close() {
+            if (!started) {
+                proxyServer.stop();
+                started = true;
+            }
+        }
+    }
+
+    /** Indicates whether FFmpegKit may have started without returning a cancellable session. */
+    public static final class StartupException extends Exception {
+        private final boolean nativeStartOutcomeUnknown;
+        private final FFmpegSession returnedSession;
+
+        private StartupException(
+            Exception cause,
+            boolean nativeStartOutcomeUnknown,
+            FFmpegSession returnedSession
+        ) {
+            super(cause == null ? "FFmpeg startup failed." : cause.getMessage(), cause);
+            this.nativeStartOutcomeUnknown = nativeStartOutcomeUnknown;
+            this.returnedSession = returnedSession;
+        }
+
+        public boolean isNativeStartOutcomeUnknown() {
+            return nativeStartOutcomeUnknown;
+        }
+
+        public FFmpegSession getReturnedSession() {
+            return returnedSession;
+        }
+
+        /** Cancels a session returned before a later handoff step failed. Call outside lifecycle locks. */
+        public void cancelReturnedSession() {
+            if (returnedSession != null) {
+                returnedSession.cancel();
             }
         }
     }
@@ -316,7 +405,7 @@ public class FFmpegRunner {
         void onLog(String message);
     }
 
-    private static class RecorderSession {
+    public static class RecorderSession implements RecorderLaunchCoordinator.Handle {
         private final String recordingId;
         private final HlsProxyServer proxyServer;
         private FFmpegSession session;
@@ -336,7 +425,8 @@ public class FFmpegRunner {
             this.session = session;
         }
 
-        private synchronized void cancel() {
+        @Override
+        public synchronized void cancel() {
             cancelled = true;
 
             if (session != null) {

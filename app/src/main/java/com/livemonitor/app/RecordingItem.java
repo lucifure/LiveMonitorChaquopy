@@ -548,6 +548,22 @@ public class RecordingItem {
         touch();
     }
 
+    /** Removes only a separately added chunk path; the original TS path is never removed. */
+    public boolean removeTempChunkPath(String chunkPath) {
+        if (isBlank(chunkPath) || chunkPath.trim().equals(tempTsPath)) {
+            return false;
+        }
+
+        List<String> paths = new ArrayList<>(getTempSegmentPaths());
+        if (!paths.remove(chunkPath.trim())) {
+            return false;
+        }
+
+        tempChunkPaths = normalizeTempChunkPaths(paths);
+        touch();
+        return true;
+    }
+
     public String getCurrentTempSegmentPath() {
         List<String> paths = getTempSegmentPaths();
 
