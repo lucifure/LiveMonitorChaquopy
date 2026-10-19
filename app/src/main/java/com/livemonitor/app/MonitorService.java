@@ -470,17 +470,17 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return false;
             }
 
-            RecordingItem preserved = storage.updateRecordingIfStatus(
+            RecordingItem updated = storage.updateRecordingIfStatus(
                 recordingId,
                 RecordingItem.STATUS_RECORDING,
                 item -> item.markRecoverable(reason)
             );
-            if (preserved == null) {
+            if (updated == null) {
                 return false;
             }
             handleToCancel.set(recorderLaunchCoordinator.removeHandleWhileLocked(recordingId));
 
-            detachRecordingFromActiveState(preserved, channelId);
+            detachRecordingFromActiveState(updated, channelId);
 
             ChannelItem latestChannel;
             boolean channelUpdated = false;
@@ -6074,6 +6074,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (cleanExitRestart) {
             FFmpegRunner.PreparedRecording prepared = null;
+            java.util.concurrent.atomic.AtomicBoolean addedCleanExitChunk =
+                new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicBoolean startupFailurePreserved =
+                new java.util.concurrent.atomic.AtomicBoolean();
             try {
                 // Local proxy setup is outside the lifecycle gate. No recorder is launched here.
                 prepared = FFmpegRunner.prepareRecording(
@@ -6094,10 +6098,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     new java.util.concurrent.atomic.AtomicReference<>();
                 java.util.concurrent.atomic.AtomicReference<FFmpegRunner.RecorderSession> handleRef =
                     new java.util.concurrent.atomic.AtomicReference<>();
-                java.util.concurrent.atomic.AtomicBoolean addedCleanExitChunk =
-                    new java.util.concurrent.atomic.AtomicBoolean();
-                java.util.concurrent.atomic.AtomicBoolean startupFailurePreserved =
-                    new java.util.concurrent.atomic.AtomicBoolean();
                 RecorderLaunchCoordinator.CompletionBarrier completionBarrier =
                     new RecorderLaunchCoordinator.CompletionBarrier();
 
