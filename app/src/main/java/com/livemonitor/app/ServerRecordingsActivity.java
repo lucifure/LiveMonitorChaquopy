@@ -9,13 +9,11 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ListView;
-import android.widget.Spinner;
-import android.widget.ArrayAdapter;
+import android.widget.ImageButton;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,9 +35,10 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<RemoteRecording> recordings = new ArrayList<>();
-    private TextView statusView, diskView, errorView, emptyView;
-    private LinearLayout channelContainer;
-    private ServerAdapter adapter;
+    private TextView statusView, diskView, errorView, emptyView, subtitleView;
+    private EditText urlInput;
+    private LinearLayout channelContainer, recordingContainer;
+    private ProgressBar diskProgress;
     private boolean visible;
     private final Runnable poll = new Runnable() { @Override public void run() {
         if (visible) { refresh(); handler.postDelayed(this, 20_000L); }
@@ -53,26 +52,42 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     @Override public void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
 
     private View buildView() {
-        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(12)); root.setBackgroundResource(R.drawable.lm_screen_background);
-        LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("Live Monitor 2.0", 26); heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button add = new Button(this); add.setText("Add"); add.setAllCaps(false); add.setOnClickListener(v -> showAddChannelDialog()); heading.addView(add);
-        Button logs = new Button(this); logs.setText("Logs"); logs.setAllCaps(false); logs.setOnClickListener(v -> startActivity(new android.content.Intent(this, ServerLogActivity.class))); heading.addView(logs);
-        Button refresh = new Button(this); refresh.setText("Refresh"); refresh.setAllCaps(false); refresh.setOnClickListener(v -> refresh()); heading.addView(refresh);
-        root.addView(heading);
-        statusView = text("Checking server…", 15); statusView.setPadding(0, dp(12), 0, dp(4)); root.addView(statusView);
-        diskView = text("", 14); root.addView(diskView);
-        errorView = text("", 14); errorView.setTextColor(0xfff28b82); errorView.setPadding(0, dp(8), 0, dp(4)); root.addView(errorView);
-        TextView channelLabel = text("Server Channels", 20); channelLabel.setPadding(0, dp(16), 0, dp(6)); root.addView(channelLabel);
-        channelContainer = new LinearLayout(this); channelContainer.setOrientation(LinearLayout.VERTICAL); root.addView(channelContainer);
-        TextView label = text("Recordings", 20); label.setPadding(0, dp(16), 0, dp(6)); root.addView(label);
-        emptyView = text("No server recordings found.", 15); emptyView.setGravity(Gravity.CENTER); emptyView.setVisibility(View.GONE);
-        adapter = new ServerAdapter(); ListView list = new ListView(this); list.setAdapter(adapter); list.setEmptyView(emptyView); list.setDividerHeight(dp(6));
-        root.addView(emptyView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 3));
+        android.widget.ScrollView root = new android.widget.ScrollView(this);
+        root.setFillViewport(true); root.setBackgroundResource(R.drawable.lm_screen_background);
+        LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(20), dp(16), dp(20), dp(16)); root.addView(page);
+        android.widget.FrameLayout heading = new android.widget.FrameLayout(this);
+        heading.setMinimumHeight(dp(88));
+        LinearLayout titleGroup = new LinearLayout(this); titleGroup.setOrientation(LinearLayout.VERTICAL); titleGroup.setGravity(Gravity.CENTER);
+        android.widget.FrameLayout.LayoutParams centered = new android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        TextView title = text("Live Monitor 2.0", 30); title.setTypeface(android.graphics.Typeface.SERIF); title.setGravity(Gravity.CENTER); title.setSingleLine(true); titleGroup.addView(title);
+        subtitleView = text("Server · 0 channels", 15); subtitleView.setTextColor(0xff9ADAA0); subtitleView.setGravity(Gravity.CENTER); titleGroup.addView(subtitleView);
+        heading.addView(titleGroup, centered);
+        ImageButton logs = iconButton(R.drawable.ic_nav_logs, "Server logs");
+        android.widget.FrameLayout.LayoutParams logParams = new android.widget.FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL); heading.addView(logs, logParams);
+        logs.setOnClickListener(v -> startActivity(new android.content.Intent(this, ServerLogActivity.class))); page.addView(heading);
+
+        LinearLayout addRow = new LinearLayout(this); addRow.setGravity(Gravity.CENTER_VERTICAL); addRow.setBackgroundResource(R.drawable.lm_search_container_background);
+        addRow.setPadding(dp(14), dp(5), dp(5), dp(5)); LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(58)); addParams.topMargin = dp(4); page.addView(addRow, addParams);
+        urlInput = new EditText(this); urlInput.setSingleLine(true); urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); urlInput.setHint("Paste YouTube channel URL..."); urlInput.setTextColor(getResources().getColor(R.color.lm_text_primary)); urlInput.setHintTextColor(0xff91A0AA); urlInput.setTextSize(16); urlInput.setBackgroundColor(android.graphics.Color.TRANSPARENT); urlInput.setPadding(0, 0, dp(6), 0);
+        addRow.addView(urlInput, new LinearLayout.LayoutParams(0, -1, 1));
+        Button add = new Button(this); add.setText("＋  ADD"); add.setTextColor(getResources().getColor(R.color.lm_text_primary)); add.setTextSize(16); add.setTypeface(null, android.graphics.Typeface.BOLD); add.setBackgroundResource(R.drawable.lm_blue_add_pill_background); add.setStateListAnimator(null); add.setMinWidth(0); add.setMinimumWidth(0); add.setPadding(dp(14), 0, dp(14), 0); addRow.addView(add, new LinearLayout.LayoutParams(dp(112), -1)); add.setOnClickListener(v -> submitChannel());
+        ImageButton refresh = iconButton(R.drawable.ic_refresh_24, "Refresh server"); LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(dp(40), dp(44)); refreshParams.leftMargin = dp(3); addRow.addView(refresh, refreshParams); refresh.setOnClickListener(v -> refresh());
+
+        statusView = text("Checking server…", 14); statusView.setPadding(0, dp(10), 0, dp(2)); page.addView(statusView);
+        LinearLayout diskRow = new LinearLayout(this); diskRow.setOrientation(LinearLayout.VERTICAL); diskRow.setPadding(0, dp(3), 0, dp(2)); diskView = text("", 13); diskRow.addView(diskView);
+        diskProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); diskProgress.setMax(1000); if (android.os.Build.VERSION.SDK_INT >= 21) { diskProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(0xff5DEBFF)); diskProgress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0x5535404A)); }
+        diskRow.addView(diskProgress, new LinearLayout.LayoutParams(-1, dp(4))); diskRow.setVisibility(View.GONE); page.addView(diskRow); diskRow.setTag("disk_row");
+        errorView = text("", 14); errorView.setTextColor(0xfff28b82); errorView.setPadding(0, dp(6), 0, dp(2)); page.addView(errorView);
+        TextView channelLabel = text("Server Channels", 20); channelLabel.setPadding(0, dp(12), 0, dp(6)); page.addView(channelLabel);
+        channelContainer = new LinearLayout(this); channelContainer.setOrientation(LinearLayout.VERTICAL); page.addView(channelContainer);
+        TextView label = text("Recordings", 20); label.setPadding(0, dp(12), 0, dp(6)); page.addView(label);
+        emptyView = text("No server recordings found.", 15); emptyView.setGravity(Gravity.CENTER); page.addView(emptyView);
+        recordingContainer = new LinearLayout(this); recordingContainer.setOrientation(LinearLayout.VERTICAL); page.addView(recordingContainer);
         return root;
     }
+
+    private ImageButton iconButton(int icon, String description) { ImageButton button = new ImageButton(this); button.setImageResource(icon); button.setContentDescription(description); button.setPadding(dp(10), dp(10), dp(10), dp(10)); button.setBackgroundResource(android.R.drawable.list_selector_background); if (android.os.Build.VERSION.SDK_INT >= 21) button.setImageTintList(android.content.res.ColorStateList.valueOf(0xffAEB7C2)); return button; }
 
     private void refresh() {
         if (!OracleServerSettings.isConfigured(this)) { showError("Set the Server URL and API token in Settings → Oracle Server."); return; }
@@ -88,49 +103,57 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     }
 
     private void showData(JSONObject status, List<RemoteRecording> loaded) {
-        errorView.setText(""); StringBuilder summary = new StringBuilder(); boolean hasRecording = false; JSONArray list = status.optJSONArray("channels");
+        errorView.setText(""); JSONArray list = status.optJSONArray("channels");
         List<RemoteChannel> channels = new ArrayList<>();
         if (list != null) for (int i = 0; i < list.length(); i++) { JSONObject channel = list.optJSONObject(i); if (channel == null) continue;
             channels.add(RemoteChannel.from(channel));
-            if (summary.length() > 0) summary.append("\n"); String state = channel.optString("status", "unknown"); hasRecording |= "recording".equals(state);
-            summary.append("recording".equals(state) ? "● " : "○ ").append(channel.optString("name", "Channel")).append(" — ").append(state);
-            String title = channel.optString("title", ""); if (!title.isEmpty()) summary.append("\n   ").append(title);
         }
-        statusView.setText(summary.length() == 0 ? "No channels reported." : summary.toString());
-        statusView.setTextColor(hasRecording ? 0xffff6b6b : getResources().getColor(R.color.lm_text_primary));
-        JSONObject disk = status.optJSONObject("disk"); if (disk != null) diskView.setText("Disk: " + bytes(disk.optLong("free")) + " free of " + bytes(disk.optLong("total")));
+        statusView.setText(""); statusView.setVisibility(View.GONE); subtitleView.setText("Server · " + channels.size() + " " + (channels.size() == 1 ? "channel" : "channels"));
+        JSONObject disk = status.optJSONObject("disk"); View diskRow = (View) diskView.getParent();
+        if (disk != null && disk.optLong("total") > 0) { long total = disk.optLong("total"), free = disk.optLong("free"); diskView.setText("Disk: " + bytes(free) + " free of " + bytes(total)); diskProgress.setProgress((int) Math.max(0, Math.min(1000, ((total - free) * 1000L) / total))); diskRow.setVisibility(View.VISIBLE); } else diskRow.setVisibility(View.GONE);
         renderChannels(channels);
-        recordings.clear(); recordings.addAll(loaded); adapter.notifyDataSetChanged();
+        recordings.clear(); recordings.addAll(loaded); renderRecordings();
     }
-    private void showError(String message) { errorView.setText(message); statusView.setText("Server status unavailable."); diskView.setText(""); if (channelContainer != null) channelContainer.removeAllViews(); recordings.clear(); if (adapter != null) adapter.notifyDataSetChanged(); }
+    private void showError(String message) { errorView.setText(message); statusView.setText("Server status unavailable."); statusView.setVisibility(View.VISIBLE); diskView.setText(""); if (diskView.getParent() != null) ((View) diskView.getParent()).setVisibility(View.GONE); if (channelContainer != null) channelContainer.removeAllViews(); recordings.clear(); renderRecordings(); }
 
     private void renderChannels(List<RemoteChannel> channels) {
         channelContainer.removeAllViews();
         if (channels.isEmpty()) { channelContainer.addView(text("No configured server channels.", 14)); return; }
         for (RemoteChannel channel : channels) {
-            LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(12), dp(8), dp(12), dp(8)); row.setBackgroundResource(R.drawable.lm_glass_card_background);
+            LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(14), dp(12), dp(14), dp(10)); row.setBackgroundResource(R.drawable.lm_glass_card_background);
             boolean active = "recording".equals(channel.status) || "finalizing".equals(channel.status);
-            TextView name = text((active ? "● " : "○ ") + channel.name + " — " + channel.status, 16); name.setTextColor(active ? 0xffff6b6b : getResources().getColor(R.color.lm_text_primary)); row.addView(name);
+            TextView name = text((active ? "● " : "○ ") + channel.name + " — " + channel.status, 16); name.setTextColor(active ? 0xff9ADAA0 : getResources().getColor(R.color.lm_text_primary)); row.addView(name);
             String detail = channel.quality + " · " + (channel.title.isEmpty() ? channel.url : channel.title); if (!channel.lastError.isEmpty()) detail += "\nError: " + channel.lastError;
-            TextView info = text(detail, 13); info.setTextColor(channel.lastError.isEmpty() ? 0xffb0bec5 : 0xffff8a80); row.addView(info);
-            LinearLayout actions = new LinearLayout(this); Button start = button("paused".equals(channel.status) ? "Resume" : "Start"); start.setEnabled("paused".equals(channel.status) || "idle".equals(channel.status)); start.setOnClickListener(v -> channelAction(channel, "paused".equals(channel.status) ? "resume" : "start"));
-            Button stop = button("Stop"); stop.setEnabled(!"paused".equals(channel.status)); stop.setOnClickListener(v -> channelAction(channel, "stop"));
-            Button delete = button("Delete"); delete.setEnabled(!active); delete.setOnClickListener(v -> confirmDeleteChannel(channel)); actions.addView(start); actions.addView(stop); actions.addView(delete); row.addView(actions);
+            TextView info = text(detail, 13); info.setTextColor(channel.lastError.isEmpty() ? 0xffb0bec5 : 0xffff8a80); info.setPadding(0, dp(4), 0, dp(3)); row.addView(info);
+            LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END); Button start = actionButton("paused".equals(channel.status) ? "Resume" : "Start", R.drawable.ic_play_arrow_24, false); start.setEnabled("paused".equals(channel.status) || "idle".equals(channel.status)); start.setOnClickListener(v -> channelAction(channel, "paused".equals(channel.status) ? "resume" : "start"));
+            Button stop = actionButton("Stop", R.drawable.ic_stop_24, false); stop.setEnabled(!"paused".equals(channel.status)); stop.setOnClickListener(v -> channelAction(channel, "stop"));
+            Button delete = actionButton("Delete", R.drawable.ic_delete_24, true); delete.setEnabled(!active); delete.setOnClickListener(v -> confirmDeleteChannel(channel)); actions.addView(start); actions.addView(stop); actions.addView(delete); row.addView(actions);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); lp.bottomMargin = dp(6); channelContainer.addView(row, lp);
         }
     }
 
-    private Button button(String label) { Button button = new Button(this); button.setText(label); button.setAllCaps(false); return button; }
-    private void showAddChannelDialog() {
-        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); int padding = dp(20); content.setPadding(padding, 0, padding, 0);
-        EditText name = new EditText(this); name.setHint("Channel ID (letters, digits, _ or -)"); content.addView(name);
-        EditText url = new EditText(this); url.setHint("https://www.youtube.com/@handle/live"); content.addView(url);
-        Spinner quality = new Spinner(this); String[] options = {"480p", "360p", "720p", "1080p", "best"}; quality.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, options)); content.addView(quality);
-        new AlertDialog.Builder(this).setTitle("Add server channel").setView(content).setNegativeButton("Cancel", null).setPositiveButton("Add", (d, which) -> {
-            JSONObject body = new JSONObject(); try { body.put("name", name.getText().toString().trim()); body.put("url", url.getText().toString().trim()); body.put("quality", String.valueOf(quality.getSelectedItem())); } catch (Exception ignored) { }
-            executor.execute(() -> { try { new OracleControlClient(this).post("/channels", body); runOnUiThread(() -> { Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } });
-        }).show();
+    private Button actionButton(String label, int icon, boolean destructive) { Button button = new Button(this); button.setText(label); button.setAllCaps(false); button.setTextSize(13); button.setTextColor(getResources().getColor(R.color.lm_text_primary)); button.setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); button.setCompoundDrawablePadding(dp(4)); button.setBackgroundResource(destructive ? R.drawable.lm_button_delete_background : R.drawable.lm_glass_button_background); button.setPadding(dp(10), 0, dp(10), 0); button.setMinHeight(dp(36)); button.setMinimumHeight(dp(36)); LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(36)); params.leftMargin = dp(5); button.setLayoutParams(params); return button; }
+    private void submitChannel() {
+        String url = urlInput.getText().toString().trim(); if (url.isEmpty()) { urlInput.setError("Paste a YouTube channel URL"); return; }
+        List<String> segments = Uri.parse(url).getPathSegments();
+        String path = segments.isEmpty() ? "channel" : segments.get(segments.size() - 1);
+        if ("live".equalsIgnoreCase(path) && segments.size() > 1) path = segments.get(segments.size() - 2);
+        String name = path.replaceFirst("(?i)\\.(html?|php)$", "").replaceAll("[^A-Za-z0-9_-]", "_"); if (name.isEmpty()) name = "channel";
+        JSONObject body = new JSONObject(); try { body.put("name", name); body.put("url", url); body.put("quality", "480p"); } catch (Exception ignored) { return; }
+        executor.execute(() -> { try { new OracleControlClient(this).post("/channels", body); runOnUiThread(() -> { urlInput.setText(""); Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } });
     }
+    private void renderRecordings() {
+        if (recordingContainer == null) return;
+        recordingContainer.removeAllViews(); emptyView.setVisibility(recordings.isEmpty() ? View.VISIBLE : View.GONE);
+        for (RemoteRecording r : recordings) {
+            LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(12), dp(10), dp(12), dp(10)); row.setBackgroundResource(R.drawable.lm_glass_card_background);
+            TextView name = text(r.name, 16); if (r.inProgress) name.setAlpha(.5f); row.addView(name);
+            TextView details = text(bytes(r.size) + " · " + relative(r.modified) + (r.inProgress ? " · Recording…" : ""), 13); details.setTextColor(r.inProgress ? 0xff9e9e9e : 0xffb0bec5); row.addView(details);
+            if (!r.inProgress) { LinearLayout actions = new LinearLayout(this); Button down = button("Download"); down.setOnClickListener(v -> download(r)); Button del = button("Delete"); del.setOnClickListener(v -> confirmDelete(r)); actions.addView(down); actions.addView(del); row.addView(actions); }
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.bottomMargin = dp(6); recordingContainer.addView(row, params);
+        }
+    }
+    private Button button(String label) { Button button = new Button(this); button.setText(label); button.setAllCaps(false); return button; }
     private void channelAction(RemoteChannel channel, String action) { executor.execute(() -> { try { new OracleControlClient(this).post("/channels/" + Uri.encode(channel.name) + "/" + action, new JSONObject()); runOnUiThread(() -> { Toast.makeText(this, "Channel " + action + " requested.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } }); }
     private void confirmDeleteChannel(RemoteChannel channel) { new AlertDialog.Builder(this).setTitle("Remove channel?").setMessage("Remove " + channel.name + " from server monitoring? Existing recordings are kept.").setNegativeButton("Cancel", null).setPositiveButton("Remove", (d, w) -> deleteChannel(channel)).show(); }
     private void deleteChannel(RemoteChannel channel) { executor.execute(() -> { try { new OracleControlClient(this).delete("/channels/" + Uri.encode(channel.name)); runOnUiThread(() -> { Toast.makeText(this, "Channel removed.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } }); }
@@ -162,10 +185,4 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private static String relative(long seconds) { long delta = Math.max(0, System.currentTimeMillis() / 1000 - seconds); if (delta < 60) return "just now"; if (delta < 3600) return delta / 60 + " minutes ago"; if (delta < 86400) return delta / 3600 + " hours ago"; return delta / 86400 + " days ago"; }
     private static final class RemoteRecording { String name; long size, modified; boolean inProgress; static RemoteRecording from(JSONObject json) { RemoteRecording r = new RemoteRecording(); r.name = json.optString("name"); r.size = json.optLong("size"); r.modified = json.optLong("modified"); r.inProgress = json.optBoolean("in_progress"); return r; } }
     private static final class RemoteChannel { String name, url, quality, status, title, lastError; static RemoteChannel from(JSONObject json) { RemoteChannel channel = new RemoteChannel(); channel.name = json.optString("name"); channel.url = json.optString("url"); channel.quality = json.optString("quality", "480p"); channel.status = json.optString("status", "unknown"); channel.title = json.optString("title"); channel.lastError = json.optString("last_error"); return channel; } }
-    private final class ServerAdapter extends BaseAdapter {
-        @Override public int getCount() { return recordings.size(); } @Override public Object getItem(int i) { return recordings.get(i); } @Override public long getItemId(int i) { return i; }
-        @Override public View getView(int position, View convert, ViewGroup parent) { RemoteRecording r = recordings.get(position); LinearLayout row = new LinearLayout(ServerRecordingsActivity.this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(12), dp(10), dp(12), dp(10)); row.setBackgroundResource(R.drawable.lm_glass_card_background);
-            TextView name = text(r.name, 16); if (r.inProgress) name.setAlpha(.5f); row.addView(name); TextView details = text(bytes(r.size) + " · " + relative(r.modified) + (r.inProgress ? " · Recording…" : ""), 13); details.setTextColor(r.inProgress ? 0xff9e9e9e : 0xffb0bec5); row.addView(details);
-            if (!r.inProgress) { LinearLayout actions = new LinearLayout(ServerRecordingsActivity.this); Button down = new Button(ServerRecordingsActivity.this); down.setText("Download"); down.setAllCaps(false); down.setOnClickListener(v -> download(r)); Button del = new Button(ServerRecordingsActivity.this); del.setText("Delete"); del.setAllCaps(false); del.setOnClickListener(v -> confirmDelete(r)); actions.addView(down); actions.addView(del); row.addView(actions); } return row; }
-    }
 }
