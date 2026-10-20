@@ -11,12 +11,18 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.net.Uri;
+import android.database.DataSetObserver;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.ArrayAdapter;
+import android.widget.TextView;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
@@ -38,8 +44,7 @@ import java.util.Set;
  *
  * Layout:
  * - fixed top URL input + Add Channel button
- * - Monitoring tab
- * - Downloading tab for active downloads/recordings
+ * - Combined monitoring and active downloads list
  * - 3-dot menu for logs, downloaded files, settings
  */
 public class MainActivity extends AppCompatActivity {
@@ -54,14 +59,14 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable downloadTimerRefresh = new Runnable() {
         @Override
         public void run() {
-            if (!showingMonitoring && recordingAdapter != null) {
+            if (recordingAdapter != null) {
                 refreshAll();
             }
             timerHandler.postDelayed(this, 15_000L);
         }
     };
 
-    private boolean showingMonitoring = true;
+    private HomeSectionsAdapter homeSectionsAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,7 +84,6 @@ public class MainActivity extends AppCompatActivity {
 
         fetchRemoteConfigOnStart();
         refreshAll();
-        showMonitoringTab();
         timerHandler.postDelayed(downloadTimerRefresh, 15_000L);
 
         storage.appendLog(LogItem.info(LogItem.SOURCE_UI, "Live Monitor opened."));
@@ -88,6 +92,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (binding != null) binding.bottomNavigation.setSelectedItemId(R.id.nav_monitoring);
         refreshAll();
     }
 
@@ -160,23 +165,23 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        setupMonitoringListHeader();
-        binding.channelListView.setAdapter(channelAdapter);
-
-        binding.recordingListView.setAdapter(recordingAdapter);
-        binding.recordingListView.setEmptyView(binding.emptyDownloadsText);
+        setupHomeListHeader();
+        homeSectionsAdapter = new HomeSectionsAdapter();
+        DataSetObserver sectionObserver = new DataSetObserver() {
+            @Override public void onChanged() { if (homeSectionsAdapter != null) homeSectionsAdapter.notifyDataSetChanged(); }
+            @Override public void onInvalidated() { if (homeSectionsAdapter != null) homeSectionsAdapter.notifyDataSetInvalidated(); }
+        };
+        channelAdapter.registerDataSetObserver(sectionObserver);
+        recordingAdapter.registerDataSetObserver(sectionObserver);
+        binding.homeListView.setAdapter(homeSectionsAdapter);
     }
 
 
-    private void setupMonitoringListHeader() {
+    private void setupHomeListHeader() {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
-
-        moveToHeader(binding.monitoringHeader, header);
         moveToHeader(binding.storageHealthCard, header);
-        moveToHeader(binding.emptyMonitoringText, header);
-
-        binding.channelListView.addHeaderView(header, null, false);
+        binding.homeListView.addHeaderView(header, null, false);
     }
 
     private static void moveToHeader(View view, LinearLayout header) {
@@ -194,12 +199,6 @@ public class MainActivity extends AppCompatActivity {
             int itemId = item.getItemId();
 
             if (itemId == R.id.nav_monitoring) {
-                showMonitoringTab();
-                return true;
-            }
-
-            if (itemId == R.id.nav_downloading) {
-                showDownloadsTab();
                 return true;
             }
 
@@ -208,8 +207,13 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             }
 
-            if (itemId == R.id.nav_settings) {
+            if (itemId == R.id.nav_server) {
                 startActivity(new Intent(this, ServerRecordingsActivity.class));
+                return true;
+            }
+
+            if (itemId == R.id.nav_logs) {
+                startActivity(new Intent(this, LogActivity.class));
                 return true;
             }
 
@@ -255,10 +259,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleUrlSubmit() {
-        if (showingMonitoring) {
-            addChannelFromInput();
-        } else {
+        String url = cleanUrl(binding.urlInput.getText().toString());
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Please enter a YouTube channel URL.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (YouTubeUrlUtils.isDirectVideoUrl(url)) {
+            binding.urlInput.setText(url);
             downloadVideoFromInput();
+        } else {
+            addChannelFromInput();
         }
     }
 
@@ -267,11 +277,6 @@ public class MainActivity extends AppCompatActivity {
 
         if (url.isEmpty()) {
             Toast.makeText(this, "Please enter a YouTube channel URL.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (YouTubeUrlUtils.isDirectVideoUrl(url)) {
-            Toast.makeText(this, "To download a completed livestream, go to the Downloads tab.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -327,7 +332,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (!YouTubeUrlUtils.isDirectVideoUrl(url)) {
-            Toast.makeText(this, "To monitor a channel, go to the Home tab.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Paste a YouTube video URL to download.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -725,28 +730,6 @@ public class MainActivity extends AppCompatActivity {
         startActivity(intent);
     }
 
-    private void showMonitoringTab() {
-        showingMonitoring = true;
-
-        binding.monitoringPanel.setVisibility(View.VISIBLE);
-        binding.downloadsPanel.setVisibility(View.GONE);
-        binding.urlInput.setHint("Paste YouTube channel URL...");
-        binding.btnAddChannel.setText("＋  ADD");
-
-        refreshAll();
-    }
-
-    private void showDownloadsTab() {
-        showingMonitoring = false;
-
-        binding.monitoringPanel.setVisibility(View.GONE);
-        binding.downloadsPanel.setVisibility(View.VISIBLE);
-        binding.urlInput.setHint("Paste YouTube video URL");
-        binding.btnAddChannel.setText("⇩  GET");
-
-        refreshAll();
-    }
-
     private void refreshAll() {
         reconcileStaleRecordingCards();
         List<ChannelItem> channels = loadVisibleMonitoringChannels();
@@ -770,15 +753,7 @@ public class MainActivity extends AppCompatActivity {
             binding.statusText.setText("Remote config ready");
         }
 
-        if (showingMonitoring) {
-            binding.emptyMonitoringText.setVisibility(
-                channels.isEmpty() ? View.VISIBLE : View.GONE
-            );
-        } else {
-            binding.emptyDownloadsText.setVisibility(
-                recordings.isEmpty() ? View.VISIBLE : View.GONE
-            );
-        }
+        if (homeSectionsAdapter != null) homeSectionsAdapter.notifyDataSetChanged();
     }
 
 
@@ -962,5 +937,85 @@ public class MainActivity extends AppCompatActivity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private final class HomeSectionsAdapter extends BaseAdapter {
+        private static final int EMPTY = 0;
+        private static final int CHANNEL_HEADER = 1;
+        private static final int CHANNEL = 2;
+        private static final int DOWNLOAD_HEADER = 3;
+        private static final int DOWNLOAD = 4;
+
+        private int channelCount() { return channelAdapter.getCount(); }
+        private int downloadCount() { return recordingAdapter.getCount(); }
+
+        @Override public int getCount() {
+            int channels = channelCount(), downloads = downloadCount();
+            if (channels == 0 && downloads == 0) return 1;
+            return channels + downloads + (channels > 0 ? 1 : 0) + (downloads > 0 ? 1 : 0);
+        }
+
+        @Override public int getItemViewType(int position) {
+            int channels = channelCount(), downloads = downloadCount();
+            if (channels == 0 && downloads == 0) return EMPTY;
+            int index = position;
+            if (channels > 0) {
+                if (index-- == 0) return CHANNEL_HEADER;
+                if (index < channels) return CHANNEL;
+                index -= channels;
+            }
+            if (downloads > 0) {
+                if (index-- == 0) return DOWNLOAD_HEADER;
+                if (index < downloads) return DOWNLOAD;
+            }
+            return EMPTY;
+        }
+
+        @Override public int getViewTypeCount() { return 5; }
+        @Override public boolean hasStableIds() { return false; }
+        @Override public boolean isEnabled(int position) {
+            int type = getItemViewType(position);
+            return type == CHANNEL || type == DOWNLOAD;
+        }
+        @Override public Object getItem(int position) {
+            int type = getItemViewType(position);
+            int index = position;
+            if (channelCount() > 0) {
+                if (type == CHANNEL_HEADER) return "Monitoring";
+                index--;
+                if (type == CHANNEL) return channelAdapter.getItem(index);
+                index -= channelCount();
+            }
+            if (downloadCount() > 0) {
+                if (type == DOWNLOAD_HEADER) return "Downloading";
+                index--;
+                if (type == DOWNLOAD) return recordingAdapter.getItem(index);
+            }
+            return "No channels yet. Paste a YouTube link above.";
+        }
+        @Override public long getItemId(int position) { return position; }
+
+        @Override public View getView(int position, View convertView, ViewGroup parent) {
+            int type = getItemViewType(position);
+            if (type == CHANNEL || type == DOWNLOAD) {
+                int index = position;
+                if (channelCount() > 0) {
+                    index--;
+                    if (type == CHANNEL) return channelAdapter.getView(index, convertView, parent);
+                    index -= channelCount();
+                }
+                index--;
+                return recordingAdapter.getView(index, convertView, parent);
+            }
+
+            TextView label = convertView instanceof TextView ? (TextView) convertView : new TextView(MainActivity.this);
+            label.setText(type == EMPTY ? "No channels yet. Paste a YouTube link above." : (type == CHANNEL_HEADER ? "Monitoring" : "Downloading"));
+            label.setTextColor(type == EMPTY ? getResources().getColor(R.color.text_secondary) : Color.WHITE);
+            label.setTextSize(type == EMPTY ? 14 : 22);
+            label.setTypeface(null, type == EMPTY ? Typeface.NORMAL : Typeface.BOLD);
+            label.setGravity(type == EMPTY ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
+            label.setPadding(0, dp(type == EMPTY ? 20 : 12), 0, dp(type == EMPTY ? 20 : 8));
+            return label;
+        }
     }
 }

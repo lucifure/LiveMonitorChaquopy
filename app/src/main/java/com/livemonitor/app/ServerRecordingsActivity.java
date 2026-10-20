@@ -138,7 +138,11 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         List<String> segments = Uri.parse(url).getPathSegments();
         String path = segments.isEmpty() ? "channel" : segments.get(segments.size() - 1);
         if ("live".equalsIgnoreCase(path) && segments.size() > 1) path = segments.get(segments.size() - 2);
-        String name = path.replaceFirst("(?i)\\.(html?|php)$", "").replaceAll("[^A-Za-z0-9_-]", "_"); if (name.isEmpty()) name = "channel";
+        while (path.startsWith("@")) path = path.substring(1);
+        String name = path.replaceFirst("(?i)\\.(html?|php)$", "").replaceAll("[^A-Za-z0-9_-]", "_").replaceAll("^_+|_+$", "");
+        if (name.length() > 64) name = name.substring(0, 64);
+        name = name.replaceAll("^_+|_+$", "");
+        if (name.isEmpty()) name = "channel";
         JSONObject body = new JSONObject(); try { body.put("name", name); body.put("url", url); body.put("quality", "480p"); } catch (Exception ignored) { return; }
         executor.execute(() -> { try { new OracleControlClient(this).post("/channels", body); runOnUiThread(() -> { urlInput.setText(""); Toast.makeText(this, "Channel added.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } });
     }

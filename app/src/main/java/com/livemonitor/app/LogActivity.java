@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.view.Gravity;
@@ -77,6 +78,8 @@ public class LogActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         );
+
+        addLogModeToggle(root, true);
 
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -157,6 +160,24 @@ public class LogActivity extends AppCompatActivity {
         root.addView(emptyView, emptyParams);
 
         return root;
+    }
+
+    private void addLogModeToggle(LinearLayout parent, boolean appSelected) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        Button app = new Button(this); app.setText("App Log"); app.setAllCaps(false);
+        Button server = new Button(this); server.setText("Server Log"); server.setAllCaps(false);
+        styleLogModeButton(app, appSelected); styleLogModeButton(server, !appSelected);
+        app.setOnClickListener(v -> {});
+        server.setOnClickListener(v -> { startActivity(new Intent(this, ServerLogActivity.class)); overridePendingTransition(0, 0); finish(); });
+        row.addView(app, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        LinearLayout.LayoutParams serverParams = new LinearLayout.LayoutParams(0, dp(40), 1f); serverParams.leftMargin = dp(6); row.addView(server, serverParams);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); rowParams.bottomMargin = dp(8); parent.addView(row, rowParams);
+    }
+
+    private void styleLogModeButton(Button button, boolean selected) {
+        button.setTextColor(selected ? Color.WHITE : Color.rgb(190, 190, 190));
+        button.setBackgroundResource(selected ? R.drawable.lm_blue_add_pill_background : R.drawable.lm_glass_button_background);
     }
 
     private void refreshLogs() {

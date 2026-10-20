@@ -3,6 +3,7 @@ package com.livemonitor.app;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.SpannableStringBuilder;
@@ -55,6 +56,7 @@ public class ServerLogActivity extends AppCompatActivity {
         root.setPadding(dp(12), dp(12), dp(12), dp(12)); root.setBackgroundColor(Color.rgb(15, 15, 15));
         root.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         TextView title = new TextView(this); title.setText("Server Log"); title.setTextSize(22); title.setTextColor(Color.WHITE); title.setPadding(0, 0, 0, dp(3)); root.addView(title);
+        addLogModeToggle(root, false);
         subtitle = new TextView(this); subtitle.setTextColor(Color.rgb(190, 190, 190)); subtitle.setTextSize(12); subtitle.setPadding(0, 0, 0, dp(8)); root.addView(subtitle);
 
         LinearLayout filters = new LinearLayout(this); filters.setGravity(Gravity.CENTER);
@@ -68,6 +70,23 @@ public class ServerLogActivity extends AppCompatActivity {
         LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f); logParams.topMargin = dp(6); root.addView(scrollView, logParams);
         Button close = new Button(this); close.setText("Close"); close.setAllCaps(false); close.setOnClickListener(v -> finish()); root.addView(close);
         updateFilterButtons(); return root;
+    }
+
+    private void addLogModeToggle(LinearLayout parent, boolean appSelected) {
+        LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
+        Button app = new Button(this); app.setText("App Log"); app.setAllCaps(false);
+        Button server = new Button(this); server.setText("Server Log"); server.setAllCaps(false);
+        styleLogModeButton(app, appSelected); styleLogModeButton(server, !appSelected);
+        app.setOnClickListener(v -> { startActivity(new Intent(this, LogActivity.class)); overridePendingTransition(0, 0); finish(); });
+        server.setOnClickListener(v -> {});
+        row.addView(app, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        LinearLayout.LayoutParams serverParams = new LinearLayout.LayoutParams(0, dp(40), 1f); serverParams.leftMargin = dp(6); row.addView(server, serverParams);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); params.bottomMargin = dp(8); parent.addView(row, params);
+    }
+
+    private void styleLogModeButton(Button button, boolean selected) {
+        button.setTextColor(selected ? Color.WHITE : Color.rgb(190, 190, 190));
+        button.setBackgroundResource(selected ? R.drawable.lm_blue_add_pill_background : R.drawable.lm_glass_button_background);
     }
 
     private void addFilter(LinearLayout row, String label, String filter) {
