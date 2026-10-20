@@ -58,7 +58,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text("Live Monitor 2.0", 26); heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button add = new Button(this); add.setText("Add"); add.setAllCaps(false); add.setOnClickListener(v -> showAddChannelDialog()); heading.addView(add);
-        Button logs = new Button(this); logs.setText("Logs"); logs.setAllCaps(false); logs.setOnClickListener(v -> showLogs()); heading.addView(logs);
+        Button logs = new Button(this); logs.setText("Logs"); logs.setAllCaps(false); logs.setOnClickListener(v -> startActivity(new android.content.Intent(this, ServerLogActivity.class))); heading.addView(logs);
         Button refresh = new Button(this); refresh.setText("Refresh"); refresh.setAllCaps(false); refresh.setOnClickListener(v -> refresh()); heading.addView(refresh);
         root.addView(heading);
         statusView = text("Checking server…", 15); statusView.setPadding(0, dp(12), 0, dp(4)); root.addView(statusView);
@@ -134,8 +134,6 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private void channelAction(RemoteChannel channel, String action) { executor.execute(() -> { try { new OracleControlClient(this).post("/channels/" + Uri.encode(channel.name) + "/" + action, new JSONObject()); runOnUiThread(() -> { Toast.makeText(this, "Channel " + action + " requested.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } }); }
     private void confirmDeleteChannel(RemoteChannel channel) { new AlertDialog.Builder(this).setTitle("Remove channel?").setMessage("Remove " + channel.name + " from server monitoring? Existing recordings are kept.").setNegativeButton("Cancel", null).setPositiveButton("Remove", (d, w) -> deleteChannel(channel)).show(); }
     private void deleteChannel(RemoteChannel channel) { executor.execute(() -> { try { new OracleControlClient(this).delete("/channels/" + Uri.encode(channel.name)); runOnUiThread(() -> { Toast.makeText(this, "Channel removed.", Toast.LENGTH_SHORT).show(); refresh(); }); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, actionError(error), Toast.LENGTH_LONG).show()); } }); }
-    private void showLogs() { executor.execute(() -> { try { JSONObject response = new OracleControlClient(this).get("/logs?limit=200"); JSONArray lines = response.optJSONArray("lines"); StringBuilder text = new StringBuilder(); if (lines != null) for (int i = 0; i < lines.length(); i++) text.append(lines.optString(i)).append('\n'); runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Server logs").setMessage(text.length() == 0 ? "No log lines." : text.toString()).setPositiveButton("Close", null).show()); } catch (Exception error) { runOnUiThread(() -> Toast.makeText(this, readableError(error), Toast.LENGTH_LONG).show()); } }); }
-
     private void confirmDelete(RemoteRecording recording) {
         new AlertDialog.Builder(this).setTitle("Delete recording?").setMessage("Delete " + recording.name + "? This cannot be undone.")
             .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d, w) -> delete(recording)).show();

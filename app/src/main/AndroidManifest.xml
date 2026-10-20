@@ -102,6 +102,7 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity android:name=".ServerRecordingsActivity" android:exported="false" />
+        <activity android:name=".ServerLogActivity" android:exported="false" />
 
         <!-- Foreground monitoring service:
              - Multi-channel monitoring

@@ -17,7 +17,11 @@ final class LogFileSaver {
     private LogFileSaver() {}
 
     static String save(Context context, AppStorage storage, String text) throws Exception {
-        String fileName = "LiveMonitor_Log_"
+        return save(context, storage, text, "LiveMonitor_Log_");
+    }
+
+    static String save(Context context, AppStorage storage, String text, String filePrefix) throws Exception {
+        String fileName = filePrefix
             + new SimpleDateFormat("ddMMyyyy_HHmmss", Locale.US).format(new Date())
             + ".txt";
         byte[] bytes = (text == null ? "" : text).getBytes(StandardCharsets.UTF_8);
