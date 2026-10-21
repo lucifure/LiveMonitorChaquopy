@@ -78,9 +78,14 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         });
 
         setTitle("Past Recordings");
-        setContentView(buildContentView());
+        setContentView(AppChrome.wrapWithBottomNav(this, buildContentView(), R.id.nav_files));
 
         refreshFiles();
+    }
+
+    @Override
+    public void onBackPressed() {
+        AppChrome.handleBack(this);
     }
 
     @Override
@@ -100,20 +105,13 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         titleRow.setPadding(0, 0, 0, dp(8));
 
-        ImageButton backButton = new ImageButton(this);
-        backButton.setImageResource(R.drawable.ic_arrow_back_24);
-        backButton.setColorFilter(getResources().getColor(R.color.lm_text_primary));
-        backButton.setBackgroundColor(Color.TRANSPARENT);
-        backButton.setContentDescription("Back");
-        backButton.setOnClickListener(v -> finish());
-        titleRow.addView(backButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
-
         TextView title = new TextView(this);
         title.setText("Past Recordings");
         title.setTextSize(30);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setTextColor(getResources().getColor(R.color.lm_text_primary));
         titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titleRow.addView(AppChrome.settingsButton(this), new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         root.addView(
             titleRow,

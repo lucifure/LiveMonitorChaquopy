@@ -45,8 +45,9 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     }};
 
     @Override public void onCreate(Bundle state) {
-        super.onCreate(state); setTitle("Server Recordings"); setContentView(buildView());
+        super.onCreate(state); setTitle("Server Recordings"); setContentView(AppChrome.wrapWithBottomNav(this, buildView(), R.id.nav_server));
     }
+    @Override public void onBackPressed() { AppChrome.handleBack(this); }
     @Override public void onStart() { super.onStart(); visible = true; refresh(); handler.postDelayed(poll, 20_000L); }
     @Override public void onStop() { visible = false; handler.removeCallbacks(poll); super.onStop(); }
     @Override public void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
@@ -63,15 +64,14 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         TextView title = text("Live Monitor 2.0", 30); title.setTypeface(android.graphics.Typeface.SERIF); title.setGravity(Gravity.CENTER); title.setSingleLine(true); titleGroup.addView(title);
         subtitleView = text("Server · 0 channels", 15); subtitleView.setTextColor(0xff9ADAA0); subtitleView.setGravity(Gravity.CENTER); titleGroup.addView(subtitleView);
         heading.addView(titleGroup, centered);
-        ImageButton logs = iconButton(R.drawable.ic_nav_logs, "Server logs");
-        android.widget.FrameLayout.LayoutParams logParams = new android.widget.FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL); heading.addView(logs, logParams);
-        logs.setOnClickListener(v -> startActivity(new android.content.Intent(this, ServerLogActivity.class))); page.addView(heading);
+        ImageButton settings = AppChrome.settingsButton(this);
+        android.widget.FrameLayout.LayoutParams settingsParams = new android.widget.FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL); heading.addView(settings, settingsParams); page.addView(heading);
 
         LinearLayout addRow = new LinearLayout(this); addRow.setGravity(Gravity.CENTER_VERTICAL); addRow.setBackgroundResource(R.drawable.lm_search_container_background);
         addRow.setPadding(dp(14), dp(5), dp(5), dp(5)); LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(58)); addParams.topMargin = dp(4); page.addView(addRow, addParams);
         urlInput = new EditText(this); urlInput.setSingleLine(true); urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); urlInput.setHint("Paste YouTube channel URL..."); urlInput.setTextColor(getResources().getColor(R.color.lm_text_primary)); urlInput.setHintTextColor(0xff91A0AA); urlInput.setTextSize(16); urlInput.setBackgroundColor(android.graphics.Color.TRANSPARENT); urlInput.setPadding(0, 0, dp(6), 0);
         addRow.addView(urlInput, new LinearLayout.LayoutParams(0, -1, 1));
-        Button add = new Button(this); add.setText("＋  ADD"); add.setTextColor(getResources().getColor(R.color.lm_text_primary)); add.setTextSize(16); add.setTypeface(null, android.graphics.Typeface.BOLD); add.setBackgroundResource(R.drawable.lm_blue_add_pill_background); add.setStateListAnimator(null); add.setMinWidth(0); add.setMinimumWidth(0); add.setPadding(dp(14), 0, dp(14), 0); addRow.addView(add, new LinearLayout.LayoutParams(dp(112), -1)); add.setOnClickListener(v -> submitChannel());
+        Button add = new Button(this); add.setText("＋  ADD"); add.setTextColor(getResources().getColor(R.color.text)); add.setTextSize(18); add.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.BOLD)); add.setLetterSpacing(0.05f); add.setBackgroundResource(R.drawable.lm_blue_add_pill_background); add.setStateListAnimator(null); add.setMinWidth(0); add.setMinimumWidth(0); add.setPadding(dp(14), 0, dp(14), 0); addRow.addView(add, new LinearLayout.LayoutParams(dp(130), -1)); add.setOnClickListener(v -> submitChannel());
         ImageButton refresh = iconButton(R.drawable.ic_refresh_24, "Refresh server"); LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(dp(40), dp(44)); refreshParams.leftMargin = dp(3); addRow.addView(refresh, refreshParams); refresh.setOnClickListener(v -> refresh());
 
         statusView = text("Checking server…", 14); statusView.setPadding(0, dp(10), 0, dp(2)); page.addView(statusView);

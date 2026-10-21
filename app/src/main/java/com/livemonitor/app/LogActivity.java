@@ -44,12 +44,17 @@ public class LogActivity extends AppCompatActivity {
         adapter = new LogAdapter(this);
 
         setTitle("Global Log");
-        setContentView(buildContentView());
+        setContentView(AppChrome.wrapWithBottomNav(this, buildContentView(), R.id.nav_logs));
 
         refreshLogs();
         if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_VIEW_SELECT_ON_OPEN, false)) {
             listView.post(this::viewSelectFullLog);
         }
+    }
+
+    @Override
+    public void onBackPressed() {
+        AppChrome.handleBack(this);
     }
 
     @Override
@@ -65,19 +70,19 @@ public class LogActivity extends AppCompatActivity {
         root.setBackgroundColor(Color.rgb(15, 15, 15));
         root.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(this);
         title.setText("Global Log");
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, 0, 0, dp(8));
         title.setTextColor(Color.WHITE);
-        root.addView(
-            title,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        );
+        titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titleRow.addView(AppChrome.settingsButton(this), new LinearLayout.LayoutParams(dp(48), dp(48)));
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleParams.bottomMargin = dp(8);
+        root.addView(titleRow, titleParams);
 
         addLogModeToggle(root, true);
 

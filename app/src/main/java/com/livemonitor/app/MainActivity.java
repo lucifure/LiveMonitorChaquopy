@@ -195,30 +195,7 @@ public class MainActivity extends AppCompatActivity {
     private void setupClickListeners() {
         binding.btnAddChannel.setOnClickListener(v -> handleUrlSubmit());
 
-        binding.bottomNavigation.setOnItemSelectedListener(item -> {
-            int itemId = item.getItemId();
-
-            if (itemId == R.id.nav_monitoring) {
-                return true;
-            }
-
-            if (itemId == R.id.nav_files) {
-                startActivity(new Intent(this, DownloadedFilesActivity.class));
-                return true;
-            }
-
-            if (itemId == R.id.nav_server) {
-                startActivity(new Intent(this, ServerRecordingsActivity.class));
-                return true;
-            }
-
-            if (itemId == R.id.nav_logs) {
-                startActivity(new Intent(this, LogActivity.class));
-                return true;
-            }
-
-            return false;
-        });
+        AppChrome.setupNav(this, binding.bottomNavigation, R.id.nav_monitoring);
 
         binding.btnMenu.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
     }

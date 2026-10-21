@@ -45,17 +45,22 @@ public class ServerLogActivity extends AppCompatActivity {
         super.onCreate(state);
         storage = new AppStorage(this);
         setTitle("Server Log");
-        setContentView(buildView());
+        setContentView(AppChrome.wrapWithBottomNav(this, buildView(), R.id.nav_logs));
         refresh();
     }
 
     @Override protected void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
+    @Override public void onBackPressed() { AppChrome.handleBack(this); }
 
     private View buildView() {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(12), dp(12), dp(12)); root.setBackgroundColor(Color.rgb(15, 15, 15));
         root.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        TextView title = new TextView(this); title.setText("Server Log"); title.setTextSize(22); title.setTextColor(Color.WHITE); title.setPadding(0, 0, 0, dp(3)); root.addView(title);
+        LinearLayout titleRow = new LinearLayout(this); titleRow.setOrientation(LinearLayout.HORIZONTAL); titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = new TextView(this); title.setText("Server Log"); title.setTextSize(22); title.setTextColor(Color.WHITE);
+        titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titleRow.addView(AppChrome.settingsButton(this), new LinearLayout.LayoutParams(dp(48), dp(48)));
+        root.addView(titleRow);
         addLogModeToggle(root, false);
         subtitle = new TextView(this); subtitle.setTextColor(Color.rgb(190, 190, 190)); subtitle.setTextSize(12); subtitle.setPadding(0, 0, 0, dp(8)); root.addView(subtitle);
 
@@ -68,7 +73,7 @@ public class ServerLogActivity extends AppCompatActivity {
         scrollView = new ScrollView(this); scrollView.setFillViewport(true); scrollView.setBackgroundColor(Color.rgb(15, 15, 15));
         logText = new TextView(this); logText.setTextSize(12); logText.setTextColor(Color.rgb(224, 224, 224)); logText.setTextIsSelectable(true); logText.setPadding(0, dp(8), 0, dp(8)); scrollView.addView(logText);
         LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f); logParams.topMargin = dp(6); root.addView(scrollView, logParams);
-        Button close = new Button(this); close.setText("Close"); close.setAllCaps(false); close.setOnClickListener(v -> finish()); root.addView(close);
+        Button close = new Button(this); close.setText("Close"); close.setAllCaps(false); close.setOnClickListener(v -> AppChrome.handleBack(this)); root.addView(close);
         updateFilterButtons(); return root;
     }
 
