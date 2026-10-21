@@ -20,6 +20,8 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.google.android.material.button.MaterialButton;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -68,10 +70,11 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         android.widget.FrameLayout.LayoutParams settingsParams = new android.widget.FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL); heading.addView(settings, settingsParams); page.addView(heading);
 
         LinearLayout addRow = new LinearLayout(this); addRow.setGravity(Gravity.CENTER_VERTICAL); addRow.setBackgroundResource(R.drawable.lm_search_container_background);
-        addRow.setPadding(dp(14), dp(5), dp(5), dp(5)); LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(58)); addParams.topMargin = dp(4); page.addView(addRow, addParams);
-        urlInput = new EditText(this); urlInput.setSingleLine(true); urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); urlInput.setHint("Paste YouTube channel URL..."); urlInput.setTextColor(getResources().getColor(R.color.lm_text_primary)); urlInput.setHintTextColor(0xff91A0AA); urlInput.setTextSize(16); urlInput.setBackgroundColor(android.graphics.Color.TRANSPARENT); urlInput.setPadding(0, 0, dp(6), 0);
-        addRow.addView(urlInput, new LinearLayout.LayoutParams(0, -1, 1));
-        Button add = new Button(this); add.setText("＋  ADD"); add.setTextColor(getResources().getColor(R.color.text)); add.setTextSize(18); add.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.BOLD)); add.setLetterSpacing(0.05f); add.setBackgroundResource(R.drawable.lm_blue_add_pill_background); add.setStateListAnimator(null); add.setMinWidth(0); add.setMinimumWidth(0); add.setPadding(dp(14), 0, dp(14), 0); addRow.addView(add, new LinearLayout.LayoutParams(dp(130), -1)); add.setOnClickListener(v -> submitChannel());
+        addRow.setPadding(dp(18), dp(5), dp(6), dp(5)); LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(58)); addParams.topMargin = dp(4); page.addView(addRow, addParams);
+        urlInput = new EditText(this); urlInput.setSingleLine(true); urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); urlInput.setHint("Paste YouTube channel URL..."); urlInput.setTextColor(getResources().getColor(R.color.lm_text_primary)); urlInput.setHintTextColor(0xff91A0AA); urlInput.setTextSize(18); urlInput.setBackgroundColor(android.graphics.Color.TRANSPARENT); urlInput.setPadding(0, 0, dp(8), 0);
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -1, 1); inputParams.rightMargin = dp(10);
+        addRow.addView(urlInput, inputParams);
+        MaterialButton add = new MaterialButton(this); add.setText("＋  ADD"); add.setTextColor(getResources().getColor(R.color.text)); add.setTextSize(18); add.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.BOLD)); add.setLetterSpacing(0.05f); add.setBackgroundResource(R.drawable.lm_blue_add_pill_background); add.setStateListAnimator(null); add.setMinWidth(0); add.setMinimumWidth(0); add.setPadding(dp(14), 0, dp(14), 0); addRow.addView(add, new LinearLayout.LayoutParams(dp(130), -1)); add.setOnClickListener(v -> submitChannel());
         ImageButton refresh = iconButton(R.drawable.ic_refresh_24, "Refresh server"); LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(dp(40), dp(44)); refreshParams.leftMargin = dp(3); addRow.addView(refresh, refreshParams); refresh.setOnClickListener(v -> refresh());
 
         statusView = text("Checking server…", 14); statusView.setPadding(0, dp(10), 0, dp(2)); page.addView(statusView);
