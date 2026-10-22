@@ -136,13 +136,10 @@ public class ChannelAdapter extends BaseAdapter {
 
     private ChannelViewHolder createViewHolder() {
         FrameLayout itemRoot = new FrameLayout(context);
-        itemRoot.setPadding(0, dp(4), 0, dp(4));
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(12));
-        root.setBackgroundResource(R.drawable.lm_card_background);
-        root.setElevation(dp(8));
+        AppCardStyle.applyHomeCard(context, itemRoot, root);
         itemRoot.addView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout topRow = new LinearLayout(context);
@@ -339,16 +336,7 @@ public class ChannelAdapter extends BaseAdapter {
     }
 
     private void styleCardActionButton(Button button) {
-        button.setAllCaps(false);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
-        button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        button.setMinWidth(0);
-        button.setMinimumWidth(0);
-        button.setPadding(dp(8), 0, dp(8), 0);
-        button.setBackgroundResource(R.drawable.lm_action_button_background);
+        AppCardStyle.styleHomeActionButton(context, button);
     }
 
     private String formatStatus(String status) {

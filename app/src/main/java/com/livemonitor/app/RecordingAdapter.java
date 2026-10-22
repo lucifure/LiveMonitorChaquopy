@@ -224,15 +224,21 @@ public class RecordingAdapter extends BaseAdapter {
     private RecordingViewHolder createViewHolder() {
         FrameLayout itemRoot = new FrameLayout(context);
         boolean homeDownloadingMode = mode == Mode.DOWNLOADING;
-        itemRoot.setPadding(homeDownloadingMode ? 0 : dp(12), dp(homeDownloadingMode ? 4 : 8),
-            homeDownloadingMode ? 0 : dp(12), dp(homeDownloadingMode ? 4 : 8));
+        if (homeDownloadingMode) {
+            itemRoot.setPadding(0, dp(4), 0, dp(4));
+        } else {
+            itemRoot.setPadding(dp(12), dp(8), dp(12), dp(8));
+        }
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        int cardHorizontalPadding = dp(homeDownloadingMode ? 16 : 14);
-        root.setPadding(cardHorizontalPadding, dp(12), cardHorizontalPadding, dp(12));
-        root.setBackgroundResource(R.drawable.lm_card_background);
-        root.setElevation(dp(homeDownloadingMode ? 8 : 6));
+        if (homeDownloadingMode) {
+            AppCardStyle.applyHomeCard(context, itemRoot, root);
+        } else {
+            root.setPadding(dp(14), dp(12), dp(14), dp(12));
+            root.setBackgroundResource(R.drawable.lm_card_background);
+            root.setElevation(dp(6));
+        }
         itemRoot.addView(
             root,
             new FrameLayout.LayoutParams(
@@ -1087,16 +1093,7 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private void styleCardActionButton(Button button) {
-        button.setAllCaps(false);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
-        button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        button.setMinWidth(0);
-        button.setMinimumWidth(0);
-        button.setPadding(dp(8), 0, dp(8), 0);
-        button.setBackgroundResource(R.drawable.lm_action_button_background);
+        AppCardStyle.styleHomeActionButton(context, button);
     }
 
     private TextView createStatBox() {
