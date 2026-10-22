@@ -404,9 +404,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         String name, url, quality, status, title, lastError, videoId;
         double serverTime, recordingStartedAt;
 
-        String displayTitle() {
-            return title == null || title.trim().isEmpty() ? name : title;
-        }
+        String displayTitle() { return name; }
 
         static RemoteChannel from(JSONObject json, double serverTime) {
             RemoteChannel channel = new RemoteChannel();

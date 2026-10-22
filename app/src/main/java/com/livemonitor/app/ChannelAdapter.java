@@ -322,6 +322,10 @@ public class ChannelAdapter extends BaseAdapter {
         holder.title.setText(channel.getDisplayTitle());
         holder.url.setText(channel.getUrl());
         holder.statusBadge.setText(formatStatus(channel.getStatus()));
+        if (!recordingCard) {
+            holder.statusBadge.setTextSize(12);
+            holder.statusBadge.setPadding(dp(10), dp(4), dp(10), dp(4));
+        }
         applyStatusBadge(holder.statusBadge, channel.getStatus());
         holder.details.setText(buildDetails(channel));
         if (recordingCard) {
