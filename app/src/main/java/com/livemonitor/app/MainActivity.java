@@ -790,6 +790,8 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
+        result.sort((left, right) -> Long.compare(right.getStartedAt(), left.getStartedAt()));
+
         return result;
     }
 
@@ -918,10 +920,8 @@ public class MainActivity extends AppCompatActivity {
 
     private final class HomeSectionsAdapter extends BaseAdapter {
         private static final int EMPTY = 0;
-        private static final int CHANNEL_HEADER = 1;
+        private static final int DOWNLOAD = 1;
         private static final int CHANNEL = 2;
-        private static final int DOWNLOAD_HEADER = 3;
-        private static final int DOWNLOAD = 4;
 
         private int channelCount() { return channelAdapter.getCount(); }
         private int downloadCount() { return recordingAdapter.getCount(); }
@@ -929,26 +929,15 @@ public class MainActivity extends AppCompatActivity {
         @Override public int getCount() {
             int channels = channelCount(), downloads = downloadCount();
             if (channels == 0 && downloads == 0) return 1;
-            return channels + downloads + (channels > 0 ? 1 : 0) + (downloads > 0 ? 1 : 0);
+            return channels + downloads;
         }
 
         @Override public int getItemViewType(int position) {
-            int channels = channelCount(), downloads = downloadCount();
-            if (channels == 0 && downloads == 0) return EMPTY;
-            int index = position;
-            if (channels > 0) {
-                if (index-- == 0) return CHANNEL_HEADER;
-                if (index < channels) return CHANNEL;
-                index -= channels;
-            }
-            if (downloads > 0) {
-                if (index-- == 0) return DOWNLOAD_HEADER;
-                if (index < downloads) return DOWNLOAD;
-            }
-            return EMPTY;
+            if (channelCount() == 0 && downloadCount() == 0) return EMPTY;
+            return position < downloadCount() ? DOWNLOAD : CHANNEL;
         }
 
-        @Override public int getViewTypeCount() { return 5; }
+        @Override public int getViewTypeCount() { return 3; }
         @Override public boolean hasStableIds() { return false; }
         @Override public boolean isEnabled(int position) {
             int type = getItemViewType(position);
@@ -956,18 +945,8 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override public Object getItem(int position) {
             int type = getItemViewType(position);
-            int index = position;
-            if (channelCount() > 0) {
-                if (type == CHANNEL_HEADER) return "Monitoring";
-                index--;
-                if (type == CHANNEL) return channelAdapter.getItem(index);
-                index -= channelCount();
-            }
-            if (downloadCount() > 0) {
-                if (type == DOWNLOAD_HEADER) return "Downloading";
-                index--;
-                if (type == DOWNLOAD) return recordingAdapter.getItem(index);
-            }
+            if (type == DOWNLOAD) return recordingAdapter.getItem(position);
+            if (type == CHANNEL) return channelAdapter.getItem(position - downloadCount());
             return "No channels yet. Paste a YouTube link above.";
         }
         @Override public long getItemId(int position) { return position; }
@@ -975,23 +954,17 @@ public class MainActivity extends AppCompatActivity {
         @Override public View getView(int position, View convertView, ViewGroup parent) {
             int type = getItemViewType(position);
             if (type == CHANNEL || type == DOWNLOAD) {
-                int index = position;
-                if (channelCount() > 0) {
-                    index--;
-                    if (type == CHANNEL) return channelAdapter.getView(index, convertView, parent);
-                    index -= channelCount();
-                }
-                index--;
-                return recordingAdapter.getView(index, convertView, parent);
+                if (type == DOWNLOAD) return recordingAdapter.getView(position, convertView, parent);
+                return channelAdapter.getView(position - downloadCount(), convertView, parent);
             }
 
             TextView label = convertView instanceof TextView ? (TextView) convertView : new TextView(MainActivity.this);
-            label.setText(type == EMPTY ? "No channels yet. Paste a YouTube link above." : (type == CHANNEL_HEADER ? "Monitoring" : "Downloading"));
-            label.setTextColor(type == EMPTY ? getResources().getColor(R.color.text_secondary) : Color.WHITE);
-            label.setTextSize(type == EMPTY ? 14 : 22);
-            label.setTypeface(null, type == EMPTY ? Typeface.NORMAL : Typeface.BOLD);
-            label.setGravity(type == EMPTY ? Gravity.CENTER : Gravity.CENTER_VERTICAL);
-            label.setPadding(0, dp(type == EMPTY ? 20 : 12), 0, dp(type == EMPTY ? 20 : 8));
+            label.setText("No channels yet. Paste a YouTube link above.");
+            label.setTextColor(getResources().getColor(R.color.text_secondary));
+            label.setTextSize(14);
+            label.setTypeface(null, Typeface.NORMAL);
+            label.setGravity(Gravity.CENTER);
+            label.setPadding(0, dp(20), 0, dp(20));
             return label;
         }
     }

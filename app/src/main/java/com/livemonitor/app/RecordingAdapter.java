@@ -223,13 +223,16 @@ public class RecordingAdapter extends BaseAdapter {
 
     private RecordingViewHolder createViewHolder() {
         FrameLayout itemRoot = new FrameLayout(context);
-        itemRoot.setPadding(dp(12), dp(8), dp(12), dp(8));
+        boolean homeDownloadingMode = mode == Mode.DOWNLOADING;
+        itemRoot.setPadding(homeDownloadingMode ? 0 : dp(12), dp(homeDownloadingMode ? 4 : 8),
+            homeDownloadingMode ? 0 : dp(12), dp(homeDownloadingMode ? 4 : 8));
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(12), dp(14), dp(12));
+        int cardHorizontalPadding = dp(homeDownloadingMode ? 16 : 14);
+        root.setPadding(cardHorizontalPadding, dp(12), cardHorizontalPadding, dp(12));
         root.setBackgroundResource(R.drawable.lm_card_background);
-        root.setElevation(dp(6));
+        root.setElevation(dp(homeDownloadingMode ? 8 : 6));
         itemRoot.addView(
             root,
             new FrameLayout.LayoutParams(
@@ -332,7 +335,7 @@ public class RecordingAdapter extends BaseAdapter {
         LinearLayout buttonRow = new LinearLayout(context);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.END);
-        buttonRow.setPadding(0, dp(8), 0, 0);
+        buttonRow.setPadding(0, dp(homeDownloadingMode ? 10 : 8), 0, 0);
 
         Button openButton = new Button(context);
         openButton.setAllCaps(false);
@@ -402,6 +405,7 @@ public class RecordingAdapter extends BaseAdapter {
     }
 
     private void bind(RecordingViewHolder holder, RecordingItem recording) {
+        boolean homeDownloadingMode = mode == Mode.DOWNLOADING;
         if (recording == null) {
             holder.title.setText("Unknown recording");
             holder.subtitle.setText("");
@@ -417,8 +421,9 @@ public class RecordingAdapter extends BaseAdapter {
             return;
         }
 
-        holder.title.setText(recording.getDisplayTitle());
-        holder.subtitle.setText(recording.getDisplaySubtitle());
+        String channelName = recording.getChannelTitle();
+        if (channelName == null || channelName.trim().isEmpty()) channelName = "Unknown channel";
+        holder.title.setText(homeDownloadingMode ? channelName : recording.getDisplayTitle());
         holder.details.setText(buildDetails(recording));
         long bytesRec = recording.getBytesRecorded();
         long totalMs = estimateDisplayedRecordedMs(recording, System.currentTimeMillis());
@@ -429,6 +434,9 @@ public class RecordingAdapter extends BaseAdapter {
         boolean showStartingSize = bytesRec <= 0L && recording.isActive() && sessionDurationSeconds < 10L;
         holder.sizeStat.setText(showStartingSize ? "💾 Starting…" : "💾 " + RecordingProgressTracker.formatBytes(bytesRec));
         holder.qualityStat.setText("📺 " + recording.getQuality());
+        holder.subtitle.setText(homeDownloadingMode
+            ? RecordingProgressTracker.formatBytes(bytesRec) + "  —  " + RecordingProgressTracker.formatDuration(sessionDurationSeconds)
+            : recording.getDisplaySubtitle());
         String savedToDisplay = recording.getSavedToDisplay();
         holder.savedTo.setText(savedToDisplay.trim().isEmpty() ? "" : "Saved to: " + savedToDisplay);
         holder.savedTo.setVisibility(savedToDisplay.trim().isEmpty() ? View.GONE : View.VISIBLE);
@@ -451,6 +459,31 @@ public class RecordingAdapter extends BaseAdapter {
         holder.deleteButton.setEnabled(true);
         holder.deleteButton.setAlpha(1f);
         applyDownloadedCompactLayout(holder, recording, downloadedMode);
+
+        if (homeDownloadingMode) {
+            holder.statusBadge.setText("● REC");
+            holder.statusBadge.setTextSize(10);
+            holder.statusBadge.setPadding(dp(6), dp(2), dp(6), dp(2));
+            holder.statusBadge.setBackgroundResource(R.drawable.lm_status_recording_background);
+            holder.statusBadge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+            holder.statusBadge.setVisibility(View.VISIBLE);
+            holder.subtitle.setVisibility(View.VISIBLE);
+            holder.details.setVisibility(View.GONE);
+            holder.statsRow.setVisibility(View.GONE);
+            holder.savedTo.setVisibility(View.GONE);
+            holder.progressBar.setVisibility(View.GONE);
+            holder.progressLabel.setVisibility(View.GONE);
+            holder.thumbnailFrame.setVisibility(View.GONE);
+            holder.openButton.setVisibility(View.GONE);
+            holder.pauseResumeButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
+            holder.deleteButton.setVisibility(activeDownload ? View.VISIBLE : View.GONE);
+            LinearLayout.LayoutParams pauseParams = (LinearLayout.LayoutParams) holder.pauseResumeButton.getLayoutParams();
+            pauseParams.leftMargin = 0;
+            holder.pauseResumeButton.setLayoutParams(pauseParams);
+            LinearLayout.LayoutParams deleteParams = (LinearLayout.LayoutParams) holder.deleteButton.getLayoutParams();
+            deleteParams.leftMargin = dp(8);
+            holder.deleteButton.setLayoutParams(deleteParams);
+        }
 
         if (downloadedMode) {
             holder.deleteButton.setText("Delete");
