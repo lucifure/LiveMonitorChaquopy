@@ -156,14 +156,16 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private void showData(JSONObject status, List<ServerRecordingGrouper.RemoteFile> loaded) {
         errorView.setText(""); JSONArray list = status.optJSONArray("channels");
         List<RemoteChannel> channels = new ArrayList<>();
+        double serverTime = status.optDouble("server_time", 0d);
         if (list != null) for (int i = 0; i < list.length(); i++) { JSONObject channel = list.optJSONObject(i); if (channel == null) continue;
-            channels.add(RemoteChannel.from(channel));
+            channels.add(RemoteChannel.from(channel, serverTime));
         }
         statusView.setText(""); statusView.setVisibility(View.GONE); subtitleView.setText("Server · " + channels.size() + " " + (channels.size() == 1 ? "channel" : "channels"));
         JSONObject disk = status.optJSONObject("disk"); View diskRow = (View) diskView.getParent();
         if (disk != null && disk.optLong("total") > 0) { long total = disk.optLong("total"), free = disk.optLong("free"); diskView.setText("Disk: " + bytes(free) + " free of " + bytes(total)); diskProgress.setProgress((int) Math.max(0, Math.min(1000, ((total - free) * 1000L) / total))); diskRow.setVisibility(View.VISIBLE); } else diskRow.setVisibility(View.GONE);
+        recordings.clear(); recordings.addAll(ServerRecordingGrouper.group(loaded));
         renderChannels(channels);
-        recordings.clear(); recordings.addAll(ServerRecordingGrouper.group(loaded)); renderRecordings();
+        renderRecordings();
         selectSection(selectedSection);
     }
     private void showError(String message) { errorView.setText(message); statusView.setText("Server status unavailable."); statusView.setVisibility(View.VISIBLE); diskView.setText(""); if (diskView.getParent() != null) ((View) diskView.getParent()).setVisibility(View.GONE); if (channelContainer != null) channelContainer.removeAllViews(); recordings.clear(); renderRecordings(); }
@@ -173,9 +175,56 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         if (channels.isEmpty()) { channelContainer.addView(text("No configured server channels.", 14)); return; }
         for (RemoteChannel channel : channels) {
             LinearLayout row = newServerCard(channelContainer);
-            boolean active = "recording".equals(channel.status) || "finalizing".equals(channel.status);
-            TextView name = text((active ? "● " : "○ ") + channel.name + " — " + channel.status, 16);
-            name.setTextColor(active ? getResources().getColor(R.color.info) : getResources().getColor(R.color.lm_text_primary)); row.addView(name);
+            boolean recording = isStatus(channel, "recording");
+            boolean finalizing = isStatus(channel, "finalizing");
+            boolean active = recording || finalizing;
+
+            LinearLayout heading = new LinearLayout(this);
+            heading.setOrientation(LinearLayout.HORIZONTAL);
+            heading.setGravity(Gravity.CENTER_VERTICAL);
+            TextView name = text(channel.displayTitle(), 16);
+            name.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            heading.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView badge = text("", 12);
+            badge.setGravity(Gravity.CENTER);
+            if (active) {
+                AppCardStyle.applyRecordingBadge(this, badge, finalizing ? "Finalizing" : "REC");
+            } else {
+                badge.setText(isStatus(channel, "paused") ? "Paused" : "Monitoring");
+                badge.setPadding(dp(10), dp(4), dp(10), dp(4));
+                badge.setBackgroundResource(R.drawable.lm_status_paused_background);
+                badge.setTextColor(getResources().getColor(R.color.lm_accent_blue_glow));
+            }
+            heading.addView(badge);
+            row.addView(heading);
+
+            if (active) {
+                TextView videoId = text(channel.videoId, 12);
+                videoId.setSingleLine(true);
+                videoId.setPadding(0, dp(4), 0, 0);
+                row.addView(videoId);
+
+                LinearLayout stats = new LinearLayout(this);
+                stats.setOrientation(LinearLayout.HORIZONTAL);
+                stats.setPadding(0, dp(8), 0, 0);
+                TextView timer = AppCardStyle.createHomeStat(this);
+                TextView quality = AppCardStyle.createHomeStat(this);
+                TextView size = AppCardStyle.createHomeStat(this);
+                timer.setText("⏱ " + formatServerElapsed(channel));
+                quality.setText("📺 " + channel.quality);
+                ServerRecordingGrouper.Group group = findRecordingGroup(channel, channels);
+                size.setText("💾 " + (group == null ? "-" : bytes(group.totalSize)));
+                stats.addView(timer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                stats.addView(quality, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                stats.addView(size, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                row.addView(stats);
+            } else {
+                TextView state = text(isStatus(channel, "paused")
+                    ? "Monitoring paused" : "Monitoring active - waiting for stream", 13);
+                state.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+                state.setPadding(0, dp(4), 0, 0);
+                row.addView(state);
+            }
             if (!channel.lastError.isEmpty()) {
                 TextView error = text("Error: " + channel.lastError, 13);
                 error.setTextColor(getResources().getColor(R.color.danger));
@@ -183,11 +232,55 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             }
             LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END);
             Button start = actionButton("paused".equals(channel.status) ? "Resume" : "Start"); start.setEnabled("paused".equals(channel.status) || "idle".equals(channel.status)); start.setOnClickListener(v -> channelAction(channel, "paused".equals(channel.status) ? "resume" : "start"));
-            Button stop = actionButton("Stop"); stop.setEnabled(!"paused".equals(channel.status)); stop.setOnClickListener(v -> channelAction(channel, "stop"));
+            Button stop = actionButton("Stop"); stop.setEnabled(!isStatus(channel, "paused")); stop.setOnClickListener(v -> channelAction(channel, "stop"));
             Button delete = actionButton("Delete"); delete.setEnabled(!active); delete.setOnClickListener(v -> confirmDeleteChannel(channel));
             addWeightedAction(actions, start, false); addWeightedAction(actions, stop, true); addWeightedAction(actions, delete, true);
             row.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
+    }
+
+    private boolean isStatus(RemoteChannel channel, String status) {
+        return channel != null && status.equalsIgnoreCase(channel.status);
+    }
+
+    private String formatServerElapsed(RemoteChannel channel) {
+        if (channel.serverTime <= 0d || channel.recordingStartedAt <= 0d) return "-";
+        long seconds = Math.max(0L, (long) (channel.serverTime - channel.recordingStartedAt));
+        return RecordingProgressTracker.formatDuration(seconds);
+    }
+
+    private ServerRecordingGrouper.Group findRecordingGroup(RemoteChannel target, List<RemoteChannel> channels) {
+        List<ServerRecordingGrouper.Group> inProgress = new ArrayList<>();
+        ServerRecordingGrouper.Group matching = null;
+        String title = normalizeGroupTitle(target.title == null || target.title.trim().isEmpty()
+            ? target.name : target.title);
+        for (ServerRecordingGrouper.Group group : recordings) {
+            if (!group.isInProgress()) continue;
+            inProgress.add(group);
+            String baseName = normalizeGroupTitle(group.baseName);
+            if (!title.isEmpty() && baseName.startsWith(title)
+                && (matching == null || group.modified > matching.modified)) {
+                matching = group;
+            }
+        }
+        if (matching != null) return matching;
+
+        int recordingChannels = 0;
+        for (RemoteChannel channel : channels) {
+            if (isStatus(channel, "recording") || isStatus(channel, "finalizing")) recordingChannels++;
+        }
+        return inProgress.size() == 1 && recordingChannels == 1 ? inProgress.get(0) : null;
+    }
+
+    private static String normalizeGroupTitle(String value) {
+        if (value == null) return "";
+        String lower = value.toLowerCase(Locale.US);
+        StringBuilder normalized = new StringBuilder(lower.length());
+        for (int i = 0; i < lower.length(); i++) {
+            char character = lower.charAt(i);
+            if (Character.isLetterOrDigit(character)) normalized.append(character);
+        }
+        return normalized.toString();
     }
 
     private Button actionButton(String label) {
@@ -307,5 +400,26 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private static String bytes(long value) { if (value < 1024) return value + " B"; String[] u = {"KB", "MB", "GB", "TB"}; double n = value; int i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1); return String.format(Locale.US, "%.1f %s", n, u[i]); }
     private static String relative(long seconds) { long delta = Math.max(0, System.currentTimeMillis() / 1000 - seconds); if (delta < 60) return "just now"; if (delta < 3600) return delta / 60 + " minutes ago"; if (delta < 86400) return delta / 3600 + " hours ago"; return delta / 86400 + " days ago"; }
-    private static final class RemoteChannel { String name, url, quality, status, title, lastError; static RemoteChannel from(JSONObject json) { RemoteChannel channel = new RemoteChannel(); channel.name = json.optString("name"); channel.url = json.optString("url"); channel.quality = json.optString("quality", "480p"); channel.status = json.optString("status", "unknown"); channel.title = json.optString("title"); channel.lastError = json.optString("last_error"); return channel; } }
+    private static final class RemoteChannel {
+        String name, url, quality, status, title, lastError, videoId;
+        double serverTime, recordingStartedAt;
+
+        String displayTitle() {
+            return title == null || title.trim().isEmpty() ? name : title;
+        }
+
+        static RemoteChannel from(JSONObject json, double serverTime) {
+            RemoteChannel channel = new RemoteChannel();
+            channel.name = json.optString("name");
+            channel.url = json.optString("url");
+            channel.quality = json.optString("quality", "480p");
+            channel.status = json.optString("status", "unknown");
+            channel.title = json.optString("title");
+            channel.lastError = json.optString("last_error");
+            channel.videoId = json.optString("video_id");
+            channel.serverTime = serverTime;
+            channel.recordingStartedAt = json.optDouble("recording_started_at", 0d);
+            return channel;
+        }
+    }
 }

@@ -46,7 +46,11 @@ public final class AppCardStyle {
     }
 
     public static void applyRecordingBadge(Context context, TextView badge) {
-        badge.setText("● REC");
+        applyRecordingBadge(context, badge, "● REC");
+    }
+
+    public static void applyRecordingBadge(Context context, TextView badge, String label) {
+        badge.setText(label == null ? "REC" : label);
         badge.setTextSize(10);
         float density = context.getResources().getDisplayMetrics().density;
         badge.setPadding(Math.round(6 * density), Math.round(2 * density), Math.round(6 * density), Math.round(2 * density));
