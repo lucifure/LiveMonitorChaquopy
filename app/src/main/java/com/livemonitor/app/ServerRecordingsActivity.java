@@ -103,11 +103,11 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         errorView = text("", 14); errorView.setTextColor(0xfff28b82); errorView.setPadding(0, dp(6), 0, dp(2)); page.addView(errorView);
         channelContainer = new LinearLayout(this); channelContainer.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams cardsParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardsParams.leftMargin = -dp(20); cardsParams.rightMargin = -dp(20); page.addView(channelContainer, cardsParams);
+        page.addView(channelContainer, cardsParams);
         emptyView = text("No server recordings found.", 15); emptyView.setGravity(Gravity.CENTER); page.addView(emptyView);
         recordingContainer = new LinearLayout(this); recordingContainer.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams recordingCardsParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        recordingCardsParams.leftMargin = -dp(20); recordingCardsParams.rightMargin = -dp(20); page.addView(recordingContainer, recordingCardsParams);
+        page.addView(recordingContainer, recordingCardsParams);
         selectSection(selectedSection);
         return root;
     }
@@ -185,7 +185,8 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             Button start = actionButton("paused".equals(channel.status) ? "Resume" : "Start"); start.setEnabled("paused".equals(channel.status) || "idle".equals(channel.status)); start.setOnClickListener(v -> channelAction(channel, "paused".equals(channel.status) ? "resume" : "start"));
             Button stop = actionButton("Stop"); stop.setEnabled(!"paused".equals(channel.status)); stop.setOnClickListener(v -> channelAction(channel, "stop"));
             Button delete = actionButton("Delete"); delete.setEnabled(!active); delete.setOnClickListener(v -> confirmDeleteChannel(channel));
-            addWeightedAction(actions, start, false); addWeightedAction(actions, stop, true); addWeightedAction(actions, delete, true); row.addView(actions);
+            addWeightedAction(actions, start, false); addWeightedAction(actions, stop, true); addWeightedAction(actions, delete, true);
+            row.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
     }
 
