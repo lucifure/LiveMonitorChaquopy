@@ -50,6 +50,7 @@ public class ServerLogActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
+    @Override protected void onResume() { super.onResume(); AppChrome.selectCurrentTab(this, R.id.nav_logs); }
     @Override public void onBackPressed() { AppChrome.handleBack(this); }
 
     private View buildView() {

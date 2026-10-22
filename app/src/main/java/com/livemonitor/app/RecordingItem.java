@@ -1,5 +1,9 @@
 package com.livemonitor.app;
 
+import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.DocumentsContract;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -456,6 +460,10 @@ public class RecordingItem {
         return isFinished() && (hasExistingFinalMp4File() || hasExistingTempTsFile());
     }
 
+    public boolean isPlayableCompletedFile(Context context) {
+        return isFinished() && (hasExistingFinalMp4File(context) || hasExistingTempTsFile());
+    }
+
     public boolean isRecoverable() {
         return STATUS_RECOVERABLE.equals(status)
             || hasExistingTempTsFile() && !hasExistingFinalMp4File() && !STATUS_RECORDING.equals(status);
@@ -477,11 +485,25 @@ public class RecordingItem {
         }
 
         if (isContentUri(finalMp4Path)) {
-            return true;
+            return false;
         }
 
         File file = new File(finalMp4Path);
         return file.exists() && file.isFile() && file.length() > 0L;
+    }
+
+    public boolean hasExistingFinalMp4File(Context context) {
+        if (isBlank(finalMp4Path)) return false;
+        if (!isContentUri(finalMp4Path)) return hasExistingFinalMp4File();
+        if (context == null) return false;
+        try (Cursor cursor = context.getContentResolver().query(Uri.parse(finalMp4Path),
+            new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
+            return cursor != null && cursor.moveToFirst() && !cursor.isNull(0) && cursor.getLong(0) > 0L;
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            return false;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     public boolean matchesChannel(String channelId) {
@@ -499,6 +521,11 @@ public class RecordingItem {
             return finalMp4Path;
         }
 
+        return getFirstExistingTempSegmentPath();
+    }
+
+    public String getBestPlayablePath(Context context) {
+        if (hasExistingFinalMp4File(context)) return finalMp4Path;
         return getFirstExistingTempSegmentPath();
     }
 

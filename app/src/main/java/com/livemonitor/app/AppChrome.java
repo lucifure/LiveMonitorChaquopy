@@ -56,8 +56,18 @@ public final class AppChrome {
             }
             current.startActivity(intent);
             current.overridePendingTransition(0, 0);
-            return true;
+            return false;
         });
+    }
+
+    /** Reassert this screen's tab after REORDER_TO_FRONT without firing navigation. */
+    public static void selectCurrentTab(Activity activity, int itemId) {
+        View navView = activity.findViewById(R.id.bottomNavigation);
+        if (!(navView instanceof BottomNavigationView)) return;
+        BottomNavigationView nav = (BottomNavigationView) navView;
+        nav.setOnItemSelectedListener(null);
+        nav.setSelectedItemId(itemId);
+        setupNav(activity, nav, itemId);
     }
 
     public static ImageButton settingsButton(Activity activity) {

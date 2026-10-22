@@ -60,6 +60,7 @@ public class LogActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        AppChrome.selectCurrentTab(this, R.id.nav_logs);
         refreshLogs();
     }
 

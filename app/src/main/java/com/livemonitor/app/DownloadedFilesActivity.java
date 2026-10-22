@@ -23,6 +23,8 @@ import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Downloaded files screen from 3-dot menu.
@@ -30,6 +32,7 @@ import java.util.List;
  * Shows completed playable recordings only.
  */
 public class DownloadedFilesActivity extends AppCompatActivity {
+    private final ExecutorService fileWorker = Executors.newSingleThreadExecutor();
 
     private AppStorage storage;
     private RecordingAdapter adapter;
@@ -91,7 +94,14 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        AppChrome.selectCurrentTab(this, R.id.nav_files);
         refreshFiles();
+    }
+
+    @Override
+    protected void onDestroy() {
+        fileWorker.shutdownNow();
+        super.onDestroy();
     }
 
     private LinearLayout buildContentView() {
@@ -269,24 +279,33 @@ public class DownloadedFilesActivity extends AppCompatActivity {
     }
 
     private void refreshFiles() {
-        storage.removeEmptyOrUnplayableFinishedRecordings();
-
-        allCompleted = storage.loadCompletedRecordings();
-        sortNewestFirst(allCompleted);
-        updateSummary(allCompleted);
-        applyFilter();
+        fileWorker.execute(() -> {
+            storage.removeEmptyOrUnplayableFinishedRecordings();
+            List<RecordingItem> completed = storage.loadCompletedRecordings();
+            sortNewestFirst(completed);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                allCompleted = completed;
+                updateSummary(allCompleted);
+                applyFilter();
+            });
+        });
     }
 
     private void importSelectedFolderRecordings(boolean showToast) {
-        SelectedFolderRecordingImporter.Result result = new SelectedFolderRecordingImporter(this).importFromSelectedFolder();
-        storage.appendLog(new LogItem(LogItem.LEVEL_INFO, LogItem.SOURCE_UI, "", "", "", "", "Selected save folder refreshed.", result.getMessage()));
-        if (showToast) {
-            Toast.makeText(this, result.getMessage(), Toast.LENGTH_LONG).show();
-        }
-        allCompleted = storage.loadCompletedRecordings();
-        sortNewestFirst(allCompleted);
-        updateSummary(allCompleted);
-        applyFilter();
+        fileWorker.execute(() -> {
+            SelectedFolderRecordingImporter.Result result = new SelectedFolderRecordingImporter(this).importFromSelectedFolder();
+            storage.appendLog(new LogItem(LogItem.LEVEL_INFO, LogItem.SOURCE_UI, "", "", "", "", "Selected save folder refreshed.", result.getMessage()));
+            List<RecordingItem> completed = storage.loadCompletedRecordings();
+            sortNewestFirst(completed);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (showToast) Toast.makeText(this, result.getMessage(), Toast.LENGTH_LONG).show();
+                allCompleted = completed;
+                updateSummary(allCompleted);
+                applyFilter();
+            });
+        });
     }
 
     private void applyFilter() {
@@ -459,11 +478,22 @@ public class DownloadedFilesActivity extends AppCompatActivity {
 
         try {
             if (isContentUri(path)) {
-                return DocumentsContract.deleteDocument(getContentResolver(), Uri.parse(path.trim()));
+                Uri uri = Uri.parse(path.trim());
+                if (!contentUriExists(uri)) return true;
+                return DocumentsContract.deleteDocument(getContentResolver(), uri);
             }
             File file = new File(path);
             return !file.exists() || file.delete();
         } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean contentUriExists(Uri uri) {
+        try (android.database.Cursor cursor = getContentResolver().query(uri,
+            new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
+            return cursor != null && cursor.moveToFirst();
+        } catch (SecurityException | IllegalArgumentException ignored) {
             return false;
         }
     }

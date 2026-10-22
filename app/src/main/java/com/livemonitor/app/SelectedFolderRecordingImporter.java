@@ -106,10 +106,10 @@ public class SelectedFolderRecordingImporter {
 
         for (RecordingItem recording : recordings) {
             if (recording == null) continue;
-            String playablePath = recording.getBestPlayablePath();
+            String playablePath = recording.getBestPlayablePath(context);
             if (!isBlank(playablePath)) {
                 knownPlayableUris.add(playablePath.trim());
-                knownPlayableNames.add(normalizedNameKey(displayNameFromPath(playablePath)));
+                knownPlayableNames.add(fileKey(displayNameForPath(playablePath), pathSize(playablePath)));
             }
         }
 
@@ -122,17 +122,17 @@ public class SelectedFolderRecordingImporter {
             if (relinked != null) {
                 result.relinkedCount++;
                 knownPlayableUris.add(folderFile.uri);
-                knownPlayableNames.add(normalizedNameKey(folderFile.name));
+                knownPlayableNames.add(fileKey(folderFile.name, folderFile.size));
                 continue;
             }
 
-            if (knownPlayableUris.contains(folderFile.uri) || knownPlayableNames.contains(normalizedNameKey(folderFile.name))) {
+            if (knownPlayableUris.contains(folderFile.uri) || knownPlayableNames.contains(fileKey(folderFile.name, folderFile.size))) {
                 continue;
             }
 
             recordings.add(buildImportedRecording(folderFile, settings));
             knownPlayableUris.add(folderFile.uri);
-            knownPlayableNames.add(normalizedNameKey(folderFile.name));
+            knownPlayableNames.add(fileKey(folderFile.name, folderFile.size));
             result.importedCount++;
         }
 
@@ -142,6 +142,33 @@ public class SelectedFolderRecordingImporter {
 
         result.setMessage(buildResultMessage(result));
         return result;
+    }
+
+    private String fileKey(String name, long size) {
+        return normalizedNameKey(name) + "#" + Math.max(0L, size);
+    }
+
+    private long pathSize(String path) {
+        if (isBlank(path)) return -1L;
+        if (path.trim().toLowerCase(Locale.US).startsWith("content://")) {
+            try (Cursor cursor = context.getContentResolver().query(Uri.parse(path.trim()),
+                new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
+                return cursor != null && cursor.moveToFirst() && !cursor.isNull(0) ? cursor.getLong(0) : -1L;
+            } catch (SecurityException | IllegalArgumentException ignored) { return -1L; }
+        }
+        File file = new File(path);
+        return file.exists() ? file.length() : -1L;
+    }
+
+    private String displayNameForPath(String path) {
+        if (isBlank(path)) return "";
+        if (path.trim().toLowerCase(Locale.US).startsWith("content://")) {
+            try (Cursor cursor = context.getContentResolver().query(Uri.parse(path.trim()),
+                new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+                return cursor != null && cursor.moveToFirst() ? cursor.getString(0) : displayNameFromPath(path);
+            } catch (SecurityException | IllegalArgumentException ignored) { return displayNameFromPath(path); }
+        }
+        return displayNameFromPath(path);
     }
 
     private List<FolderFile> listRecordingFiles(Uri treeUri) {
@@ -200,7 +227,7 @@ public class SelectedFolderRecordingImporter {
         }
 
         for (RecordingItem recording : recordings) {
-            if (recording == null || recording.isPlayableCompletedFile()) {
+            if (recording == null || recording.isPlayableCompletedFile(context)) {
                 continue;
             }
 

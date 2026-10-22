@@ -10,6 +10,8 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -458,7 +460,7 @@ public class AppStorage {
         List<RecordingItem> recordings = loadRecordings();
 
         for (RecordingItem recording : recordings) {
-            if (recording != null && recording.matchesVideo(videoId) && recording.isPlayableCompletedFile()) {
+            if (recording != null && recording.matchesVideo(videoId) && recording.isPlayableCompletedFile(appContext)) {
                 return recording;
             }
         }
@@ -482,7 +484,7 @@ public class AppStorage {
         List<RecordingItem> result = new ArrayList<>();
 
         for (RecordingItem recording : loadRecordings()) {
-            if (recording != null && recording.isPlayableCompletedFile()) {
+            if (recording != null && recording.isPlayableCompletedFile(appContext)) {
                 result.add(recording);
             }
         }
@@ -501,6 +503,7 @@ public class AppStorage {
 
         List<RecordingItem> recordings = loadRecordings();
         boolean changed = false;
+        Set<String> seenFinishedFiles = new HashSet<>();
         Iterator<RecordingItem> iterator = recordings.iterator();
 
         while (iterator.hasNext()) {
@@ -512,15 +515,33 @@ public class AppStorage {
                 continue;
             }
 
-            if (recording.isFinished() && !recording.isPlayableCompletedFile()) {
+            if (recording.isFinished() && !recording.isPlayableCompletedFile(appContext)) {
                 iterator.remove();
                 changed = true;
+                continue;
+            }
+
+            if (recording.isFinished()) {
+                String path = recording.getBestPlayablePath(appContext);
+                String key = normalizedRecordingPath(path);
+                if (!key.isEmpty() && !seenFinishedFiles.add(key)) {
+                    iterator.remove();
+                    changed = true;
+                }
             }
         }
 
         if (changed) {
             saveRecordings(recordings);
         }
+    }
+
+    private String normalizedRecordingPath(String path) {
+        if (isBlank(path)) return "";
+        String value = path.trim();
+        if (value.regionMatches(true, 0, "content://", 0, 10)) return value;
+        try { return new java.io.File(value).getCanonicalPath(); }
+        catch (java.io.IOException ignored) { return new java.io.File(value).getAbsolutePath(); }
     }
 
     public synchronized List<RecordingItem> loadRecoverableRecordings() {

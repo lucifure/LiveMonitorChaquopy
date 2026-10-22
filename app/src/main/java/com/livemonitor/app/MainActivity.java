@@ -92,7 +92,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (binding != null) binding.bottomNavigation.setSelectedItemId(R.id.nav_monitoring);
+        if (binding != null) AppChrome.selectCurrentTab(this, R.id.nav_monitoring);
         refreshAll();
     }
 

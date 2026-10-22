@@ -50,6 +50,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         super.onCreate(state); setTitle("Server Recordings"); setContentView(AppChrome.wrapWithBottomNav(this, buildView(), R.id.nav_server));
     }
     @Override public void onBackPressed() { AppChrome.handleBack(this); }
+    @Override protected void onResume() { super.onResume(); AppChrome.selectCurrentTab(this, R.id.nav_server); }
     @Override public void onStart() { super.onStart(); visible = true; refresh(); handler.postDelayed(poll, 20_000L); }
     @Override public void onStop() { visible = false; handler.removeCallbacks(poll); super.onStop(); }
     @Override public void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
