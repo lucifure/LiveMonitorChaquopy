@@ -485,7 +485,7 @@ public class RecordingItem {
         }
 
         if (isContentUri(finalMp4Path)) {
-            return false;
+            return true;
         }
 
         File file = new File(finalMp4Path);
@@ -498,11 +498,15 @@ public class RecordingItem {
         if (context == null) return false;
         try (Cursor cursor = context.getContentResolver().query(Uri.parse(finalMp4Path),
             new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
-            return cursor != null && cursor.moveToFirst() && !cursor.isNull(0) && cursor.getLong(0) > 0L;
-        } catch (SecurityException | IllegalArgumentException ignored) {
-            return false;
-        } catch (RuntimeException ignored) {
-            return false;
+            if (cursor == null) return false;
+            boolean rowFound = cursor.moveToFirst();
+            int sizeColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+            long size = rowFound && sizeColumn >= 0 && !cursor.isNull(sizeColumn)
+                ? cursor.getLong(sizeColumn) : -1L;
+            boolean sizeKnown = size >= 0L;
+            return ContentUriExistencePolicy.existsFromQuery(true, rowFound, sizeKnown, size);
+        } catch (RuntimeException error) {
+            return ContentUriExistencePolicy.existsAfterQueryError(error);
         }
     }
 

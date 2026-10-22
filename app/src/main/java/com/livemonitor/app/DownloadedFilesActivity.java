@@ -493,7 +493,7 @@ public class DownloadedFilesActivity extends AppCompatActivity {
         try (android.database.Cursor cursor = getContentResolver().query(uri,
             new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null)) {
             return cursor != null && cursor.moveToFirst();
-        } catch (SecurityException | IllegalArgumentException ignored) {
+        } catch (IllegalArgumentException ignored) {
             return false;
         }
     }

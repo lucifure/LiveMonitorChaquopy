@@ -28,8 +28,25 @@ public class RecordingItemFileExistenceTest {
     }
 
     @Test
-    public void contentUriIsNotAssumedToExistWithoutAResolverCheck() {
-        assertFalse(itemAt("content://example/document/42").hasExistingFinalMp4File());
+    public void contentUriRemainsPlayableForCheapNoArgumentChecks() {
+        RecordingItem recording = itemAt("content://example/document/42");
+        assertTrue(recording.hasExistingFinalMp4File());
+        assertFalse(recording.hasExistingFinalMp4File((android.content.Context) null));
+    }
+
+    @Test
+    public void providerSecurityFailureIsUnknownButMalformedUriIsMissing() {
+        assertTrue(ContentUriExistencePolicy.existsAfterQueryError(new SecurityException("permission revoked")));
+        assertFalse(ContentUriExistencePolicy.existsAfterQueryError(new IllegalArgumentException("malformed URI")));
+    }
+
+    @Test
+    public void onlyReachableMissingOrEmptyResultsAreMissing() {
+        assertFalse(ContentUriExistencePolicy.existsFromQuery(false, false, false, -1L));
+        assertFalse(ContentUriExistencePolicy.existsFromQuery(true, false, false, -1L));
+        assertFalse(ContentUriExistencePolicy.existsFromQuery(true, true, true, 0L));
+        assertTrue(ContentUriExistencePolicy.existsFromQuery(true, true, true, 1L));
+        assertTrue(ContentUriExistencePolicy.existsFromQuery(true, true, false, -1L));
     }
 
     private RecordingItem itemAt(String path) {

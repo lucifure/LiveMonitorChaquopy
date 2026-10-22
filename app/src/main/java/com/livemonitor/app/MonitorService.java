@@ -1122,7 +1122,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         if (!finalizedRecordingIds.add(recording.getId())) {
             log(LogItem.LEVEL_INFO, LogItem.SOURCE_RECORDER, channel, "Skipping duplicate finalization.", "recordingId=" + recording.getId());
-            return recording.isCompleted() || recording.hasExistingFinalMp4File(this) || recording.hasExistingTempTsFile();
+            return recording.isCompleted() || recording.hasExistingFinalMp4File() || recording.hasExistingTempTsFile();
         }
 
         if (recording.isCompleted()) {
@@ -1132,7 +1132,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return true;
         }
 
-        if (recording.hasExistingFinalMp4File(this)) {
+        if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
@@ -1253,7 +1253,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                 return false;
             }
 
-            if (!recording.hasExistingFinalMp4File(this)) {
+            if (!recording.hasExistingFinalMp4File()) {
                 recording.markRecoverable("Stopped DASH merge completed but the final MP4 was not created.");
                 storage.upsertRecording(recording);
                 return false;
@@ -4199,7 +4199,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return;
         }
 
-        if (recording.hasExistingFinalMp4File(this) || recording.hasExistingTempTsFile()) {
+        if (recording.hasExistingFinalMp4File() || recording.hasExistingTempTsFile()) {
             saveStoppedRecordingForDownloads(recording);
             return;
         }
@@ -5228,7 +5228,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             return false;
         }
 
-        if (recording.hasExistingFinalMp4File(this)) {
+        if (recording.hasExistingFinalMp4File()) {
             recording.markCompleted(recording.getFinalMp4Path());
             copyCompletedRecordingToSelectedFolder(recording, channel);
             recording.hideFromDownloading();
