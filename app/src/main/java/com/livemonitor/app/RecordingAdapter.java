@@ -475,7 +475,7 @@ public class RecordingAdapter extends BaseAdapter {
             holder.statusBadge.setVisibility(View.VISIBLE);
             holder.subtitle.setVisibility(View.VISIBLE);
             holder.details.setVisibility(View.GONE);
-            holder.statsRow.setVisibility(View.GONE);
+            holder.statsRow.setVisibility(View.VISIBLE);
             holder.savedTo.setVisibility(View.GONE);
             holder.progressBar.setVisibility(View.GONE);
             holder.progressLabel.setVisibility(View.GONE);
@@ -614,7 +614,11 @@ public class RecordingAdapter extends BaseAdapter {
             holder.thumbnailDuration.setVisibility(View.GONE);
         }
         holder.title.setTextSize(downloadedMode ? 16 : 15);
-        holder.subtitle.setText(recording.getDisplaySubtitle());
+        // Home mode fills the compact subtitle with elapsed time and size above.
+        // Keep that value intact; downloaded mode still uses the normal subtitle.
+        if (downloadedMode) {
+            holder.subtitle.setText(recording.getDisplaySubtitle());
+        }
     }
 
     private void bindThumbnail(ImageView thumbnail, RecordingItem recording) {

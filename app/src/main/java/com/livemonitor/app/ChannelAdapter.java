@@ -13,7 +13,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Adapter for Monitoring tab channel list.
@@ -38,12 +40,17 @@ public class ChannelAdapter extends BaseAdapter {
         void onStopClicked(ChannelItem channel);
 
         void onDeleteClicked(ChannelItem channel);
+
+        void onRecordingPauseResumeClicked(RecordingItem recording);
+
+        void onRecordingStopClicked(RecordingItem recording);
     }
 
     private final Context context;
     private final List<ChannelItem> channels;
     private final AppStorage storage;
     private Listener listener;
+    private final Map<String, RecordingItem> homeRecordings = new HashMap<>();
 
     public ChannelAdapter(Context context) {
         this.context = context;
@@ -63,6 +70,35 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         notifyDataSetChanged();
+    }
+
+    public void setHomeRecordings(List<RecordingItem> recordings) {
+        homeRecordings.clear();
+        if (recordings != null) {
+            for (RecordingItem recording : recordings) {
+                if (recording != null && recording.isActive() && recording.getChannelId() != null
+                    && !recording.getChannelId().trim().isEmpty()) {
+                    RecordingItem existing = homeRecordings.get(recording.getChannelId());
+                    if (existing == null || recording.getStartedAt() > existing.getStartedAt()) {
+                        homeRecordings.put(recording.getChannelId(), recording);
+                    }
+                }
+            }
+        }
+        notifyDataSetChanged();
+    }
+
+    public View getHomeView(ChannelItem channel, View convertView, ViewGroup parent) {
+        ChannelViewHolder holder;
+        if (convertView == null || !(convertView.getTag() instanceof ChannelViewHolder)) {
+            holder = createViewHolder();
+            convertView = holder.root;
+            convertView.setTag(holder);
+        } else {
+            holder = (ChannelViewHolder) convertView.getTag();
+        }
+        bind(holder, channel, channel == null ? null : homeRecordings.get(channel.getId()));
+        return convertView;
     }
 
     public void addOrUpdate(ChannelItem channel) {
@@ -129,7 +165,7 @@ public class ChannelAdapter extends BaseAdapter {
         }
 
         ChannelItem channel = getItem(position);
-        bind(holder, channel);
+        bind(holder, channel, null);
 
         return convertView;
     }
@@ -177,6 +213,22 @@ public class ChannelAdapter extends BaseAdapter {
         details.setTextSize(11);
         details.setSingleLine(false);
         details.setPadding(0, dp(4), 0, 0);
+
+        TextView videoId = new TextView(context);
+        videoId.setTextColor(Color.rgb(194, 202, 211));
+        videoId.setTextSize(12);
+        videoId.setSingleLine(true);
+        videoId.setPadding(0, dp(4), 0, 0);
+
+        LinearLayout statsRow = new LinearLayout(context);
+        statsRow.setOrientation(LinearLayout.HORIZONTAL);
+        statsRow.setPadding(0, dp(8), 0, 0);
+        TextView timerStat = AppCardStyle.createHomeStat(context);
+        TextView qualityStat = AppCardStyle.createHomeStat(context);
+        TextView sizeStat = AppCardStyle.createHomeStat(context);
+        statsRow.addView(timerStat, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        statsRow.addView(qualityStat, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        statsRow.addView(sizeStat, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         LinearLayout buttonRow = new LinearLayout(context);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -227,6 +279,8 @@ public class ChannelAdapter extends BaseAdapter {
         root.addView(topRow);
         root.addView(url);
         root.addView(details);
+        root.addView(videoId);
+        root.addView(statsRow);
         root.addView(buttonRow);
 
         ChannelViewHolder holder = new ChannelViewHolder();
@@ -235,6 +289,11 @@ public class ChannelAdapter extends BaseAdapter {
         holder.url = url;
         holder.statusBadge = statusBadge;
         holder.details = details;
+        holder.videoId = videoId;
+        holder.statsRow = statsRow;
+        holder.timerStat = timerStat;
+        holder.qualityStat = qualityStat;
+        holder.sizeStat = sizeStat;
         holder.pauseResume = pauseResume;
         holder.stop = stop;
         holder.delete = delete;
@@ -242,21 +301,42 @@ public class ChannelAdapter extends BaseAdapter {
         return holder;
     }
 
-    private void bind(ChannelViewHolder holder, ChannelItem channel) {
+    private void bind(ChannelViewHolder holder, ChannelItem channel, RecordingItem recording) {
         if (channel == null) {
             holder.title.setText("Unknown channel");
             holder.url.setText("");
             holder.statusBadge.setText("Unknown");
             holder.details.setText("");
+            holder.videoId.setVisibility(View.GONE);
+            holder.statsRow.setVisibility(View.GONE);
             return;
         }
+
+        boolean recordingCard = recording != null && recording.isActive();
+        holder.url.setVisibility(recordingCard ? View.GONE : View.VISIBLE);
+        holder.details.setVisibility(recordingCard ? View.GONE : View.VISIBLE);
+        holder.videoId.setVisibility(recordingCard ? View.VISIBLE : View.GONE);
+        holder.statsRow.setVisibility(recordingCard ? View.VISIBLE : View.GONE);
+        holder.title.setTypeface(recordingCard ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
 
         holder.title.setText(channel.getDisplayTitle());
         holder.url.setText(channel.getUrl());
         holder.statusBadge.setText(formatStatus(channel.getStatus()));
         applyStatusBadge(holder.statusBadge, channel.getStatus());
         holder.details.setText(buildDetails(channel));
-        holder.pauseResume.setText(channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume");
+        if (recordingCard) {
+            AppCardStyle.applyRecordingBadge(context, holder.statusBadge);
+            holder.videoId.setText(recording.getVideoId() == null ? "" : recording.getVideoId());
+            long elapsed = recording.getStartedAt() > 0L
+                ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1000L) : 0L;
+            holder.timerStat.setText("⏱ " + RecordingProgressTracker.formatDuration(elapsed));
+            holder.qualityStat.setText("📺 " + recording.getQuality());
+            boolean starting = recording.getBytesRecorded() <= 0L && elapsed < 10L;
+            holder.sizeStat.setText("💾 " + (starting ? "Starting…" : RecordingProgressTracker.formatBytes(recording.getBytesRecorded())));
+        }
+        holder.pauseResume.setText(recordingCard
+            ? (recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause")
+            : (channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume"));
         holder.stop.setText("■  Stop");
         holder.stop.setEnabled(true);
         holder.stop.setAlpha(1f);
@@ -269,11 +349,16 @@ public class ChannelAdapter extends BaseAdapter {
 
         holder.pauseResume.setOnClickListener(v -> {
             if (listener != null) {
-                listener.onPauseResumeClicked(channel);
+                if (recordingCard) listener.onRecordingPauseResumeClicked(recording);
+                else listener.onPauseResumeClicked(channel);
             }
         });
 
         holder.stop.setOnClickListener(v -> {
+            if (recordingCard) {
+                if (listener != null) listener.onRecordingStopClicked(recording);
+                return;
+            }
             holder.stop.setEnabled(false);
             holder.stop.setAlpha(0.65f);
             holder.stop.setText("Stopping…");
@@ -412,6 +497,11 @@ public class ChannelAdapter extends BaseAdapter {
         TextView url;
         TextView statusBadge;
         TextView details;
+        TextView videoId;
+        LinearLayout statsRow;
+        TextView timerStat;
+        TextView qualityStat;
+        TextView sizeStat;
         Button pauseResume;
         Button stop;
         Button delete;

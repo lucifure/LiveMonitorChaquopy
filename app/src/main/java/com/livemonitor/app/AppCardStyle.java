@@ -5,6 +5,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.view.View;
 import android.widget.Button;
+import android.widget.TextView;
+import android.view.Gravity;
 
 /** Shared card and action-button styling used by Home and server cards. */
 public final class AppCardStyle {
@@ -32,5 +34,24 @@ public final class AppCardStyle {
         button.setMinimumWidth(0);
         button.setPadding(Math.round(8 * density), 0, Math.round(8 * density), 0);
         button.setBackgroundResource(R.drawable.lm_action_button_background);
+    }
+
+    public static TextView createHomeStat(Context context) {
+        TextView stat = new TextView(context);
+        stat.setTextColor(Color.rgb(194, 202, 211));
+        stat.setTextSize(12);
+        stat.setGravity(Gravity.CENTER_VERTICAL);
+        stat.setSingleLine(true);
+        return stat;
+    }
+
+    public static void applyRecordingBadge(Context context, TextView badge) {
+        badge.setText("● REC");
+        badge.setTextSize(10);
+        float density = context.getResources().getDisplayMetrics().density;
+        badge.setPadding(Math.round(6 * density), Math.round(2 * density), Math.round(6 * density), Math.round(2 * density));
+        badge.setBackgroundResource(R.drawable.lm_status_recording_background);
+        badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
+        badge.setVisibility(View.VISIBLE);
     }
 }

@@ -129,6 +129,16 @@ public class MainActivity extends AppCompatActivity {
             public void onDeleteClicked(ChannelItem channel) {
                 confirmDeleteChannel(channel);
             }
+
+            @Override
+            public void onRecordingPauseResumeClicked(RecordingItem recording) {
+                toggleRecordingPaused(recording);
+            }
+
+            @Override
+            public void onRecordingStopClicked(RecordingItem recording) {
+                confirmStopDownload(recording);
+            }
         });
 
         recordingAdapter = new RecordingAdapter(this);
@@ -460,9 +470,13 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        RecordingItem activeRecording = findActiveRecording(channel.getId());
+        String message = activeRecording == null
+            ? "Stop monitoring and delete this channel from the Monitoring section?"
+            : "Stop monitoring, stop the active recording, and delete this channel from the Monitoring section?";
         new AlertDialog.Builder(this)
             .setTitle("Delete channel?")
-            .setMessage("Stop monitoring and delete this channel from the Monitoring section?")
+            .setMessage(message)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete", (dialog, which) -> deleteChannel(channel))
             .show();
@@ -714,6 +728,7 @@ public class MainActivity extends AppCompatActivity {
 
         List<RecordingItem> recordings = loadVisibleDownloadingItems();
         recordingAdapter.setRecordings(recordings);
+        channelAdapter.setHomeRecordings(recordings);
         updateStorageHealthCard();
 
         int monitoringCount = 0;
@@ -731,6 +746,19 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (homeSectionsAdapter != null) homeSectionsAdapter.notifyDataSetChanged();
+    }
+
+    private RecordingItem findActiveRecording(String channelId) {
+        if (channelId == null || channelId.trim().isEmpty() || recordingAdapter == null) return null;
+        RecordingItem latest = null;
+        for (int i = 0; i < recordingAdapter.getCount(); i++) {
+            RecordingItem candidate = recordingAdapter.getItem(i);
+            if (candidate != null && candidate.isActive() && channelId.equals(candidate.getChannelId())
+                && (latest == null || candidate.getStartedAt() > latest.getStartedAt())) {
+                latest = candidate;
+            }
+        }
+        return latest;
     }
 
 
@@ -920,42 +948,51 @@ public class MainActivity extends AppCompatActivity {
 
     private final class HomeSectionsAdapter extends BaseAdapter {
         private static final int EMPTY = 0;
-        private static final int DOWNLOAD = 1;
-        private static final int CHANNEL = 2;
+        private static final int CHANNEL = 1;
 
         private int channelCount() { return channelAdapter.getCount(); }
-        private int downloadCount() { return recordingAdapter.getCount(); }
+
+        private List<ChannelItem> homeOrder() {
+            List<ChannelItem> ordered = new ArrayList<>();
+            List<ChannelItem> remaining = new ArrayList<>();
+            for (int i = 0; i < channelCount(); i++) {
+                ChannelItem channel = channelAdapter.getItem(i);
+                if (findActiveRecording(channel == null ? null : channel.getId()) != null) ordered.add(channel);
+                else remaining.add(channel);
+            }
+            ordered.sort((a, b) -> Long.compare(
+                findActiveRecording(b.getId()).getStartedAt(),
+                findActiveRecording(a.getId()).getStartedAt()));
+            ordered.addAll(remaining);
+            return ordered;
+        }
 
         @Override public int getCount() {
-            int channels = channelCount(), downloads = downloadCount();
-            if (channels == 0 && downloads == 0) return 1;
-            return channels + downloads;
+            if (channelCount() == 0) return 1;
+            return channelCount();
         }
 
         @Override public int getItemViewType(int position) {
-            if (channelCount() == 0 && downloadCount() == 0) return EMPTY;
-            return position < downloadCount() ? DOWNLOAD : CHANNEL;
+            if (channelCount() == 0) return EMPTY;
+            return CHANNEL;
         }
 
-        @Override public int getViewTypeCount() { return 3; }
+        @Override public int getViewTypeCount() { return 2; }
         @Override public boolean hasStableIds() { return false; }
         @Override public boolean isEnabled(int position) {
-            int type = getItemViewType(position);
-            return type == CHANNEL || type == DOWNLOAD;
+            return getItemViewType(position) == CHANNEL;
         }
         @Override public Object getItem(int position) {
             int type = getItemViewType(position);
-            if (type == DOWNLOAD) return recordingAdapter.getItem(position);
-            if (type == CHANNEL) return channelAdapter.getItem(position - downloadCount());
+            if (type == CHANNEL) return homeOrder().get(position);
             return "No channels yet. Paste a YouTube link above.";
         }
         @Override public long getItemId(int position) { return position; }
 
         @Override public View getView(int position, View convertView, ViewGroup parent) {
             int type = getItemViewType(position);
-            if (type == CHANNEL || type == DOWNLOAD) {
-                if (type == DOWNLOAD) return recordingAdapter.getView(position, convertView, parent);
-                return channelAdapter.getView(position - downloadCount(), convertView, parent);
+            if (type == CHANNEL) {
+                return channelAdapter.getHomeView(homeOrder().get(position), convertView, parent);
             }
 
             TextView label = convertView instanceof TextView ? (TextView) convertView : new TextView(MainActivity.this);
