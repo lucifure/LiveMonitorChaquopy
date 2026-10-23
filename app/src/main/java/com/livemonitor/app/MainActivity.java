@@ -35,8 +35,10 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.livemonitor.app.databinding.ActivityMainBinding;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -450,6 +452,12 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        RecordingItem activeRecording = findActiveRecording(channel.getId());
+        if (activeRecording != null) {
+            confirmStopDownload(activeRecording);
+            return;
+        }
+
         channel.markStopped();
         storage.upsertChannel(channel);
         sendChannelAction(LiveMonitorActions.ACTION_STOP_MONITORING, channel);
@@ -749,10 +757,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private RecordingItem findActiveRecording(String channelId) {
-        if (channelId == null || channelId.trim().isEmpty() || recordingAdapter == null) return null;
+        if (channelId == null || channelId.trim().isEmpty()) return null;
         RecordingItem latest = null;
-        for (int i = 0; i < recordingAdapter.getCount(); i++) {
-            RecordingItem candidate = recordingAdapter.getItem(i);
+        List<RecordingItem> candidates = storage.loadActiveRecordings();
+        for (RecordingItem candidate : candidates) {
             if (candidate != null && candidate.isActive() && channelId.equals(candidate.getChannelId())
                 && (latest == null || candidate.getStartedAt() > latest.getStartedAt())) {
                 latest = candidate;
@@ -801,7 +809,7 @@ public class MainActivity extends AppCompatActivity {
         List<ChannelItem> result = new ArrayList<>();
 
         for (ChannelItem channel : storage.loadChannels()) {
-            if (channel != null && !channel.isRecording()) {
+            if (channel != null) {
                 result.add(channel);
             }
         }
@@ -955,14 +963,17 @@ public class MainActivity extends AppCompatActivity {
         private List<ChannelItem> homeOrder() {
             List<ChannelItem> ordered = new ArrayList<>();
             List<ChannelItem> remaining = new ArrayList<>();
+            Map<String, RecordingItem> activeByChannel = new HashMap<>();
             for (int i = 0; i < channelCount(); i++) {
                 ChannelItem channel = channelAdapter.getItem(i);
-                if (findActiveRecording(channel == null ? null : channel.getId()) != null) ordered.add(channel);
+                RecordingItem recording = findActiveRecording(channel == null ? null : channel.getId());
+                if (recording != null) activeByChannel.put(channel.getId(), recording);
+                if (recording != null || (channel != null && channel.isRecording())) ordered.add(channel);
                 else remaining.add(channel);
             }
             ordered.sort((a, b) -> Long.compare(
-                findActiveRecording(b.getId()).getStartedAt(),
-                findActiveRecording(a.getId()).getStartedAt()));
+                activeByChannel.containsKey(b.getId()) ? activeByChannel.get(b.getId()).getStartedAt() : 0L,
+                activeByChannel.containsKey(a.getId()) ? activeByChannel.get(a.getId()).getStartedAt() : 0L));
             ordered.addAll(remaining);
             return ordered;
         }

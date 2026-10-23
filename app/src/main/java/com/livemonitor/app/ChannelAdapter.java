@@ -312,7 +312,7 @@ public class ChannelAdapter extends BaseAdapter {
             return;
         }
 
-        boolean recordingCard = recording != null && recording.isActive();
+        boolean recordingCard = channel.isRecording() || (recording != null && recording.isActive());
         holder.url.setVisibility(recordingCard ? View.GONE : View.VISIBLE);
         holder.details.setVisibility(recordingCard ? View.GONE : View.VISIBLE);
         holder.videoId.setVisibility(recordingCard ? View.VISIBLE : View.GONE);
@@ -321,7 +321,7 @@ public class ChannelAdapter extends BaseAdapter {
 
         holder.title.setText(channel.getDisplayTitle());
         holder.url.setText(channel.getUrl());
-        holder.statusBadge.setText(formatStatus(channel.getStatus()));
+        holder.statusBadge.setText(recordingCard ? "REC" : formatStatus(channel.getStatus()));
         if (!recordingCard) {
             holder.statusBadge.setTextSize(12);
             holder.statusBadge.setPadding(dp(10), dp(4), dp(10), dp(4));
@@ -330,16 +330,25 @@ public class ChannelAdapter extends BaseAdapter {
         holder.details.setText(buildDetails(channel));
         if (recordingCard) {
             AppCardStyle.applyRecordingBadge(context, holder.statusBadge);
-            holder.videoId.setText(recording.getVideoId() == null ? "" : recording.getVideoId());
-            long elapsed = recording.getStartedAt() > 0L
-                ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1000L) : 0L;
-            holder.timerStat.setText("⏱ " + RecordingProgressTracker.formatDuration(elapsed));
-            holder.qualityStat.setText("📺 " + recording.getQuality());
-            boolean starting = recording.getBytesRecorded() <= 0L && elapsed < 10L;
-            holder.sizeStat.setText("💾 " + (starting ? "Starting…" : RecordingProgressTracker.formatBytes(recording.getBytesRecorded())));
+            if (recording != null && recording.isActive()) {
+                holder.videoId.setText(recording.getVideoId() == null ? "" : recording.getVideoId());
+                long elapsed = recording.getStartedAt() > 0L
+                    ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1000L) : 0L;
+                holder.timerStat.setText("⏱ " + RecordingProgressTracker.formatDuration(elapsed));
+                holder.qualityStat.setText("📺 " + recording.getQuality());
+                boolean starting = recording.getBytesRecorded() <= 0L && elapsed < 10L;
+                holder.sizeStat.setText("💾 " + (starting ? "Starting…" : RecordingProgressTracker.formatBytes(recording.getBytesRecorded())));
+            } else {
+                holder.videoId.setText(channel.getCurrentVideoId());
+                holder.timerStat.setText("⏱ —");
+                holder.qualityStat.setText("📺 —");
+                holder.sizeStat.setText("💾 —");
+            }
         }
         holder.pauseResume.setText(recordingCard
-            ? (recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause")
+            ? (recording != null && recording.isActive()
+                ? (recording.isPausedByUser() ? "▶  Resume" : "Ⅱ  Pause")
+                : (channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume"))
             : (channel.shouldMonitor() ? "Ⅱ  Pause" : "▶  Resume"));
         holder.stop.setText("■  Stop");
         holder.stop.setEnabled(true);
@@ -353,13 +362,13 @@ public class ChannelAdapter extends BaseAdapter {
 
         holder.pauseResume.setOnClickListener(v -> {
             if (listener != null) {
-                if (recordingCard) listener.onRecordingPauseResumeClicked(recording);
+                if (recordingCard && recording != null && recording.isActive()) listener.onRecordingPauseResumeClicked(recording);
                 else listener.onPauseResumeClicked(channel);
             }
         });
 
         holder.stop.setOnClickListener(v -> {
-            if (recordingCard) {
+            if (recordingCard && recording != null && recording.isActive()) {
                 if (listener != null) listener.onRecordingStopClicked(recording);
                 return;
             }
