@@ -2,11 +2,9 @@ package com.livemonitor.app;
 
 import android.content.Context;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.view.View;
 import android.widget.Button;
-import android.widget.TextView;
-import android.view.Gravity;
+import android.graphics.Typeface;
 
 /** Shared card and action-button styling used by Home and server cards. */
 public final class AppCardStyle {
@@ -20,6 +18,13 @@ public final class AppCardStyle {
         card.setPadding(horizontal, vertical, horizontal, vertical);
         card.setBackgroundResource(R.drawable.lm_card_background);
         card.setElevation(Math.round(8 * context.getResources().getDisplayMetrics().density));
+    }
+
+    public static void applyChannelCard(Context context, View card) {
+        float density = context.getResources().getDisplayMetrics().density;
+        card.setPadding(Math.round(14 * density), Math.round(14 * density), Math.round(14 * density), Math.round(12 * density));
+        card.setBackgroundResource(R.drawable.lm_card_background);
+        card.setElevation(Math.round(8 * density));
     }
 
     public static void styleHomeActionButton(Context context, Button button) {
@@ -36,26 +41,4 @@ public final class AppCardStyle {
         button.setBackgroundResource(R.drawable.lm_action_button_background);
     }
 
-    public static TextView createHomeStat(Context context) {
-        TextView stat = new TextView(context);
-        stat.setTextColor(Color.rgb(194, 202, 211));
-        stat.setTextSize(12);
-        stat.setGravity(Gravity.CENTER_VERTICAL);
-        stat.setSingleLine(true);
-        return stat;
-    }
-
-    public static void applyRecordingBadge(Context context, TextView badge) {
-        applyRecordingBadge(context, badge, "● REC");
-    }
-
-    public static void applyRecordingBadge(Context context, TextView badge, String label) {
-        badge.setText(label == null ? "REC" : label);
-        badge.setTextSize(10);
-        float density = context.getResources().getDisplayMetrics().density;
-        badge.setPadding(Math.round(6 * density), Math.round(2 * density), Math.round(6 * density), Math.round(2 * density));
-        badge.setBackgroundResource(R.drawable.lm_status_recording_background);
-        badge.setTextColor(context.getResources().getColor(R.color.lm_status_recording_text));
-        badge.setVisibility(View.VISIBLE);
-    }
 }

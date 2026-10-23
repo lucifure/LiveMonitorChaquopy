@@ -174,68 +174,37 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         channelContainer.removeAllViews();
         if (channels.isEmpty()) { channelContainer.addView(text("No configured server channels.", 14)); return; }
         for (RemoteChannel channel : channels) {
-            LinearLayout row = newServerCard(channelContainer);
             boolean recording = isStatus(channel, "recording");
             boolean finalizing = isStatus(channel, "finalizing");
             boolean active = recording || finalizing;
-
-            LinearLayout heading = new LinearLayout(this);
-            heading.setOrientation(LinearLayout.HORIZONTAL);
-            heading.setGravity(Gravity.CENTER_VERTICAL);
-            TextView name = text(channel.displayTitle(), 16);
-            name.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            heading.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            TextView badge = text("", 12);
-            badge.setGravity(Gravity.CENTER);
+            boolean paused = isStatus(channel, "paused");
+            ChannelCardView.Model model = new ChannelCardView.Model();
+            model.title = channel.displayTitle();
+            model.badgeLabel = finalizing ? "Finalizing" : active ? "Recording" : paused ? "Paused" : "Monitoring";
+            model.badgeStyle = finalizing ? ChannelCardView.BADGE_FINALIZING
+                : active ? ChannelCardView.BADGE_RECORDING : paused ? ChannelCardView.BADGE_PAUSED : ChannelCardView.BADGE_MONITORING;
+            model.subLineError = channel.lastError != null && !channel.lastError.trim().isEmpty();
+            model.subLine = model.subLineError ? "Error: " + channel.lastError.trim()
+                : active ? (channel.videoId == null || channel.videoId.isEmpty() ? "—" : channel.videoId)
+                : paused ? "Monitoring paused" : "Waiting for stream";
             if (active) {
-                AppCardStyle.applyRecordingBadge(this, badge, finalizing ? "Finalizing" : "REC");
-            } else {
-                badge.setText(isStatus(channel, "paused") ? "Paused" : "Monitoring");
-                badge.setPadding(dp(10), dp(4), dp(10), dp(4));
-                badge.setBackgroundResource(R.drawable.lm_status_paused_background);
-                badge.setTextColor(getResources().getColor(R.color.lm_accent_blue_glow));
-            }
-            heading.addView(badge);
-            row.addView(heading);
-
-            if (active) {
-                TextView videoId = text(channel.videoId, 12);
-                videoId.setSingleLine(true);
-                videoId.setPadding(0, dp(4), 0, 0);
-                row.addView(videoId);
-
-                LinearLayout stats = new LinearLayout(this);
-                stats.setOrientation(LinearLayout.HORIZONTAL);
-                stats.setPadding(0, dp(8), 0, 0);
-                TextView timer = AppCardStyle.createHomeStat(this);
-                TextView quality = AppCardStyle.createHomeStat(this);
-                TextView size = AppCardStyle.createHomeStat(this);
-                timer.setText("⏱ " + formatServerElapsed(channel));
-                quality.setText("📺 " + channel.quality);
+                model.stat1 = "⏱ " + formatServerElapsed(channel);
+                model.stat2 = "📺 " + (channel.quality == null || channel.quality.isEmpty() ? "—" : channel.quality);
                 ServerRecordingGrouper.Group group = findRecordingGroup(channel, channels);
-                size.setText("💾 " + (group == null ? "-" : bytes(group.totalSize)));
-                stats.addView(timer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                stats.addView(quality, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                stats.addView(size, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                row.addView(stats);
-            } else {
-                TextView state = text(isStatus(channel, "paused")
-                    ? "Monitoring paused" : "Monitoring active - waiting for stream", 13);
-                state.setTextColor(getResources().getColor(R.color.lm_text_secondary));
-                state.setPadding(0, dp(4), 0, 0);
-                row.addView(state);
+                model.stat3 = "💾 " + (group == null ? "—" : bytes(group.totalSize));
             }
-            if (!channel.lastError.isEmpty()) {
-                TextView error = text("Error: " + channel.lastError, 13);
-                error.setTextColor(getResources().getColor(R.color.danger));
-                error.setPadding(0, dp(4), 0, dp(3)); row.addView(error);
-            }
-            LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END);
-            Button start = actionButton("paused".equals(channel.status) ? "Resume" : "Start"); start.setEnabled("paused".equals(channel.status) || "idle".equals(channel.status)); start.setOnClickListener(v -> channelAction(channel, "paused".equals(channel.status) ? "resume" : "start"));
-            Button stop = actionButton("Stop"); stop.setEnabled(!isStatus(channel, "paused")); stop.setOnClickListener(v -> channelAction(channel, "stop"));
-            Button delete = actionButton("Delete"); delete.setEnabled(!active); delete.setOnClickListener(v -> confirmDeleteChannel(channel));
-            addWeightedAction(actions, start, false); addWeightedAction(actions, stop, true); addWeightedAction(actions, delete, true);
-            row.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            boolean pausedAction = "paused".equals(channel.status);
+            boolean canStart = pausedAction || "idle".equals(channel.status);
+            model.button1 = pausedAction ? "Resume" : "Start";
+            model.button1Enabled = canStart;
+            model.button2 = "Stop";
+            model.button2Enabled = !paused;
+            model.button3 = "Delete";
+            model.button3Enabled = !active;
+            model.button1Click = v -> channelAction(channel, pausedAction ? "resume" : "start");
+            model.button2Click = v -> channelAction(channel, "stop");
+            model.button3Click = v -> confirmDeleteChannel(channel);
+            channelContainer.addView(new ChannelCardView(this, model));
         }
     }
 
@@ -244,7 +213,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     }
 
     private String formatServerElapsed(RemoteChannel channel) {
-        if (channel.serverTime <= 0d || channel.recordingStartedAt <= 0d) return "-";
+        if (channel.serverTime <= 0d || channel.recordingStartedAt <= 0d) return "—";
         long seconds = Math.max(0L, (long) (channel.serverTime - channel.recordingStartedAt));
         return RecordingProgressTracker.formatDuration(seconds);
     }
@@ -404,7 +373,11 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         String name, url, quality, status, title, lastError, videoId;
         double serverTime, recordingStartedAt;
 
-        String displayTitle() { return name; }
+        String displayTitle() {
+            if (title != null && !title.trim().isEmpty()) return title.trim();
+            if (name == null || name.trim().isEmpty()) return "Unknown channel";
+            return name.startsWith("@") ? name : "@" + name;
+        }
 
         static RemoteChannel from(JSONObject json, double serverTime) {
             RemoteChannel channel = new RemoteChannel();
