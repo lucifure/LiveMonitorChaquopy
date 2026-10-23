@@ -178,11 +178,15 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             boolean finalizing = isStatus(channel, "finalizing");
             boolean active = recording || finalizing;
             boolean paused = isStatus(channel, "paused");
+            boolean stopped = isStatus(channel, "stopped");
+            boolean failed = isStatus(channel, "failed");
             ChannelCardView.Model model = new ChannelCardView.Model();
             model.title = channel.displayTitle();
-            model.badgeLabel = finalizing ? "Finalizing" : active ? "Recording" : paused ? "Paused" : "Monitoring";
+            model.badgeLabel = finalizing ? "Finalizing" : active ? "Recording" : stopped ? "Stopped"
+                : failed ? "Failed" : paused ? "Paused" : "Monitoring";
             model.badgeStyle = finalizing ? ChannelCardView.BADGE_FINALIZING
-                : active ? ChannelCardView.BADGE_RECORDING : paused ? ChannelCardView.BADGE_PAUSED : ChannelCardView.BADGE_MONITORING;
+                : active ? ChannelCardView.BADGE_RECORDING : stopped || failed ? ChannelCardView.BADGE_STOPPED
+                : paused ? ChannelCardView.BADGE_PAUSED : ChannelCardView.BADGE_MONITORING;
             model.subLineError = channel.lastError != null && !channel.lastError.trim().isEmpty();
             model.subLine = model.subLineError ? "Error: " + channel.lastError.trim()
                 : active ? (channel.videoId == null || channel.videoId.isEmpty() ? "—" : channel.videoId)
@@ -193,9 +197,11 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 ServerRecordingGrouper.Group group = findRecordingGroup(channel, channels);
                 model.stat3 = "💾 " + (group == null ? "—" : bytes(group.totalSize));
             } else {
-                model.stat1 = "🔄 Checked —";
+                model.stat1 = "🔄 Checked " + formatServerAge(channel.serverTime, channel.lastCheckAt);
                 model.stat2 = "📺 " + (channel.quality == null || channel.quality.trim().isEmpty() ? "—" : channel.quality.trim());
-                model.stat3 = "📡 Live —";
+                model.stat3 = channel.lastLiveAt > 0d
+                    ? "📡 Live " + formatServerAge(channel.serverTime, channel.lastLiveAt) + (isJustNow(channel.serverTime, channel.lastLiveAt) ? "" : " ago")
+                    : channel.hasLastCheckAt ? "📡 None yet" : "📡 Live —";
             }
             boolean pausedAction = "paused".equals(channel.status);
             boolean canStart = pausedAction || "idle".equals(channel.status);
@@ -220,6 +226,19 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         if (channel.serverTime <= 0d || channel.recordingStartedAt <= 0d) return "—";
         long seconds = Math.max(0L, (long) (channel.serverTime - channel.recordingStartedAt));
         return RecordingProgressTracker.formatDuration(seconds);
+    }
+
+    private String formatServerAge(double serverTime, double timestamp) {
+        if (serverTime <= 0d || timestamp <= 0d) return "—";
+        long seconds = Math.max(0L, (long) (serverTime - timestamp));
+        if (seconds < 60L) return "just now";
+        if (seconds < 3600L) return (seconds / 60L) + "m";
+        if (seconds < 86400L) return (seconds / 3600L) + "h";
+        return (seconds / 86400L) + "d";
+    }
+
+    private boolean isJustNow(double serverTime, double timestamp) {
+        return serverTime > 0d && timestamp > 0d && Math.max(0L, (long) (serverTime - timestamp)) < 60L;
     }
 
     private ServerRecordingGrouper.Group findRecordingGroup(RemoteChannel target, List<RemoteChannel> channels) {
@@ -375,7 +394,8 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private static String relative(long seconds) { long delta = Math.max(0, System.currentTimeMillis() / 1000 - seconds); if (delta < 60) return "just now"; if (delta < 3600) return delta / 60 + " minutes ago"; if (delta < 86400) return delta / 3600 + " hours ago"; return delta / 86400 + " days ago"; }
     private static final class RemoteChannel {
         String name, url, quality, status, title, lastError, videoId;
-        double serverTime, recordingStartedAt;
+        double serverTime, recordingStartedAt, lastCheckAt, lastLiveAt;
+        boolean hasLastCheckAt;
 
         String displayTitle() {
             if (title != null && !title.trim().isEmpty()) return title.trim();
@@ -394,6 +414,9 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             channel.videoId = json.optString("video_id");
             channel.serverTime = serverTime;
             channel.recordingStartedAt = json.optDouble("recording_started_at", 0d);
+            channel.hasLastCheckAt = json.has("last_check_at");
+            channel.lastCheckAt = json.optDouble("last_check_at", 0d);
+            channel.lastLiveAt = json.optDouble("last_live_at", 0d);
             return channel;
         }
     }

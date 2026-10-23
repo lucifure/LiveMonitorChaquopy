@@ -87,15 +87,24 @@ public class ChannelAdapter extends BaseAdapter {
         }
         boolean recordingCard = channel.isRecording() || (recording != null && recording.isActive());
         model.title = homeTitle(channel);
+        String status = channel.getStatus();
+        boolean stopped = ChannelItem.STATUS_STOPPED.equals(status);
+        boolean failed = ChannelItem.STATUS_FAILED.equals(status);
+        boolean paused = ChannelItem.STATUS_PAUSED_BY_USER.equals(status) || ChannelItem.STATUS_PAUSED_NETWORK.equals(status);
         model.badgeStyle = recordingCard ? ChannelCardView.BADGE_RECORDING
-            : channel.shouldMonitor() ? ChannelCardView.BADGE_MONITORING : ChannelCardView.BADGE_PAUSED;
-        model.badgeLabel = recordingCard ? "Recording" : channel.shouldMonitor() ? "Monitoring" : "Paused";
+            : stopped || failed ? ChannelCardView.BADGE_STOPPED
+            : paused ? ChannelCardView.BADGE_PAUSED : ChannelCardView.BADGE_MONITORING;
+        model.badgeLabel = recordingCard ? "Recording" : stopped ? "Stopped" : failed ? "Failed"
+            : paused ? "Paused" : "Monitoring";
         String error = channel.getLastError();
-        model.subLineError = error != null && !error.trim().isEmpty();
-        if (model.subLineError) model.subLine = "Error: " + error.trim();
+        boolean hasError = error != null && !error.trim().isEmpty();
+        model.subLineError = !recordingCard && (failed && hasError || hasError && !stopped && !paused);
+        if (failed) model.subLine = hasError ? error.trim() : "Monitoring failed";
+        else if (stopped) model.subLine = "Monitoring stopped";
+        else if (model.subLineError) model.subLine = "Error: " + error.trim();
         else if (recordingCard) model.subLine = recording != null && recording.isActive()
             ? nullToDash(recording.getVideoId()) : nullToDash(channel.getCurrentVideoId());
-        else model.subLine = channel.shouldMonitor() ? "Waiting for stream" : "Monitoring paused";
+        else model.subLine = paused ? "Monitoring paused" : channel.shouldMonitor() ? "Waiting for stream" : "Monitoring paused";
 
         if (recordingCard) {
             if (recording != null && recording.isActive()) {
@@ -141,8 +150,10 @@ public class ChannelAdapter extends BaseAdapter {
 
     private String homeTitle(ChannelItem channel) {
         String title = channel.getTitle();
-        if (title != null && !title.trim().isEmpty()
-            && !title.trim().toLowerCase(java.util.Locale.US).startsWith("http")) return title.trim();
+        String normalizedTitle = title == null ? "" : title.trim();
+        String lowerTitle = normalizedTitle.toLowerCase(java.util.Locale.US);
+        boolean titleIsUrl = lowerTitle.contains("youtube.com/") || lowerTitle.contains("youtu.be/") || lowerTitle.startsWith("http");
+        if (!normalizedTitle.isEmpty() && !titleIsUrl) return normalizedTitle;
         String url = channel.getUrl();
         int at = url == null ? -1 : url.indexOf("/@");
         if (at >= 0) {

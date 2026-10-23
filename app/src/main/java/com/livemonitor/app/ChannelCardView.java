@@ -15,6 +15,7 @@ public final class ChannelCardView extends LinearLayout {
     public static final int BADGE_RECORDING = 1;
     public static final int BADGE_PAUSED = 2;
     public static final int BADGE_FINALIZING = 3;
+    public static final int BADGE_STOPPED = 4;
 
     public static final class Model {
         public String title = "";
@@ -55,10 +56,12 @@ public final class ChannelCardView extends LinearLayout {
         badge.setSingleLine(true);
         badge.setTextColor(context.getResources().getColor(model.badgeStyle == BADGE_RECORDING || model.badgeStyle == BADGE_FINALIZING
             ? R.color.lm_status_recording_text
-            : model.badgeStyle == BADGE_PAUSED ? R.color.lm_status_paused_text : R.color.lm_accent_blue_glow));
+            : model.badgeStyle == BADGE_PAUSED ? R.color.lm_status_paused_text
+            : model.badgeStyle == BADGE_STOPPED ? R.color.lm_status_stopped_text : R.color.lm_accent_blue_glow));
         badge.setBackgroundResource(model.badgeStyle == BADGE_RECORDING || model.badgeStyle == BADGE_FINALIZING
             ? R.drawable.lm_status_recording_background
-            : model.badgeStyle == BADGE_PAUSED ? R.drawable.lm_status_paused_background : R.drawable.lm_status_paused_background);
+            : model.badgeStyle == BADGE_PAUSED ? R.drawable.lm_status_paused_background
+            : model.badgeStyle == BADGE_STOPPED ? R.drawable.lm_status_stopped_background : R.drawable.lm_status_paused_background);
         titleRow.addView(badge, new LayoutParams(dp(100), dp(26)));
         card.addView(titleRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(28)));
 
