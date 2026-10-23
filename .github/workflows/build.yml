@@ -65,7 +65,7 @@ jobs:
           require_file app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           require_file app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
           require_file app/src/main/java/com/livemonitor/app/YouTubeUrlUtils.java
-          require_text 'delete.setText("Delete")' app/src/main/java/com/livemonitor/app/ChannelAdapter.java
+          require_text 'model.button3 = "Delete"' app/src/main/java/com/livemonitor/app/ChannelAdapter.java
           require_text 'deleteButton.setText("Delete")' app/src/main/java/com/livemonitor/app/RecordingAdapter.java
           require_text 'buildDebugSummary' app/src/main/java/com/livemonitor/app/RemoteConfig.java
           require_text 'markFetchedNow' app/src/main/java/com/livemonitor/app/RemoteConfig.java
