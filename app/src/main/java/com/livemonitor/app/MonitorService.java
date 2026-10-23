@@ -61,7 +61,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private static final int DIRECT_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final int INNERTUBE_HTTP_MAX_ATTEMPTS = 2;
     private static final long HTTP_429_COOLDOWN_MILLIS = 10L * 60L * 1_000L;
-    private static final long MISSED_STREAM_OUTAGE_MIN_MILLIS = 2L * 60L * 1_000L;
     public static final String ACTION_KEEP_ALIVE_PING = "com.livemonitor.app.ACTION_KEEP_ALIVE_PING";
     private static final int KEEP_ALIVE_REQUEST_CODE = 1001;
     private static final long KEEP_ALIVE_INTERVAL_MS = 5L * 60L * 1000L;
@@ -8192,7 +8191,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         long lostAtMillis = storage.loadNetworkLostAt();
         if (lostAtMillis > 0L) {
             storage.clearNetworkLostAt();
-            maybeReportMissedStreamsAfterOutage(lostAtMillis, restoredAtMillis);
         }
 
         for (ChannelItem channel : storage.loadChannels()) {
@@ -8253,42 +8251,6 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         broadcast(LiveMonitorActions.ACTION_NETWORK_LOST, "Network lost.");
-    }
-
-    private void maybeReportMissedStreamsAfterOutage(long lostAtMillis, long restoredAtMillis) {
-        long outageMillis = Math.max(0L, restoredAtMillis - lostAtMillis);
-        if (outageMillis < MISSED_STREAM_OUTAGE_MIN_MILLIS
-            || !storage.markMissedStreamOutageChecked(lostAtMillis, restoredAtMillis)) {
-            return;
-        }
-
-        executor.execute(() -> {
-            for (ChannelItem channel : storage.loadChannels()) {
-                if (channel == null || !channel.shouldMonitor()) {
-                    continue;
-                }
-
-                String outageDetails = "outageStart=" + lostAtMillis
-                    + ", outageEnd=" + restoredAtMillis
-                    + ", outageMillis=" + outageMillis
-                    + ", action=review recent channel streams for was_live entries in this window";
-                storage.addMissedStreamRecord(
-                    channel.getId(),
-                    "Possible missed live stream during network outage",
-                    outageDetails
-                );
-                log(
-                    LogItem.LEVEL_ERROR,
-                    LogItem.SOURCE_SERVICE,
-                    channel,
-                    "MISSED STREAM DETECTED during network outage.",
-                    outageDetails
-                );
-                notificationHelper.showChannelMonitoringNotification(channel);
-            }
-
-            broadcastChannelUpdated("Network restored; possible missed streams were flagged for review.");
-        });
     }
 
     @Override

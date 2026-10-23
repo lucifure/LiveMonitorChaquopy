@@ -404,13 +404,6 @@ public class ChannelAdapter extends BaseAdapter {
             builder.append(channel.getCurrentVideoId());
         }
 
-        int missedCount = storage.countMissedStreamRecords(channel.getId());
-        if (missedCount > 0) {
-            builder.append("\n⚠ ");
-            builder.append(missedCount);
-            builder.append(missedCount == 1 ? " missed stream during outage" : " missed streams during outage");
-        }
-
         if (channel.getLastError() != null && !channel.getLastError().trim().isEmpty()) {
             builder.append("\n");
             builder.append(channel.getLastError());
