@@ -31,7 +31,11 @@ public final class ChannelCardView extends LinearLayout {
     public ChannelCardView(Context context, Model model) {
         super(context);
         setOrientation(VERTICAL);
-        AppCardStyle.applyChannelCard(context, this);
+        setPadding(0, dp(4), 0, dp(4));
+        LinearLayout card = new LinearLayout(context);
+        card.setOrientation(VERTICAL);
+        AppCardStyle.applyChannelCard(context, card);
+        addView(card, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         LinearLayout titleRow = new LinearLayout(context);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -56,7 +60,7 @@ public final class ChannelCardView extends LinearLayout {
             ? R.drawable.lm_status_recording_background
             : model.badgeStyle == BADGE_PAUSED ? R.drawable.lm_status_paused_background : R.drawable.lm_status_paused_background);
         titleRow.addView(badge, new LayoutParams(dp(100), dp(26)));
-        addView(titleRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(28)));
+        card.addView(titleRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(28)));
 
         TextView sub = new TextView(context);
         sub.setText(model.subLine == null ? "—" : model.subLine);
@@ -66,7 +70,7 @@ public final class ChannelCardView extends LinearLayout {
         sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
         LayoutParams subParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(20));
         subParams.topMargin = dp(2);
-        addView(sub, subParams);
+        card.addView(sub, subParams);
 
         LinearLayout stats = new LinearLayout(context);
         stats.setGravity(Gravity.CENTER_VERTICAL);
@@ -75,7 +79,7 @@ public final class ChannelCardView extends LinearLayout {
         addStat(context, stats, model.stat3, true);
         LayoutParams statsParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(36));
         statsParams.topMargin = dp(6);
-        addView(stats, statsParams);
+        card.addView(stats, statsParams);
 
         LinearLayout buttons = new LinearLayout(context);
         buttons.setGravity(Gravity.CENTER_VERTICAL);
@@ -84,8 +88,8 @@ public final class ChannelCardView extends LinearLayout {
         addButton(context, buttons, model.button3, model.button3Enabled, model.button3Click, true);
         LayoutParams buttonParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(44));
         buttonParams.topMargin = dp(8);
-        addView(buttons, buttonParams);
-        setOnClickListener(model.cardClick);
+        card.addView(buttons, buttonParams);
+        card.setOnClickListener(model.cardClick);
     }
 
     private void addStat(Context context, LinearLayout row, String value, boolean gap) {

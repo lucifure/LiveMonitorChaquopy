@@ -192,6 +192,10 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 model.stat2 = "📺 " + (channel.quality == null || channel.quality.isEmpty() ? "—" : channel.quality);
                 ServerRecordingGrouper.Group group = findRecordingGroup(channel, channels);
                 model.stat3 = "💾 " + (group == null ? "—" : bytes(group.totalSize));
+            } else {
+                model.stat1 = "🔄 Checked —";
+                model.stat2 = "📺 " + (channel.quality == null || channel.quality.trim().isEmpty() ? "—" : channel.quality.trim());
+                model.stat3 = "📡 Live —";
             }
             boolean pausedAction = "paused".equals(channel.status);
             boolean canStart = pausedAction || "idle".equals(channel.status);

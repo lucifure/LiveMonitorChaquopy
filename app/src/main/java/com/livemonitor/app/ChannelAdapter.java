@@ -22,11 +22,12 @@ public class ChannelAdapter extends BaseAdapter {
     }
 
     private final Context context;
+    private final AppStorage storage;
     private final List<ChannelItem> channels = new ArrayList<>();
     private Listener listener;
     private final Map<String, RecordingItem> homeRecordings = new HashMap<>();
 
-    public ChannelAdapter(Context context) { this.context = context; }
+    public ChannelAdapter(Context context) { this.context = context; this.storage = new AppStorage(context); }
     public void setListener(Listener listener) { this.listener = listener; }
 
     public void setChannels(List<ChannelItem> newChannels) {
@@ -109,7 +110,8 @@ public class ChannelAdapter extends BaseAdapter {
             }
         } else {
             model.stat1 = "🔄 Checked " + ChannelCardView.formatTimeAgo(channel.getLastCheckAt());
-            model.stat2 = "📺 480p";
+            String quality = storage.loadSettings().getDownloadQuality();
+            model.stat2 = "📺 " + (quality == null || quality.trim().isEmpty() ? "—" : quality.trim());
             String live = ChannelCardView.formatTimeAgo(channel.getLastLiveAt());
             model.stat3 = "📡 " + ("—".equals(live) ? "None yet" : "Live " + live + ("just now".equals(live) ? "" : " ago"));
         }
