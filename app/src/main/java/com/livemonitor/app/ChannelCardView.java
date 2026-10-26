@@ -69,9 +69,9 @@ public final class ChannelCardView extends LinearLayout {
         sub.setText(model.subLine == null ? "—" : model.subLine);
         sub.setTextSize(13);
         sub.setTextColor(context.getResources().getColor(model.subLineError ? R.color.danger : R.color.lm_text_secondary));
-        sub.setSingleLine(true);
+        sub.setMaxLines(2);
         sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        LayoutParams subParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(20));
+        LayoutParams subParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(36));
         subParams.topMargin = dp(2);
         card.addView(sub, subParams);
 

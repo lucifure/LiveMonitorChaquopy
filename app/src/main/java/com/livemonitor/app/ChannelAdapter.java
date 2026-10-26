@@ -75,7 +75,7 @@ public class ChannelAdapter extends BaseAdapter {
     @Override public int getCount() { return channels.size(); }
     @Override public ChannelItem getItem(int position) { return channels.get(position); }
     @Override public long getItemId(int position) { ChannelItem channel = getItem(position); return channel == null ? position : channel.getNotificationId(); }
-    @Override public View getView(int position, View convertView, ViewGroup parent) { return createCard(getItem(position), null); }
+    @Override public View getView(int position, View convertView, ViewGroup parent) { return getHomeView(getItem(position), convertView, parent); }
 
     private View createCard(ChannelItem channel, RecordingItem recording) {
         ChannelCardView.Model model = new ChannelCardView.Model();
@@ -103,7 +103,8 @@ public class ChannelAdapter extends BaseAdapter {
         else if (stopped) model.subLine = "Monitoring stopped";
         else if (model.subLineError) model.subLine = "Error: " + error.trim();
         else if (recordingCard) model.subLine = recording != null && recording.isActive()
-            ? nullToDash(recording.getVideoId()) : nullToDash(channel.getCurrentVideoId());
+            ? recordingSubLine(recording.getTitle(), recording.getVideoId())
+            : nullToDash(channel.getCurrentVideoId());
         else model.subLine = paused ? "Monitoring paused" : channel.shouldMonitor() ? "Waiting for stream" : "Monitoring paused";
 
         if (recordingCard) {
@@ -169,6 +170,12 @@ public class ChannelAdapter extends BaseAdapter {
             if (!handle.isEmpty()) return "@" + handle;
         }
         return "@channel";
+    }
+
+    static String recordingSubLine(String recordingTitle, String videoId) {
+        String title = recordingTitle == null ? "" : recordingTitle.trim();
+        String id = videoId == null ? "" : videoId.trim();
+        return !title.isEmpty() && !title.equals(id) ? title : nullToDash(id);
     }
 
     private static String nullToDash(String value) { return value == null || value.trim().isEmpty() ? "—" : value.trim(); }
