@@ -4,6 +4,16 @@ package com.livemonitor.app;
 final class RecordingRecoveryPolicy {
     private RecordingRecoveryPolicy() {}
 
+    static boolean shouldMarkInterruptedOnStartup(
+        String status,
+        boolean trackedInMemory,
+        boolean recorderProcessRunning
+    ) {
+        return RecordingItem.STATUS_RECORDING.equals(status)
+            && !trackedInMemory
+            && !recorderProcessRunning;
+    }
+
     static boolean mayPreserveUnknownStatus(
         String recordingStatus,
         boolean userHalted,

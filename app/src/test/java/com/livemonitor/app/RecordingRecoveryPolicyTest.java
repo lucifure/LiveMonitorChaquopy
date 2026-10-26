@@ -17,6 +17,40 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class RecordingRecoveryPolicyTest {
     @Test
+    public void startupInterruptionDecisionCoversEveryStatusAndLifecycleCombination() {
+        String[] statuses = {
+            RecordingItem.STATUS_WAITING_FOR_LIVE,
+            RecordingItem.STATUS_RECORDING,
+            RecordingItem.STATUS_PAUSED_NETWORK,
+            RecordingItem.STATUS_PAUSED_BY_USER,
+            RecordingItem.STATUS_CONVERTING,
+            RecordingItem.STATUS_COPYING,
+            RecordingItem.STATUS_COMPLETED,
+            RecordingItem.STATUS_FAILED,
+            RecordingItem.STATUS_STOPPED_BY_USER,
+            RecordingItem.STATUS_STOPPED_BY_SYSTEM,
+            RecordingItem.STATUS_RECOVERABLE
+        };
+        for (String status : statuses) {
+            for (boolean trackedInMemory : new boolean[] {false, true}) {
+                for (boolean recorderProcessRunning : new boolean[] {false, true}) {
+                    boolean expected = RecordingItem.STATUS_RECORDING.equals(status)
+                        && !trackedInMemory
+                        && !recorderProcessRunning;
+                    assertEquals(
+                        status + " tracked=" + trackedInMemory
+                            + " processRunning=" + recorderProcessRunning,
+                        expected,
+                        RecordingRecoveryPolicy.shouldMarkInterruptedOnStartup(
+                            status, trackedInMemory, recorderProcessRunning
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    @Test
     public void unknownStatusCanBePreservedWithoutChangingRecordingIdentityOrSegments() throws Exception {
         RecordingItem recording = new RecordingItem(
             "channel-id", "Channel", "https://example.test/channel", "video-id",

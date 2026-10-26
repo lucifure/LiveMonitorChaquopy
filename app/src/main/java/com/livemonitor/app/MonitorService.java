@@ -105,6 +105,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     private volatile boolean serviceRunning = false;
     private volatile boolean networkAvailable = true;
     private volatile boolean shuttingDown = false;
+    private volatile boolean startupRecordingsReconciled = false;
     private volatile long serviceGeneration = -1L;
     private volatile boolean ytDlpExecutableReady = false;
     private volatile boolean youtubedlAndroidReady = false;
@@ -1510,6 +1511,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
     }
 
     private void restoreSavedChannels() {
+        reconcileInterruptedRecordingsAtStartup();
         List<ChannelItem> channels = storage.loadChannels();
 
         for (ChannelItem channel : channels) {
@@ -1521,6 +1523,52 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         broadcastChannelUpdated("Saved monitoring restored.");
+    }
+
+    private synchronized void reconcileInterruptedRecordingsAtStartup() {
+        if (startupRecordingsReconciled) {
+            return;
+        }
+        startupRecordingsReconciled = true;
+        for (RecordingItem recording : storage.loadRecordings()) {
+            if (recording == null || isBlank(recording.getId())) {
+                continue;
+            }
+            String recordingId = recording.getId();
+            boolean trackedInMemory = activeRecordings.containsKey(recordingId)
+                || activeRecordings.values().stream().anyMatch(active -> active != null
+                    && recordingId.equals(active.getId()));
+            boolean recorderProcessRunning = recorderLaunchCoordinator.hasHandle(recordingId)
+                || YtDlpRunner.isRecording(recordingId)
+                || FFmpegRunner.isRunning(recordingId)
+                || activeYoutubedlAndroidRecordings.contains(recordingId);
+            if (finalizingRecordingIds.contains(recordingId)
+                || finalizedRecordingIds.contains(recordingId)
+                || !RecordingRecoveryPolicy.shouldMarkInterruptedOnStartup(
+                    recording.getStatus(), trackedInMemory, recorderProcessRunning
+                )) {
+                continue;
+            }
+            boolean tempTsExists = !isBlank(recording.getTempTsPath())
+                && new File(recording.getTempTsPath()).isFile();
+            RecordingItem updated = storage.updateRecordingIfStatus(
+                recordingId,
+                RecordingItem.STATUS_RECORDING,
+                item -> item.markRecoverable("Recording was interrupted when the service restarted.")
+            );
+            if (updated != null) {
+                log(
+                    LogItem.LEVEL_WARNING,
+                    LogItem.SOURCE_RECORDER,
+                    null,
+                    "Interrupted recording marked recoverable at startup.",
+                    "recordingId=" + recordingId
+                        + ", videoId=" + recording.getVideoId()
+                        + ", previous status=" + recording.getStatus()
+                        + ", tempTsExists=" + tempTsExists
+                );
+            }
+        }
     }
 
     private void startChannelLoop(ChannelItem channel) {
