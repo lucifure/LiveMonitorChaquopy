@@ -98,7 +98,7 @@ public class LogAdapter extends BaseAdapter {
         header.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
 
         TextView message = new TextView(context);
-        message.setTextSize(14);
+        message.setTextSize(12);
         message.setTextColor(Color.WHITE);
         message.setTypeface(Typeface.MONOSPACE);
         message.setPadding(0, dp(3), 0, 0);
@@ -106,7 +106,7 @@ public class LogAdapter extends BaseAdapter {
 
         TextView details = new TextView(context);
         details.setTextSize(12);
-        details.setTextColor(Color.rgb(160, 160, 160));
+        details.setTextColor(Color.rgb(224, 224, 224));
         details.setTypeface(Typeface.MONOSPACE);
         details.setPadding(0, dp(3), 0, 0);
         details.setSingleLine(false);
@@ -143,11 +143,14 @@ public class LogAdapter extends BaseAdapter {
                 + log.getTag()
         );
 
-        holder.header.setTextColor(levelColor(log.getLevel()));
+        int color = levelColor(log.getLevel());
+        holder.header.setTextColor(color);
         holder.message.setText(log.getMessage());
+        holder.message.setTextColor(color);
 
         String details = buildDetails(log);
         holder.details.setText(details);
+        holder.details.setTextColor(color);
         holder.details.setVisibility(details.trim().isEmpty() ? View.GONE : View.VISIBLE);
     }
 
@@ -193,18 +196,14 @@ public class LogAdapter extends BaseAdapter {
         }
 
         if (LogItem.LEVEL_WARNING.equals(level)) {
-            return Color.rgb(255, 210, 64);
+            return Color.rgb(255, 200, 87);
         }
 
         if (LogItem.LEVEL_SUCCESS.equals(level)) {
-            return Color.rgb(22, 199, 132);
+            return Color.rgb(129, 199, 132);
         }
 
-        if (LogItem.LEVEL_DEBUG.equals(level)) {
-            return Color.rgb(150, 150, 150);
-        }
-
-        return Color.rgb(64, 156, 255);
+        return Color.rgb(224, 224, 224);
     }
 
     private int dp(int value) {

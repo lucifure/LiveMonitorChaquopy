@@ -18,6 +18,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -35,6 +36,10 @@ public class LogActivity extends AppCompatActivity {
     private LogAdapter adapter;
     private ListView listView;
     private TextView emptyView;
+    private TextView subtitle;
+    private final List<LogItem> allLogs = new ArrayList<>();
+    private final List<Button> filterButtons = new ArrayList<>();
+    private String selectedFilter = "ALL";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,54 +91,27 @@ public class LogActivity extends AppCompatActivity {
         root.addView(titleRow, titleParams);
 
         addLogModeToggle(root, true);
+        subtitle = new TextView(this);
+        subtitle.setTextColor(Color.rgb(190, 190, 190));
+        subtitle.setTextSize(12);
+        subtitle.setPadding(0, 0, 0, dp(8));
+        root.addView(subtitle);
 
-        LinearLayout buttonRow = new LinearLayout(this);
-        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
-        buttonRow.setGravity(Gravity.END);
-
-        TextView filters = new TextView(this);
-        filters.setText("All   Errors   Warnings   Success");
-        filters.setTextColor(Color.rgb(190, 190, 190));
-        filters.setPadding(0, 0, 0, dp(8));
+        LinearLayout filters = new LinearLayout(this);
+        filters.setGravity(Gravity.CENTER);
+        addFilter(filters, "All", "ALL");
+        addFilter(filters, "Errors", "ERRORS");
+        addFilter(filters, "Warnings", "WARNINGS");
+        addFilter(filters, "Success", "SUCCESS");
         root.addView(filters);
 
-        Button copyButton = new Button(this);
-        copyButton.setAllCaps(false);
-        copyButton.setText("Copy Log");
-        copyButton.setOnClickListener(v -> copyLog());
-
-        Button clearButton = new Button(this);
-        clearButton.setAllCaps(false);
-        clearButton.setText("Clear Log");
-        clearButton.setOnClickListener(v -> clearLog());
-
-        buttonRow.addView(copyButton);
-
-        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        clearParams.leftMargin = dp(8);
-        buttonRow.addView(clearButton, clearParams);
-
-        Button saveButton = new Button(this);
-        saveButton.setAllCaps(false);
-        saveButton.setText("Save Log");
-        saveButton.setOnClickListener(v -> saveLog());
-        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        saveParams.leftMargin = dp(8);
-        buttonRow.addView(saveButton, saveParams);
-
-        root.addView(
-            buttonRow,
-            new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        );
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER);
+        addAction(actions, "Refresh", v -> refreshLogs());
+        addAction(actions, "Copy Log", v -> copyLog());
+        addAction(actions, "Save Log", v -> saveLog());
+        addAction(actions, "Clear Log", v -> confirmClear());
+        root.addView(actions);
 
         listView = new ListView(this);
         listView.setFastScrollEnabled(true);
@@ -165,6 +143,14 @@ public class LogActivity extends AppCompatActivity {
         emptyParams.topMargin = dp(8);
         root.addView(emptyView, emptyParams);
 
+        Button close = new Button(this);
+        close.setText("Close");
+        close.setAllCaps(false);
+        close.setOnClickListener(v -> AppChrome.handleBack(this));
+        root.addView(close);
+
+        updateFilterButtons();
+
         return root;
     }
 
@@ -188,14 +174,75 @@ public class LogActivity extends AppCompatActivity {
 
     private void refreshLogs() {
         List<LogItem> logs = storage.loadLogs();
-        adapter.setLogs(logs);
-        boolean isEmpty = logs == null || logs.isEmpty();
+        allLogs.clear();
+        if (logs != null) allLogs.addAll(logs);
+        renderLogs();
+    }
+
+    private void renderLogs() {
+        List<LogItem> visible = new ArrayList<>();
+        for (LogItem log : allLogs) {
+            if (log != null && ServerLogFormatter.matchesFilter(log.getLevel(), selectedFilter)) {
+                visible.add(log);
+            }
+        }
+        adapter.setLogs(visible);
+        boolean isEmpty = visible.isEmpty();
+        subtitle.setText(visible.size() + " entries shown · times shown in your phone's time zone");
         emptyView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
         listView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
     }
 
+    private void addFilter(LinearLayout row, String label, String filter) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setOnClickListener(v -> {
+            selectedFilter = filter;
+            updateFilterButtons();
+            renderLogs();
+        });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        row.addView(button, params);
+        filterButtons.add(button);
+    }
+
+    private void updateFilterButtons() {
+        String[] filters = {"ALL", "ERRORS", "WARNINGS", "SUCCESS"};
+        for (int i = 0; i < filterButtons.size(); i++) {
+            boolean selected = filters[i].equals(selectedFilter);
+            filterButtons.get(i).setTextColor(selected ? Color.WHITE : Color.rgb(190, 190, 190));
+            filterButtons.get(i).setBackgroundTintList(android.content.res.ColorStateList.valueOf(
+                selected ? 0xff455a64 : 0xff242424
+            ));
+        }
+    }
+
+    private void addAction(LinearLayout row, String label, View.OnClickListener click) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setOnClickListener(click);
+        button.setTextSize(12);
+        row.addView(button, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+    }
+
+    private String visibleText() {
+        StringBuilder text = new StringBuilder();
+        for (LogItem log : allLogs) {
+            if (log == null || !log.isCopyable()
+                || !ServerLogFormatter.matchesFilter(log.getLevel(), selectedFilter)) {
+                continue;
+            }
+            if (text.length() > 0) text.append("\n");
+            text.append(log.toCopyLine());
+        }
+        return text.toString();
+    }
+
     private void copyLog() {
-        String text = storage.buildCopyTextForAllLogs();
+        String text = visibleText();
 
         if (text.trim().isEmpty()) {
             Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
@@ -212,7 +259,7 @@ public class LogActivity extends AppCompatActivity {
     }
 
     private void saveLog() {
-        String text = storage.buildCopyTextForAllLogs();
+        String text = visibleText();
 
         if (text.trim().isEmpty()) {
             Toast.makeText(this, "Log is empty.", Toast.LENGTH_SHORT).show();
@@ -354,6 +401,15 @@ public class LogActivity extends AppCompatActivity {
             (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 
         clipboard.setPrimaryClip(ClipData.newPlainText(label, text));
+    }
+
+    private void confirmClear() {
+        new AlertDialog.Builder(this)
+            .setTitle("Clear global log?")
+            .setMessage("This clears the app log. Recordings are not affected.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Clear", (dialog, which) -> clearLog())
+            .show();
     }
 
     private void clearLog() {
