@@ -10,13 +10,20 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.appcompat.app.AlertDialog;
 
 import androidx.appcompat.app.AppCompatActivity;
+
+import java.io.File;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Settings screen for choosing which log categories are saved and shown.
  */
 public class LogSettingsActivity extends AppCompatActivity {
+    private final ExecutorService historyExecutor = Executors.newSingleThreadExecutor();
 
     private AppStorage storage;
     private AppSettings settings;
@@ -141,7 +148,75 @@ public class LogSettingsActivity extends AppCompatActivity {
 
         root.addView(buttonRow);
 
+        Button saveHistoryButton = new Button(this);
+        saveHistoryButton.setAllCaps(false);
+        saveHistoryButton.setText("Save full log history (.txt)");
+        saveHistoryButton.setOnClickListener(v -> saveFullLogHistory());
+        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        historyParams.topMargin = dp(16);
+        root.addView(saveHistoryButton, historyParams);
+
+        Button deleteHistoryButton = new Button(this);
+        deleteHistoryButton.setAllCaps(false);
+        deleteHistoryButton.setText("Delete log history files");
+        deleteHistoryButton.setOnClickListener(v -> confirmDeleteLogHistory());
+        root.addView(deleteHistoryButton, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
         return scrollView;
+    }
+
+    private void saveFullLogHistory() {
+        historyExecutor.execute(() -> {
+            try {
+                List<File> files = LogHistoryWriter.listHistoryFiles(this);
+                if (files.isEmpty()) {
+                    runOnUiThread(() -> Toast.makeText(this, "No log history yet.", Toast.LENGTH_SHORT).show());
+                    return;
+                }
+                String name = LogFileSaver.saveFiles(
+                    this, storage, files, "LiveMonitor_FullLog_"
+                );
+                runOnUiThread(() -> Toast.makeText(
+                    this, "Log history saved: " + name, Toast.LENGTH_LONG
+                ).show());
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(
+                    this, "Could not save log history.", Toast.LENGTH_SHORT
+                ).show());
+            }
+        });
+    }
+
+    private void confirmDeleteLogHistory() {
+        new AlertDialog.Builder(this)
+            .setTitle("Delete log history files?")
+            .setMessage("This permanently deletes the daily app log text files. The in-app log is unchanged.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete", (dialog, which) -> deleteLogHistory())
+            .show();
+    }
+
+    private void deleteLogHistory() {
+        historyExecutor.execute(() -> {
+            List<File> files = LogHistoryWriter.listHistoryFiles(this);
+            int deleted = LogHistoryWriter.deleteAll(this);
+            String message = files.isEmpty()
+                ? "No log history files to delete."
+                : deleted == files.size()
+                    ? "Log history files deleted."
+                    : "Deleted " + deleted + " of " + files.size() + " log history files.";
+            runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_SHORT).show());
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        historyExecutor.shutdown();
+        super.onDestroy();
     }
 
     private CheckBox addCheckBox(LinearLayout root, String title, String summary) {

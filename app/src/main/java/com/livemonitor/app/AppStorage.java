@@ -631,6 +631,9 @@ public class AppStorage {
         List<LogItem> logs = loadLogs();
         logs.add(log);
         saveLogs(logs);
+        if (log.isCopyable()) {
+            LogHistoryWriter.append(appContext, log.toCopyLine() + "\n");
+        }
     }
 
     public synchronized void appendLogs(List<LogItem> newLogs) {
@@ -639,14 +642,21 @@ public class AppStorage {
         }
 
         List<LogItem> logs = loadLogs();
+        StringBuilder historyBatch = new StringBuilder();
 
         for (LogItem log : newLogs) {
             if (log != null && shouldStoreLog(log)) {
                 logs.add(log);
+                if (log.isCopyable()) {
+                    historyBatch.append(log.toCopyLine()).append('\n');
+                }
             }
         }
 
         saveLogs(logs);
+        if (historyBatch.length() > 0) {
+            LogHistoryWriter.append(appContext, historyBatch.toString());
+        }
     }
 
     private boolean shouldStoreLog(LogItem log) {

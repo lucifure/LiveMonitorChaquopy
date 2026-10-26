@@ -157,6 +157,7 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
 
         FFmpegRunner.setup(this);
         fileManager.registerRecoverableTsFilesInStorage();
+        LogHistoryWriter.prune(this);
         PoTokenRefreshWorker.scheduleIfNeeded(this);
         log(LogItem.LEVEL_SUCCESS, LogItem.SOURCE_SERVICE, null, "MonitorService created.", "");
     }
