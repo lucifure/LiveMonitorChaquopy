@@ -128,7 +128,7 @@ public class ChannelAdapter extends BaseAdapter {
             String quality = storage.loadSettings().getDownloadQuality();
             model.stat2 = quality == null || quality.trim().isEmpty() ? "—" : quality.trim();
             String live = ChannelCardView.formatTimeAgo(channel.getLastLiveAt());
-            model.stat3 = "—".equals(live) ? "None yet" : "Live " + live + ("just now".equals(live) ? "" : " ago");
+            model.stat3 = "—".equals(live) ? "None yet" : live;
         }
 
         model.button1 = recordingCard
@@ -161,9 +161,17 @@ public class ChannelAdapter extends BaseAdapter {
             int end = url.indexOf('/', at + 2);
             return end < 0 ? url.substring(at + 1) : url.substring(at + 1, end);
         }
+        String title = channel.getTitle();
+        if (title != null && !title.trim().isEmpty()
+            && !title.trim().matches("(?i)^(?:[a-z][a-z0-9+.-]*://|www\\.).*")) return title.trim();
         if (url != null) {
-            int end = url.indexOf('?', 0);
-            String clean = end < 0 ? url : url.substring(0, end);
+            int end = url.length();
+            int query = url.indexOf('?');
+            int fragment = url.indexOf('#');
+            if (query >= 0) end = Math.min(end, query);
+            if (fragment >= 0) end = Math.min(end, fragment);
+            String clean = url.substring(0, end);
+            while (clean.endsWith("/") && !clean.isEmpty()) clean = clean.substring(0, clean.length() - 1);
             int slash = clean.lastIndexOf('/');
             String handle = slash >= 0 ? clean.substring(slash + 1) : clean;
             if (!handle.isEmpty()) return handle.startsWith("@") ? handle : "@" + handle;

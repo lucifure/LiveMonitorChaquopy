@@ -112,7 +112,7 @@ public final class ChannelCardView extends LinearLayout {
         TextView stat = new TextView(context);
         stat.setText(value == null || value.isEmpty() ? "—" : value);
         stat.setTextColor(context.getResources().getColor(R.color.lm_text_primary));
-        stat.setTextSize(18);
+        stat.setTextSize(16);
         stat.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         stat.setGravity(Gravity.CENTER);
         stat.setSingleLine(true);

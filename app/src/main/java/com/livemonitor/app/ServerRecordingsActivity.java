@@ -211,7 +211,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 model.stat1 = formatServerAge(channel.serverTime, channel.lastCheckAt);
                 model.stat2 = channel.quality == null || channel.quality.trim().isEmpty() ? "—" : channel.quality.trim();
                 model.stat3 = channel.lastLiveAt > 0d
-                    ? "Live " + formatServerAge(channel.serverTime, channel.lastLiveAt) + (isJustNow(channel.serverTime, channel.lastLiveAt) ? "" : " ago")
+                    ? formatServerAge(channel.serverTime, channel.lastLiveAt)
                     : channel.hasLastCheckAt ? "None yet" : "—";
             }
             boolean pausedAction = "paused".equals(channel.status);
