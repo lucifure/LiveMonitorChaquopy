@@ -173,7 +173,15 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private void renderChannels(List<RemoteChannel> channels) {
         channelContainer.removeAllViews();
         if (channels.isEmpty()) { channelContainer.addView(text("No configured server channels.", 14)); return; }
-        for (RemoteChannel channel : channels) {
+        List<RemoteChannel> ordered = new ArrayList<>(channels);
+        java.util.Collections.sort(ordered, (left, right) -> {
+            boolean leftActive = isStatus(left, "recording") || isStatus(left, "finalizing");
+            boolean rightActive = isStatus(right, "recording") || isStatus(right, "finalizing");
+            if (leftActive != rightActive) return leftActive ? -1 : 1;
+            if (leftActive) return Double.compare(right.recordingStartedAt, left.recordingStartedAt);
+            return 0;
+        });
+        for (RemoteChannel channel : ordered) {
             boolean recording = isStatus(channel, "recording");
             boolean finalizing = isStatus(channel, "finalizing");
             boolean active = recording || finalizing;
@@ -181,7 +189,8 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             boolean stopped = isStatus(channel, "stopped");
             boolean failed = isStatus(channel, "failed");
             ChannelCardView.Model model = new ChannelCardView.Model();
-            model.title = channel.displayTitle();
+            model.title = channel.name == null || channel.name.trim().isEmpty() ? "@channel"
+                : channel.name.startsWith("@") ? channel.name : "@" + channel.name;
             model.badgeLabel = finalizing ? "Finalizing" : active ? "Recording" : stopped ? "Stopped"
                 : failed ? "Failed" : paused ? "Paused" : "Monitoring";
             model.badgeStyle = finalizing ? ChannelCardView.BADGE_FINALIZING
@@ -189,19 +198,21 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 : paused ? ChannelCardView.BADGE_PAUSED : ChannelCardView.BADGE_MONITORING;
             model.subLineError = channel.lastError != null && !channel.lastError.trim().isEmpty();
             model.subLine = model.subLineError ? "Error: " + channel.lastError.trim()
-                : active ? (channel.videoId == null || channel.videoId.isEmpty() ? "—" : channel.videoId)
+                : active ? ChannelAdapter.recordingSubLine(channel.title, channel.videoId)
                 : paused ? "Monitoring paused" : "Waiting for stream";
             if (active) {
-                model.stat1 = "⏱ " + formatServerElapsed(channel);
-                model.stat2 = "📺 " + (channel.quality == null || channel.quality.isEmpty() ? "—" : channel.quality);
+                model.statLabel1 = "Elapsed"; model.statLabel2 = "Quality"; model.statLabel3 = "Size";
+                model.stat1 = formatServerElapsed(channel);
+                model.stat2 = channel.quality == null || channel.quality.isEmpty() ? "—" : channel.quality;
                 ServerRecordingGrouper.Group group = findRecordingGroup(channel, channels);
-                model.stat3 = "💾 " + (group == null ? "—" : bytes(group.totalSize));
+                model.stat3 = group == null ? "—" : bytes(group.totalSize);
             } else {
-                model.stat1 = "🔄 Checked " + formatServerAge(channel.serverTime, channel.lastCheckAt);
-                model.stat2 = "📺 " + (channel.quality == null || channel.quality.trim().isEmpty() ? "—" : channel.quality.trim());
+                model.statLabel1 = "Checked"; model.statLabel2 = "Quality"; model.statLabel3 = "Last live";
+                model.stat1 = formatServerAge(channel.serverTime, channel.lastCheckAt);
+                model.stat2 = channel.quality == null || channel.quality.trim().isEmpty() ? "—" : channel.quality.trim();
                 model.stat3 = channel.lastLiveAt > 0d
-                    ? "📡 Live " + formatServerAge(channel.serverTime, channel.lastLiveAt) + (isJustNow(channel.serverTime, channel.lastLiveAt) ? "" : " ago")
-                    : channel.hasLastCheckAt ? "📡 None yet" : "📡 Live —";
+                    ? "Live " + formatServerAge(channel.serverTime, channel.lastLiveAt) + (isJustNow(channel.serverTime, channel.lastLiveAt) ? "" : " ago")
+                    : channel.hasLastCheckAt ? "None yet" : "—";
             }
             boolean pausedAction = "paused".equals(channel.status);
             boolean canStart = pausedAction || "idle".equals(channel.status);
@@ -380,7 +391,8 @@ public class ServerRecordingsActivity extends AppCompatActivity {
             request.setDescription("Downloading server recording"); request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             File destination = new File(new RecordingFileManager(this).getCompletedDirectory(), recording.name);
             request.setDestinationUri(Uri.fromFile(destination));
-            ((DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(request);
+            long id = ((DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(request);
+            android.util.Log.i("ServerDownload", "Started id=" + id + " private=" + destination.getAbsolutePath());
             Toast.makeText(this, "Download started.", Toast.LENGTH_SHORT).show();
         } catch (Exception error) { Toast.makeText(this, "Unable to start download: " + error.getMessage(), Toast.LENGTH_LONG).show(); }
     }

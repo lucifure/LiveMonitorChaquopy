@@ -125,6 +125,15 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".ServerDownloadCompleteReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Boot receiver:
              - Restores persisted monitoring after phone reboot
              - Restores after app package update

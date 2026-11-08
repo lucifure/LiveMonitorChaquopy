@@ -111,19 +111,24 @@ public class ChannelAdapter extends BaseAdapter {
             if (recording != null && recording.isActive()) {
                 long elapsed = recording.getStartedAt() > 0L
                     ? Math.max(0L, (System.currentTimeMillis() - recording.getStartedAt()) / 1000L) : 0L;
-                model.stat1 = "⏱ " + RecordingProgressTracker.formatDuration(elapsed);
-                model.stat2 = "📺 " + nullToDash(recording.getQuality());
+                model.statLabel1 = "Elapsed";
+                model.statLabel2 = "Quality";
+                model.statLabel3 = "Size";
+                model.stat1 = RecordingProgressTracker.formatDuration(elapsed);
+                model.stat2 = nullToDash(recording.getQuality());
                 boolean starting = recording.getBytesRecorded() <= 0L && elapsed < 10L;
-                model.stat3 = "💾 " + (starting ? "Starting…" : RecordingProgressTracker.formatBytes(recording.getBytesRecorded()));
+                model.stat3 = starting ? "Starting…" : RecordingProgressTracker.formatBytes(recording.getBytesRecorded());
             } else {
-                model.stat1 = "⏱ —"; model.stat2 = "📺 —"; model.stat3 = "💾 —";
+                model.statLabel1 = "Elapsed"; model.statLabel2 = "Quality"; model.statLabel3 = "Size";
+                model.stat1 = model.stat2 = model.stat3 = "—";
             }
         } else {
-            model.stat1 = "🔄 Checked " + ChannelCardView.formatTimeAgo(channel.getLastCheckAt());
+            model.statLabel1 = "Checked"; model.statLabel2 = "Quality"; model.statLabel3 = "Last live";
+            model.stat1 = ChannelCardView.formatTimeAgo(channel.getLastCheckAt());
             String quality = storage.loadSettings().getDownloadQuality();
-            model.stat2 = "📺 " + (quality == null || quality.trim().isEmpty() ? "—" : quality.trim());
+            model.stat2 = quality == null || quality.trim().isEmpty() ? "—" : quality.trim();
             String live = ChannelCardView.formatTimeAgo(channel.getLastLiveAt());
-            model.stat3 = "📡 " + ("—".equals(live) ? "None yet" : "Live " + live + ("just now".equals(live) ? "" : " ago"));
+            model.stat3 = "—".equals(live) ? "None yet" : "Live " + live + ("just now".equals(live) ? "" : " ago");
         }
 
         model.button1 = recordingCard
@@ -150,11 +155,6 @@ public class ChannelAdapter extends BaseAdapter {
     }
 
     private String homeTitle(ChannelItem channel) {
-        String title = channel.getTitle();
-        String normalizedTitle = title == null ? "" : title.trim();
-        String lowerTitle = normalizedTitle.toLowerCase(java.util.Locale.US);
-        boolean titleIsUrl = lowerTitle.contains("youtube.com/") || lowerTitle.contains("youtu.be/") || lowerTitle.startsWith("http");
-        if (!normalizedTitle.isEmpty() && !titleIsUrl) return normalizedTitle;
         String url = channel.getUrl();
         int at = url == null ? -1 : url.indexOf("/@");
         if (at >= 0) {
@@ -166,8 +166,7 @@ public class ChannelAdapter extends BaseAdapter {
             String clean = end < 0 ? url : url.substring(0, end);
             int slash = clean.lastIndexOf('/');
             String handle = slash >= 0 ? clean.substring(slash + 1) : clean;
-            while (handle.startsWith("@")) handle = handle.substring(1);
-            if (!handle.isEmpty()) return "@" + handle;
+            if (!handle.isEmpty()) return handle.startsWith("@") ? handle : "@" + handle;
         }
         return "@channel";
     }

@@ -23,6 +23,7 @@ public final class ChannelCardView extends LinearLayout {
         public int badgeStyle = BADGE_MONITORING;
         public String subLine = "—";
         public boolean subLineError;
+        public String statLabel1 = "", statLabel2 = "", statLabel3 = "";
         public String stat1 = "—", stat2 = "—", stat3 = "—";
         public String button1 = "Start", button2 = "Stop", button3 = "Delete";
         public boolean button1Enabled = true, button2Enabled = true, button3Enabled = true;
@@ -43,11 +44,11 @@ public final class ChannelCardView extends LinearLayout {
         TextView title = new TextView(context);
         title.setText(model.title);
         title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
+        title.setTextSize(24);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        titleRow.addView(title, new LayoutParams(0, dp(28), 1f));
+        titleRow.addView(title, new LayoutParams(0, dp(34), 1f));
 
         TextView badge = new TextView(context);
         badge.setText(model.badgeLabel);
@@ -63,25 +64,26 @@ public final class ChannelCardView extends LinearLayout {
             : model.badgeStyle == BADGE_PAUSED ? R.drawable.lm_status_paused_background
             : model.badgeStyle == BADGE_STOPPED ? R.drawable.lm_status_stopped_background : R.drawable.lm_status_paused_background);
         titleRow.addView(badge, new LayoutParams(dp(100), dp(26)));
-        card.addView(titleRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(28)));
+        card.addView(titleRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(34)));
 
         TextView sub = new TextView(context);
         sub.setText(model.subLine == null ? "—" : model.subLine);
-        sub.setTextSize(13);
-        sub.setTextColor(context.getResources().getColor(model.subLineError ? R.color.danger : R.color.lm_text_secondary));
+        sub.setTextSize(15);
+        sub.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        sub.setTextColor(context.getResources().getColor(model.subLineError ? R.color.danger
+            : "Waiting for stream".contentEquals(model.subLine == null ? "" : model.subLine)
+                ? R.color.lm_text_secondary : R.color.lm_text_primary));
         sub.setMaxLines(2);
         sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        LayoutParams subParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(36));
-        subParams.topMargin = dp(2);
+        LayoutParams subParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(40));
         card.addView(sub, subParams);
 
         LinearLayout stats = new LinearLayout(context);
         stats.setGravity(Gravity.CENTER_VERTICAL);
-        addStat(context, stats, model.stat1, false);
-        addStat(context, stats, model.stat2, true);
-        addStat(context, stats, model.stat3, true);
-        LayoutParams statsParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(36));
-        statsParams.topMargin = dp(6);
+        addStat(context, stats, model.statLabel1, model.stat1, false);
+        addStat(context, stats, model.statLabel2, model.stat2, true);
+        addStat(context, stats, model.statLabel3, model.stat3, true);
+        LayoutParams statsParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(46));
         card.addView(stats, statsParams);
 
         LinearLayout buttons = new LinearLayout(context);
@@ -95,17 +97,30 @@ public final class ChannelCardView extends LinearLayout {
         card.setOnClickListener(model.cardClick);
     }
 
-    private void addStat(Context context, LinearLayout row, String value, boolean gap) {
+    private void addStat(Context context, LinearLayout row, String label, String value, boolean gap) {
+        LinearLayout cell = new LinearLayout(context);
+        cell.setOrientation(VERTICAL);
+        cell.setGravity(Gravity.CENTER);
+        TextView caption = new TextView(context);
+        caption.setText(label == null ? "" : label);
+        caption.setTextColor(context.getResources().getColor(R.color.lm_text_secondary));
+        caption.setTextSize(11);
+        caption.setGravity(Gravity.CENTER);
+        caption.setSingleLine(true);
+        caption.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        cell.addView(caption, new LayoutParams(LayoutParams.MATCH_PARENT, dp(16)));
         TextView stat = new TextView(context);
         stat.setText(value == null || value.isEmpty() ? "—" : value);
-        stat.setTextColor(context.getResources().getColor(R.color.lm_text_secondary));
-        stat.setTextSize(13);
+        stat.setTextColor(context.getResources().getColor(R.color.lm_text_primary));
+        stat.setTextSize(18);
+        stat.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         stat.setGravity(Gravity.CENTER);
         stat.setSingleLine(true);
         stat.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        cell.addView(stat, new LayoutParams(LayoutParams.MATCH_PARENT, dp(26)));
         LayoutParams params = new LayoutParams(0, LayoutParams.MATCH_PARENT, 1f);
         if (gap) params.leftMargin = dp(8);
-        row.addView(stat, params);
+        row.addView(cell, params);
     }
 
     private void addButton(Context context, LinearLayout row, String label, boolean enabled, View.OnClickListener click, boolean gap) {
