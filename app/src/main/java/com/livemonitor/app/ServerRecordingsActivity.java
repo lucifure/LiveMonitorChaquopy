@@ -6,6 +6,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -13,6 +15,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -27,9 +30,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
+import android.util.LruCache;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -47,6 +54,9 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private static final int SECTION_MONITORING = 0;
     private static final int SECTION_RECORDED_FILES = 1;
     private boolean visible;
+    private final LruCache<String, Bitmap> thumbnailCache = new LruCache<>(40);
+    private final Set<String> failedThumbnailKeys = java.util.Collections.synchronizedSet(new HashSet<>());
+    private final Set<String> loadingThumbnailKeys = java.util.Collections.synchronizedSet(new HashSet<>());
     private final Runnable poll = new Runnable() { @Override public void run() {
         if (visible) { refresh(); handler.postDelayed(this, 20_000L); }
     }};
@@ -58,7 +68,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     }
     @Override public void onBackPressed() { AppChrome.handleBack(this); }
     @Override protected void onResume() { super.onResume(); AppChrome.selectCurrentTab(this, R.id.nav_server); }
-    @Override public void onStart() { super.onStart(); visible = true; refresh(); handler.postDelayed(poll, 20_000L); }
+    @Override public void onStart() { super.onStart(); visible = true; failedThumbnailKeys.clear(); refresh(); handler.postDelayed(poll, 20_000L); }
     @Override public void onStop() { visible = false; handler.removeCallbacks(poll); super.onStop(); }
     @Override public void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
 
@@ -146,7 +156,8 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 if (array != null) for (int i = 0; i < array.length(); i++) {
                     JSONObject file = array.optJSONObject(i);
                     if (file != null) loaded.add(new ServerRecordingGrouper.RemoteFile(
-                        file.optString("name"), file.optLong("size"), file.optLong("modified"), file.optBoolean("in_progress")));
+                        file.optString("name"), file.optLong("size"), file.optLong("modified"), file.optBoolean("in_progress"),
+                        file.isNull("duration") ? -1 : file.optLong("duration", -1)));
                 }
                 runOnUiThread(() -> showData(status, loaded));
             } catch (Exception error) { runOnUiThread(() -> showError(readableError(error))); }
@@ -310,6 +321,91 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         parent.addView(outer, params);
         return card;
     }
+
+    private String durationLabel(long seconds) {
+        if (seconds < 0L) return "";
+        long hours = seconds / 3600L;
+        long minutes = (seconds % 3600L) / 60L;
+        long remainder = seconds % 60L;
+        return hours > 0L ? String.format(Locale.US, "%d:%02d:%02d", hours, minutes, remainder)
+            : String.format(Locale.US, "%d:%02d", seconds / 60L, remainder);
+    }
+
+    private void addRecordingInfo(LinearLayout card, ServerRecordingGrouper.Group group) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView thumbnail = new ImageView(this);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumbnail.setBackgroundColor(getResources().getColor(R.color.lm_bg_deep));
+        LinearLayout.LayoutParams imageParams = new LinearLayout.LayoutParams(dp(120), dp(68));
+        imageParams.rightMargin = dp(12);
+        row.addView(thumbnail, imageParams);
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (group.isPartial()) {
+            info.addView(text("Partial recording", 16));
+            TextView details = text(group.baseName + " · " + group.mediaFiles.size() + " parts · " + bytes(group.totalSize) + " · " + relative(group.modified), 13);
+            details.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+            info.addView(details);
+            List<ServerRecordingGrouper.RemoteFile> ordered = new ArrayList<>(group.mediaFiles);
+            java.util.Collections.sort(ordered, (left, right) -> Long.compare(left.modified, right.modified));
+            StringBuilder parts = new StringBuilder("Part lengths: ");
+            for (int i = 0; i < ordered.size(); i++) {
+                if (i > 0) parts.append(" + ");
+                String length = durationLabel(ordered.get(i).durationSeconds);
+                parts.append(length.isEmpty() ? "?" : length);
+            }
+            TextView lengths = text(parts.toString(), 11);
+            lengths.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+            info.addView(lengths);
+        } else {
+            ServerRecordingGrouper.RemoteFile file = group.mediaFiles.get(0);
+            info.addView(text(file.name, 16));
+            String duration = durationLabel(file.durationSeconds);
+            String detailsText = (duration.isEmpty() ? "" : duration + " · ") + bytes(group.totalSize) + " · " + relative(group.modified);
+            TextView details = text(detailsText, 13);
+            details.setTextColor(getResources().getColor(R.color.lm_text_secondary));
+            info.addView(details);
+        }
+        card.addView(row);
+        loadThumbnail(thumbnail, group);
+    }
+
+    private void loadThumbnail(ImageView image, ServerRecordingGrouper.Group group) {
+        if (group.mediaFiles.isEmpty()) return;
+        ServerRecordingGrouper.RemoteFile oldest = group.mediaFiles.get(0);
+        for (ServerRecordingGrouper.RemoteFile file : group.mediaFiles) if (file.modified < oldest.modified) oldest = file;
+        final ServerRecordingGrouper.RemoteFile media = oldest;
+        final String key = media.name + "|" + media.size + "|" + media.modified;
+        final Object cardTag = new Object();
+        image.setTag(cardTag);
+        Bitmap cached = thumbnailCache.get(key);
+        if (cached != null) { image.setImageBitmap(cached); return; }
+        if (failedThumbnailKeys.contains(key) || !loadingThumbnailKeys.add(key)) return;
+        executor.execute(() -> {
+            try {
+                byte[] bytes = new OracleControlClient(this).getBytes("/thumbnails/" + Uri.encode(media.name), 1_000_000);
+                BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new IOException("Invalid thumbnail image.");
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inSampleSize = 1;
+                while (bounds.outWidth / (options.inSampleSize * 2) >= dp(120)
+                    && bounds.outHeight / (options.inSampleSize * 2) >= dp(68)) options.inSampleSize *= 2;
+                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+                if (bitmap == null) throw new IOException("Invalid thumbnail image.");
+                thumbnailCache.put(key, bitmap);
+                runOnUiThread(() -> { if (image.getTag() == cardTag && image.getParent() != null) image.setImageBitmap(bitmap); });
+            } catch (Exception | OutOfMemoryError ignored) {
+                failedThumbnailKeys.add(key);
+            } finally {
+                loadingThumbnailKeys.remove(key);
+            }
+        });
+    }
+
     private void submitChannel() {
         String url = urlInput.getText().toString().trim(); if (url.isEmpty()) { urlInput.setError("Paste a YouTube channel URL"); return; }
         List<String> segments = Uri.parse(url).getPathSegments();
@@ -329,17 +425,13 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         for (ServerRecordingGrouper.Group group : recordings) {
             LinearLayout card = newServerCard(recordingContainer);
             if (group.isPartial()) {
-                TextView name = text("Partial recording", 16); card.addView(name);
-                TextView details = text(group.baseName + " · " + group.mediaFiles.size() + " parts · " + bytes(group.totalSize) + " · " + relative(group.modified), 13);
-                details.setTextColor(getResources().getColor(R.color.lm_text_secondary)); card.addView(details);
+                addRecordingInfo(card, group);
             } else if (group.isInProgress()) {
                 TextView name = text(group.baseName, 16); name.setTextColor(getResources().getColor(R.color.info)); card.addView(name);
                 TextView details = text("Recording... · " + bytes(group.totalSize), 13);
                 details.setTextColor(getResources().getColor(R.color.lm_text_secondary)); card.addView(details);
             } else {
-                TextView name = text(group.mediaFiles.get(0).name, 16); card.addView(name);
-                TextView details = text(bytes(group.totalSize) + " · " + relative(group.modified), 13);
-                details.setTextColor(getResources().getColor(R.color.lm_text_secondary)); card.addView(details);
+                addRecordingInfo(card, group);
             }
 
             if (!group.isInProgress()) {

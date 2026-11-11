@@ -33,6 +33,24 @@ public final class OracleControlClient {
     }
 
     public JSONObject get(String path) throws IOException { return request("GET", path, null); }
+    public byte[] getBytes(String path, int maxBytes) throws IOException {
+        if (path == null || !path.startsWith("/") || path.startsWith("//")) throw new IllegalArgumentException("Invalid API path.");
+        if (maxBytes < 0) throw new IllegalArgumentException("Invalid maximum response size.");
+        Request request = new Request.Builder().url(baseUrl + path).get()
+            .header("Authorization", "Bearer " + token).build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful()) throw new ApiException(response.code(), "Server request failed (HTTP " + response.code() + ").");
+            if (response.body() == null) return new byte[0];
+            try (InputStream input = response.body().byteStream(); java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192]; int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (output.size() + count > maxBytes) throw new IOException("Server response is too large.");
+                    output.write(buffer, 0, count);
+                }
+                return output.toByteArray();
+            }
+        }
+    }
     public JSONObject post(String path, JSONObject body) throws IOException { return request("POST", path, body); }
     public JSONObject delete(String path) throws IOException { return request("DELETE", path, null); }
 

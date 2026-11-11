@@ -16,12 +16,18 @@ public final class ServerRecordingGrouper {
         public final long size;
         public final long modified;
         public final boolean inProgress;
+        public final long durationSeconds;
 
         public RemoteFile(String name, long size, long modified, boolean inProgress) {
+            this(name, size, modified, inProgress, -1L);
+        }
+
+        public RemoteFile(String name, long size, long modified, boolean inProgress, long durationSeconds) {
             this.name = name == null ? "" : name;
             this.size = Math.max(0L, size);
             this.modified = Math.max(0L, modified);
             this.inProgress = inProgress;
+            this.durationSeconds = durationSeconds;
         }
     }
 
