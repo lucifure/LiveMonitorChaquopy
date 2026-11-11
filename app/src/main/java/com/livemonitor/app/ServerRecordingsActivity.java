@@ -35,6 +35,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import android.util.LruCache;
 import java.util.concurrent.ExecutorService;
@@ -55,7 +57,7 @@ public class ServerRecordingsActivity extends AppCompatActivity {
     private static final int SECTION_RECORDED_FILES = 1;
     private boolean visible;
     private final LruCache<String, Bitmap> thumbnailCache = new LruCache<>(40);
-    private final Set<String> failedThumbnailKeys = java.util.Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, Long> failedThumbnailKeys = java.util.Collections.synchronizedMap(new HashMap<>());
     private final Set<String> loadingThumbnailKeys = java.util.Collections.synchronizedSet(new HashSet<>());
     private final Runnable poll = new Runnable() { @Override public void run() {
         if (visible) { refresh(); handler.postDelayed(this, 20_000L); }
@@ -383,7 +385,9 @@ public class ServerRecordingsActivity extends AppCompatActivity {
         image.setTag(cardTag);
         Bitmap cached = thumbnailCache.get(key);
         if (cached != null) { image.setImageBitmap(cached); return; }
-        if (failedThumbnailKeys.contains(key) || !loadingThumbnailKeys.add(key)) return;
+        Long lastFailure = failedThumbnailKeys.get(key);
+        if ((lastFailure != null && System.currentTimeMillis() - lastFailure < 60_000L)
+            || !loadingThumbnailKeys.add(key)) return;
         executor.execute(() -> {
             try {
                 byte[] bytes = new OracleControlClient(this).getBytes("/thumbnails/" + Uri.encode(media.name), 1_000_000);
@@ -397,9 +401,10 @@ public class ServerRecordingsActivity extends AppCompatActivity {
                 Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) throw new IOException("Invalid thumbnail image.");
                 thumbnailCache.put(key, bitmap);
+                failedThumbnailKeys.remove(key);
                 runOnUiThread(() -> { if (image.getTag() == cardTag && image.getParent() != null) image.setImageBitmap(bitmap); });
             } catch (Exception | OutOfMemoryError ignored) {
-                failedThumbnailKeys.add(key);
+                failedThumbnailKeys.put(key, System.currentTimeMillis());
             } finally {
                 loadingThumbnailKeys.remove(key);
             }
