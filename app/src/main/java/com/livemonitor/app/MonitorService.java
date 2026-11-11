@@ -2003,6 +2003,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
 
+            if (isResolverConfirmedEndWithPlayableData(e, recording)) {
+                if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                    return;
+                }
+                finalizeAfterResolverConfirmedStreamEnd(recording, channel);
+                return;
+            }
+
             if (requireRecordingStatusAtStart) {
                 preserveCleanExitStartupFailure(recording.getId(), channelId, errorMessage);
                 return;
@@ -2581,6 +2589,11 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
                     return stopRecordingForHttp429Cooldown(channelId, channel, recording, lastFailureReason);
                 }
             } catch (Exception e) {
+                if (isResolverConfirmedEndWithPlayableData(e, recording)
+                    && !shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                    finalizeAfterResolverConfirmedStreamEnd(recording, channel);
+                    return true;
+                }
                 if (cleanExitHandle != null) {
                     preserveCleanExitStartupFailure(
                         recording.getId(),
@@ -3344,6 +3357,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             }
 
             if (endStatus == StreamEndStatus.STILL_LIVE) {
+                endStatus = recheckStillLiveOnce(recording, channel);
+            }
+
+            if (endStatus == StreamEndStatus.STILL_LIVE) {
                 log(
                     LogItem.LEVEL_INFO,
                     LogItem.SOURCE_RECORDER,
@@ -3927,6 +3944,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             endStatus = confirmStreamEnded(recording, channel);
         }
 
+        if (endStatus == StreamEndStatus.STILL_LIVE) {
+            endStatus = recheckStillLiveOnce(recording, channel);
+        }
+
         if (endStatus == StreamEndStatus.UNKNOWN) {
             preserveRecordingAfterUnknownStreamStatus(
                 recording,
@@ -4228,6 +4249,31 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         return message.toLowerCase(java.util.Locale.US).contains("this live event has ended");
     }
 
+    private boolean isResolverConfirmedEndWithPlayableData(Exception error, RecordingItem recording) {
+        if (error == null || recording == null) {
+            return false;
+        }
+        if (!(error instanceof LiveStreamEndedException)
+            && !normalizeErrorMessage(error).toLowerCase(java.util.Locale.US).contains("stream confirmed ended")) {
+            return false;
+        }
+        if (!recordingHasAnyOutputData(recording)) {
+            return false;
+        }
+        return true;
+    }
+
+    private void finalizeAfterResolverConfirmedStreamEnd(RecordingItem recording, ChannelItem channel) {
+        log(
+            LogItem.LEVEL_INFO,
+            LogItem.SOURCE_RECORDER,
+            channel,
+            "Stream ended; finalising recording instead of marking it failed.",
+            "recordingId=" + recording.getId()
+        );
+        finalizeConfirmedStreamEnd(recording, channel);
+    }
+
     private boolean isLiveNotReadyError(String message) {
         if (isBlank(message)) {
             return false;
@@ -4513,6 +4559,14 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
             );
         } catch (Exception e) {
             String errorMessage = normalizeErrorMessage(e);
+
+            if (isResolverConfirmedEndWithPlayableData(e, recording)) {
+                if (shouldStopRecorderAfterUserRequest(channelId, channel, recording)) {
+                    return;
+                }
+                finalizeAfterResolverConfirmedStreamEnd(recording, channel);
+                return;
+            }
 
             restartingRecordings.remove(recording.getId());
             if (recoverableResume) {
@@ -5209,6 +5263,10 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         }
 
         if (endStatus == StreamEndStatus.STILL_LIVE) {
+            endStatus = recheckStillLiveOnce(recording, channel);
+        }
+
+        if (endStatus == StreamEndStatus.STILL_LIVE) {
             log(
                 LogItem.LEVEL_INFO,
                 LogItem.SOURCE_RECORDER,
@@ -5869,6 +5927,22 @@ public class MonitorService extends Service implements NetworkMonitor.Listener {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static final long STILL_LIVE_RECHECK_DELAY_MS = 20_000L;
+
+    private void sleepForStillLiveRecheck() {
+        try {
+            Thread.sleep(STILL_LIVE_RECHECK_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private StreamEndStatus recheckStillLiveOnce(RecordingItem recording, ChannelItem channel) {
+        sleepForStillLiveRecheck();
+        StreamEndStatus recheck = confirmStreamEnded(recording, channel);
+        return recheck == StreamEndStatus.CONFIRMED_ENDED ? recheck : StreamEndStatus.STILL_LIVE;
     }
 
     private long fetchLiveStartTimestampMillis(String videoId) {
